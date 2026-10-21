@@ -117,3 +117,10 @@ because "no mirror" is exactly the state this file exists to make expensive.
 | `vaxis:default` | tested-in-koru-libs |
 | `vaxis:shader` | tested-in-koru-libs |
 | `vaxis:view` | tested-in-koru-libs |
+| `cell:capture` | `115_057_cell_capture_in_module` |
+| `cell:open` | `115_056_cell_open_in_module` |
+| `ctx:default` | `115_061_ctx_default_in_module` |
+| `node:new` | `115_058_node_new_in_module` |
+| `node:spawn` | `115_059_node_spawn_in_module` |
+| `node:default` | `115_060_node_default_in_module` |
+| `panic:catch` | `115_062_panic_catch_in_module` |

@@ -1,0 +1,2 @@
+captured: visits=1 name=assistant-01
+room-7 hibernated

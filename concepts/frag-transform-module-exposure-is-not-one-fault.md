@@ -174,6 +174,30 @@ That cuts both ways on counting. An inventory by library reads as more finished
 than it is; an inventory by transform overstates the remaining work, because
 several arms often die at one gate. Neither number is the number of bugs.
 
+## A fourth class: the walk that never looks inside
+
+2026-10-21, found by the wall demanding mirrors for `ctx:default`,
+`node:new`, `node:spawn`, `node:default`, `cell:capture`, `cell:open`,
+`panic:catch`. Prior classes all presumed the transform SAW the
+module-resident site and mishandled it. `ctx:default` showed a blinder
+one level up: its whole-program walk iterated `program.items` and never
+recursed into `module_decl.items` — the module-resident `std/ctx(X)`
+step was not misnamed or misplaced, it was invisible. Nothing rewrote,
+no clone was minted, validation then refused the surviving bare step for
+missing inputs (KORU080). Same blindness at every layer of the pass:
+`scopeFields` could not find a module-declared store, `implOf` could not
+find module-resident impls, the clone drain could not find the template,
+and clones would have parked at top level where their own qualified
+names cannot resolve (the 690_079 trap again — now encoded in
+`findOrig`/`FinishFns` carrying an owner path through the recursion).
+
+The emitter had its own copy of the same blindness: entry-position
+invocation arg names pass through `writeBranchName` mangling, but the
+module-local subflow handler path wrote the parameter name raw — a
+transform-synthesized `lease-ms` reached the zig as `.lease-ms`, an
+illegal field name. One raw `write` among five mangled siblings; the
+entry-file collapse hid it the same way.
+
 ## Open
 
 - Whether the appended-declaration-lost class (regex) and the

@@ -1,0 +1,192 @@
+// Koru Standard Library: the `finish` part of ctx — the clone drain and
+// whole-program finish for `ctx:default`. Joined via `~part finish` in
+// ctx.kz; merged into the ctx module at load.
+
+// Recursive orig lookup for clone synthesis — the template decl and
+// its impl flow may live inside a module_decl. Returns the decl, the
+// impl flow, and the owning module's canonical path ("" = top level).
+const Orig = struct {
+    decl: ?*const ast.EventDecl,
+    flow: ?*const ast.Flow,
+    owner: []const u8,
+};
+
+fn findOrig(items: []const ast.Item, last: []const u8, mq: ?[]const u8, owner: []const u8) Orig {
+    var odecl: ?*const ast.EventDecl = null;
+    var oflow: ?*const ast.Flow = null;
+    for (items) |*pi| {
+        switch (pi.*) {
+            .module_decl => |*md| {
+                const r = findOrig(md.items, last, mq, md.canonical_path);
+                // Only the recursion's own owner ships when the
+                // recursion made BOTH matches — falling through here
+                // with top-level matches would report this module's
+                // path and park the clone under the wrong owner.
+                if (r.decl != null and r.flow != null) return r;
+                if (r.decl != null) odecl = r.decl;
+                if (r.flow != null) oflow = r.flow;
+            },
+            .event_decl => |*e| {
+                const ds = e.path.segments;
+                if (ds.len > 0 and std.mem.eql(u8, ds[ds.len - 1], last)) {
+                    const oq = e.path.module_qualifier;
+                    if ((oq == null) == (mq == null) and
+                        (oq == null or std.mem.eql(u8, oq.?, mq.?))) odecl = e;
+                }
+            },
+            .flow => |*f| {
+                if (f.impl_of) |io_| {
+                    const ds = io_.segments;
+                    if (ds.len > 0 and std.mem.eql(u8, ds[ds.len - 1], last)) {
+                        const oq = io_.module_qualifier;
+                        if ((oq == null) == (mq == null) and
+                            (oq == null or std.mem.eql(u8, oq.?, mq.?))) oflow = f;
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    return .{ .decl = odecl, .flow = oflow, .owner = owner };
+}
+
+// ---- clone drain + finish ------------------------------------------
+// findOrig, the fixpoint drain, per-owner clone parking and the
+// drop/abstract sweep — moved out of the transform body to hold the
+// line-baseline wall. Everything here is module-aware: owner carries
+// the canonical path of the module_decl that holds the template.
+
+fn finishProgram(ctx: *const Ctx, alloc: std.mem.Allocator, prog: *const ast.Program, new_items: []ast.Item, clones: *std.ArrayList(CloneReq)) []ast.Item {
+    var final_items: []ast.Item = new_items;
+    // Drain the clone worklist — generating a clone body registers the
+    // clones it needs, so iterate to fixpoint. A callee cloned under any
+    // stack is ctx-CONSUMING: its original impl is a template, never an
+    // emit body — its unfilled calls would refuse standalone, so the
+    // original flow drops out of the program. A bare call to it then
+    // fails as a decl with no implementation — the honest refusal.
+    var drops = std.ArrayList([]const u8).initCapacity(alloc, 8) catch unreachable;
+    // Clones park per-owner: a template inside `app.lib` clones into
+    // `app.lib`'s module_decl, not program top level — a qualified decl at
+    // top level registers under the entry file's name and its own impl can
+    // never resolve it (same trap as runner-side `.appended`, 690_079).
+    var pending = std.StringHashMap(std.ArrayList(ast.Item)).init(alloc);
+    var ci: usize = 0;
+    while (ci < clones.items.len) : (ci += 1) {
+        const cr = clones.items[ci];
+        const orig = findOrig(prog.items, cr.orig_last, cr.orig_mq, "");
+        if (orig.decl == null or orig.flow == null) continue;
+
+        // mark the original impl for removal
+        const drop_key = std.fmt.allocPrint(alloc, "{s}|{s}", .{ cr.orig_mq orelse "", cr.orig_last }) catch unreachable;
+        var in_drops = false;
+        for (drops.items) |dk| {
+            if (std.mem.eql(u8, dk, drop_key)) in_drops = true;
+        }
+        if (!in_drops) drops.append(alloc, drop_key) catch unreachable;
+
+        const od = orig.decl.?.*;
+        const nfields = alloc.alloc(ast.Field, od.input.fields.len + cr.lift.len) catch unreachable;
+        for (od.input.fields, 0..) |f, i| nfields[i] = f;
+        for (cr.lift, 0..) |_, i| {
+            nfields[od.input.fields.len + i] = .{
+                .name = std.fmt.allocPrint(alloc, "__ctxarg{d}", .{i}) catch unreachable,
+                .type = "i64",
+            };
+        }
+        const nsegs = alloc.alloc([]const u8, od.path.segments.len) catch unreachable;
+        for (od.path.segments, 0..) |s, i| nsegs[i] = s;
+        nsegs[nsegs.len - 1] = cr.clone_seg;
+        const gop = pending.getOrPut(orig.owner) catch unreachable;
+        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(ast.Item).initCapacity(alloc, 2) catch unreachable;
+        gop.value_ptr.append(alloc, .{ .event_decl = .{
+            .path = .{ .module_qualifier = od.path.module_qualifier, .segments = nsegs },
+            .input = .{ .fields = nfields },
+            .branches = od.branches,
+            .return_type = od.return_type,
+            .return_phantom = od.return_phantom,
+            .is_public = false,
+            .is_implicit_flow = od.is_implicit_flow,
+            .is_pure = od.is_pure,
+            .is_transitively_pure = od.is_transitively_pure,
+            .annotations = od.annotations,
+            .prose = od.prose,
+            .location = od.location,
+            .module = od.module,
+        } }) catch unreachable;
+        var nflow = orig.flow.?.*;
+        nflow.impl_of = .{ .module_qualifier = od.path.module_qualifier, .segments = nsegs };
+        nflow.body = ctx.rewriteBody(orig.flow.?.body, cr.stack);
+        gop.value_ptr.append(alloc, .{ .flow = nflow }) catch unreachable;
+        ctx.changed.* = true;
+    }
+
+    // Drop the original impls of every cloned callee — they are templates —
+    // and mark the surviving decl [abstract] so a bare call to a template
+    // (one whose impl only ever existed as a specialization source) refuses
+    // under KORU047 instead of silently stubbing to a void no-op. The
+    // abstract resolver keys on segments[0]; `name__ctx_...` impls can never
+    // be mistaken for its `.default`. Both run at every module_decl level:
+    // the template being dropped may itself live inside a module.
+    if (drops.items.len > 0 or pending.count() > 0) {
+        const FinishFns = struct {
+            fn apply(a: std.mem.Allocator, items: []const ast.Item, drop_keys: []const []const u8, adds: *std.StringHashMap(std.ArrayList(ast.Item)), owner: []const u8) []ast.Item {
+                var kept = std.ArrayList(ast.Item).initCapacity(a, items.len + 4) catch unreachable;
+                for (items) |it| {
+                    var drop_it = false;
+                    if (it == .flow) {
+                        if (it.flow.impl_of) |io_| {
+                            const ds = io_.segments;
+                            if (ds.len > 0) {
+                                const dk = std.fmt.allocPrint(a, "{s}|{s}", .{ io_.module_qualifier orelse "", ds[ds.len - 1] }) catch unreachable;
+                                for (drop_keys) |dkk| {
+                                    if (std.mem.eql(u8, dkk, dk)) drop_it = true;
+                                }
+                            }
+                        }
+                    }
+                    if (drop_it) continue;
+                    if (it == .module_decl) {
+                        var nmd = it.module_decl;
+                        nmd.items = apply(a, it.module_decl.items, drop_keys, adds, it.module_decl.canonical_path);
+                        kept.append(a, .{ .module_decl = nmd }) catch unreachable;
+                    } else {
+                        kept.append(a, it) catch unreachable;
+                    }
+                }
+                if (adds.get(owner)) |extra| {
+                    for (extra.items) |ai| kept.append(a, ai) catch unreachable;
+                }
+                return kept.toOwnedSlice(a) catch unreachable;
+            }
+        };
+        final_items = FinishFns.apply(alloc, new_items, drops.items, &pending, "");
+        // Mark the template decls [abstract] so bare calls refuse (KORU047).
+        const markAbstract = struct {
+            fn mark(a: std.mem.Allocator, items: []ast.Item, drop_keys: []const []const u8) void {
+                for (items) |*it| {
+                    switch (it.*) {
+                        .module_decl => |*md| mark(a, @constCast(md.items), drop_keys),
+                        .event_decl => {
+                            const ds = it.event_decl.path.segments;
+                            if (ds.len == 0) continue;
+                            const dk = std.fmt.allocPrint(a, "{s}|{s}", .{ it.event_decl.path.module_qualifier orelse "", ds[ds.len - 1] }) catch unreachable;
+                            var hit = false;
+                            for (drop_keys) |dkk| {
+                                if (std.mem.eql(u8, dkk, dk)) hit = true;
+                            }
+                            if (!hit) continue;
+                            const anns = a.alloc([]const u8, it.event_decl.annotations.len + 1) catch unreachable;
+                            for (it.event_decl.annotations, 0..) |an, i| anns[i] = an;
+                            anns[it.event_decl.annotations.len] = "abstract";
+                            it.event_decl.annotations = anns;
+                        },
+                        else => {},
+                    }
+                }
+            }
+        }.mark;
+        markAbstract(alloc, final_items, drops.items);
+    }
+
+    return final_items;
+}

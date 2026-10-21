@@ -3928,7 +3928,7 @@ pub const VisitorEmitter = struct {
                                                 break :blk arg.name;
                                             } else arg.name;
 
-                                            try self.code_emitter.write(param_name);
+                                            try emitter.writeBranchName(self.code_emitter, param_name);
                                             try self.code_emitter.write(" = ");
 
                                             // A Source param must emit the
