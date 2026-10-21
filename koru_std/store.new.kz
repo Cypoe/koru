@@ -174,108 +174,6 @@
             for (names) |x| if (std.mem.eql(u8, x, n)) return true;
             return false;
         }
-        // A whole-program walk over one flow, lowering every text slot an
-        // expression may stand in. `scope` carries the program's store names
-        // with the prefix each needs (empty here — the plural walk reads from
-        // the declaring module's own namespace).
-        fn storeRefsContH(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *ast.Continuation, scope: StoreScope, ident: []const []const u8, bound: []const []const u8) void {
-            const ast2 = @import("ast");
-            // A continuation's OWN bindings shadow store names (690_090): a
-            // row binding (`! query items`) or shape-destructure makes
-            // `<store>.<field>` mean THE ROW for everything under the arm. The
-            // Walk runs before the site transform, so without the skip the
-            // binding loses its name to the cell rewrite and the body reads the
-            // whole column array where the row's value belongs.
-            var own_buf: [16][]const u8 = undefined;
-            var own_len: usize = 0;
-            if (cont.binding) |b| {
-                own_buf[own_len] = b;
-                own_len += 1;
-            }
-            for (cont.destructure) |df| {
-                own_buf[own_len] = df.name;
-                own_len += 1;
-            }
-            const own = own_buf[0..own_len];
-            const bound_all: []const []const u8 = if (own_len == 0)
-                bound
-            else blk: {
-                const all = alloc.alloc([]const u8, bound.len + own_len) catch unreachable;
-                @memcpy(all[0..bound.len], bound);
-                @memcpy(all[bound.len..], own);
-                break :blk all;
-            };
-            if (cont.condition) |cond| {
-                @constCast(cont).condition = storeLowerText(alloc, prog, cond, scope, ident, bound_all);
-            }
-            if (cont.node) |*n| {
-                // No `|*inv|` on `switch (n.*)` — that captures a TEMPORARY
-                // Invocation; assigning `inline_body` there is a no-op on the
-                // live AST. Arg slices still alias heap, so they "worked" and
-                // hid this. Mutate via `n.invocation` (690_074).
-                switch (n.*) {
-                    .invocation => {
-                        const inv = &n.invocation;
-                        const skip = blk: {
-                            if (inv.path.module_qualifier) |mq| {
-                                if (std.mem.eql(u8, mq, "std.store")) break :blk true;
-                            }
-                            break :blk false;
-                        };
-                        if (!skip) {
-                            for (inv.args) |*a| {
-                                @constCast(a).value = storeLowerText(alloc, prog, a.value, scope, ident, bound_all);
-                                if (a.expression_value) |ev| {
-                                    const fresh = alloc.create(ast2.CapturedExpression) catch unreachable;
-                                    fresh.* = ev.*;
-                                    fresh.text = storeLowerText(alloc, prog, ev.text, scope, ident, bound_all);
-                                    @constCast(a).expression_value = fresh;
-                                }
-                            }
-                        }
-                        // Template expand (`if`/`for`) bakes Expression args into
-                        // Invocation.inline_body BEFORE store:create runs — rewriting
-                        // args alone is too late; the freeze lives here (690_074).
-                        if (inv.inline_body) |ib| {
-                            inv.inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_all);
-                        }
-                    },
-                    .inline_code => {
-                        n.* = .{ .inline_code = storeLowerText(alloc, prog, n.inline_code, scope, ident, bound_all) };
-                    },
-                    // A branch-resolution payload (`| then => got s.n`) is a
-                    // THIRD text position, alongside the guard and the args, and
-                    // it was the only one the walk did not carry: the guard
-                    // lowered to `__koru_store_s.n` while the payload one line
-                    // below reached Zig as a bare `s` (690_256). The emitter
-                    // reads `plain_value` for the single-value form and
-                    // `expression_str orelse type` per field for the record
-                    // form, so the rewrite must land in exactly those slots.
-                    .branch_constructor => {
-                        const bc = &n.branch_constructor;
-                        if (bc.plain_value) |pv| bc.plain_value = storeLowerText(alloc, prog, pv, scope, ident, bound_all);
-                        for (bc.fields) |*fld| {
-                            const has_expr = fld.expression_str != null;
-                            const lowered = storeLowerText(alloc, prog, fld.expression_str orelse fld.type, scope, ident, bound_all);
-                            if (has_expr) {
-                                @constCast(fld).expression_str = lowered;
-                            } else {
-                                @constCast(fld).type = lowered;
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            }
-            for (cont.continuations) |*c| storeRefsContH(alloc, prog, @constCast(c), scope, ident, bound_all);
-        }
-        fn storeRefsFlowH(alloc: std.mem.Allocator, prog: *const ast.Program, f: *ast.Flow, scope: StoreScope, ident: []const []const u8) void {
-            const bound_params = flowParamNamesStore(alloc, prog, f);
-            storeRefsContH(alloc, prog, &f.body, scope, ident, bound_params);
-            if (f.inline_body) |ib| {
-                @constCast(f).inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_params);
-            }
-        }
     };
 
     // Store name + seed block from the invocation args.
@@ -1943,7 +1841,7 @@
                     break :blk_wpx px;
                 },
             };
-            for (pwatch_arms.items) |*wa| H.storeRefsContH(allocator, program, &wa.cont, wscope, pstore_identity.items, &[_][]const u8{});
+            for (pwatch_arms.items) |*wa| storeRefsContH(allocator, program, &wa.cont, wscope, pstore_identity.items, &[_][]const u8{});
         }
 
         // Owned-column stores build insert/take/teardown (690_053), the READ
@@ -4354,7 +4252,7 @@
                         for (px) |*p| p.* = "";
                         break :blk_lcpx px;
                     } };
-                    H.storeRefsContH(alloc, prog, &body_clone, pscope, pident, &[_][]const u8{});
+                    storeRefsContH(alloc, prog, &body_clone, pscope, pident, &[_][]const u8{});
                     const lbody_node = body_clone.node.?;
                     if (lbody_node == .inline_code) {
                         // A nested store-read site (query/rule/sweep) spliced
@@ -4901,7 +4799,7 @@
                         switch (pi.*) {
                             // Must use `&pi.flow` — `|*f|` on a switched copy
                             // mutates a temporary and the live AST stays raw.
-                            .flow => H.storeRefsFlowH(alloc, prog, &pi.flow, scope, ident),
+                            .flow => storeRefsFlowH(alloc, prog, &pi.flow, scope, ident),
                             .module_decl => items(alloc, prog, @constCast(pi.module_decl.items), scope, ident),
                             else => {},
                         }

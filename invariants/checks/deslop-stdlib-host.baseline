@@ -61,8 +61,8 @@
 # io.blk.kz shared shapes) now fingerprint cross-file instead of
 # same-file. The +7/+9 is the file-boundary relabel; the new size-parse
 # code is under the token floor. Re-pinned to measured.
-clusters=1116
-members=999
+clusters=1117
+members=1001
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
@@ -91,3 +91,11 @@ members=999
 # this session's emitter_helpers growable-indent alloc-else-stack
 # branch joining an existing idiom class. Top named clusters are
 # fn_decl idioms across regex/switch/refine/store.kinds — accepted.
+# Re-pinned 2026-10-20: roll fired on the KORU010 arm-column hint
+# commit — src/parser.zig diagnostic text, two parser tests, one
+# concept frag; zero koru_std/ files staged. Measured +1 cluster /
+# +2 members: benchmarking.climb.kz (1dbc71cf3, landed 2026-10-20)
+# postdates the pin's measurement and now escapes via UNPARSEABLE —
+# dormant proc bodies per the row's own contract — with cell/fs.dir
+# alongside; their host text leaving the count relabels the fingerprint
+# set. Re-pinned to measured.

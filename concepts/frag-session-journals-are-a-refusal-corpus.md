@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-session-journals-are-a-refusal-corpus
-provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family; evolved again — KORU161 triage showed a high-firing contract code can be teaching already, and a `kind` axis separates pin-authoring probes from organic pain; evolved again — the tier-conflation gap the corpus named closed (qmisskind part, 690_355): a refusal's noun is a claim, and 'unknown' said of a declared name manufactures a wrong model
+provenance: 2026-09-28 side session mined sessions.db while a parallel session built wartrain in koru; corpus-first triage produced two verified bug pins the same day; evolved same day — corpus rescoped to invocation and provenance-tagged; evolved again — KORU010's 345 rows proved ~95% cascade, teaching that bursts not rows rank a family; evolved again — KORU161 triage showed a high-firing contract code can be teaching already, and a `kind` axis separates pin-authoring probes from organic pain; evolved again — the tier-conflation gap the corpus named closed (qmisskind part, 690_355): a refusal's noun is a claim, and 'unknown' said of a declared name manufactures a wrong model; evolved again — a KORU010 teach-miss turned out to be a missing case in the hint's branching, not wording: a stray `|>` under an armed construct needs the continuation column recovered at the refusal site (210_325/210_326)
 ts: 2026-09-28
 ---
 
@@ -55,6 +55,15 @@ when the name was a tor all along, the refusal manufactures a wrong model.
 The fix names the kind (`qmisskind` part, pinned 690_355): a tor is called,
 a view is a projection, a value store reads field-wise — each miss now teaches
 its own tier's spelling. The corpus predicted the split before it was written.
+
+**A teach-miss can be a missing branch, not vague prose.** The arm-column
+KORU010 case was not a hint that said the right thing poorly — it was a hint
+whose cases did not cover armed constructs at all. The refusal site had to
+walk back up for the nearest `|`-arm marker and name its column; teaching
+meant recovering scope the generic text never looked for. Fixing a teach-miss
+is therefore two questions: does the message cover this case at all, and does
+it carry the datum the fix needs (the column), not just the rule (chains are
+column-scoped).
 
 The belief that replaces: "we learn what the language gets wrong by thinking
 about it." No — the telemetry exists and was never read back. A transcript's

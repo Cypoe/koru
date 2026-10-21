@@ -398,23 +398,6 @@ fn findEventByPathStore(its: []const ast_find.Item, path: *const ast_find.Dotted
     return null;
 }
 
-/// A flow's OWN parameters shadow store names inside its body, exactly the way
-/// 690_090 extends the rule to continuation bindings (`! query items`). Without
-/// this, `~transit = reframe(goal, history)` with a store also named `history`
-/// rewrites the punned argument to the store cell (`__koru_store_history`)
-/// instead of leaving the parameter name for Zig to resolve. Resolve the flow's
-/// implementing tor and return its input-field names so a walk can seed its
-/// bound-set; returns empty for a flow with no `impl_of`.
-fn flowParamNamesStore(alloc: std.mem.Allocator, prog: *const ast_find.Program, f: *const ast_find.Flow) []const []const u8 {
-    const path_val = f.impl_of orelse return &.{};
-    const path: *const ast_find.DottedPath = &path_val;
-    const decl = findEventByPathStore(prog.items, path) orelse return &.{};
-    if (decl.input.fields.len == 0) return &.{};
-    const names = alloc.alloc([]const u8, decl.input.fields.len) catch unreachable;
-    for (decl.input.fields, 0..) |field, i| names[i] = field.name;
-    return names;
-}
-
 /// The module a store was DECLARED in, as the IMPORT-DERIVED logical name
 /// (`app.lib`) — the domain every resolvable path is spelled in.
 ///
@@ -671,6 +654,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
     return out.toOwnedSlice(alloc) catch unreachable;
 }
 ~part new
+~part pwalk
 ~part neworder
 ~part emitnames
 ~part hstruct

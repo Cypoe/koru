@@ -1,0 +1,6 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU010]
+CONTAINS stray continuation
+CONTAINS arm column
+ERROR_AT 15
+NOT_CONTAINS output_emitted.zig
