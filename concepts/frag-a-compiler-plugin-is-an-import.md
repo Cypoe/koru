@@ -17,6 +17,14 @@ import mechanism IS the whole plugin system. `import koru/compiler/sqlite`,
 an ordinary koru-libs package path, wires a SQLite sink into the backend
 build with no manifest, no flag, no `dlopen`.
 
+And configuration is a directive, not a flag: `<module>:config { k: v }` is
+a module-targeted block in the same grammar family as `compiler:use`,
+`x:new`, and `:requires` — the plugin owns the grammar inside the braces.
+The diagnostic pass claims the flow only when the qualifier's module
+carries a join, parses it in the same walk that erases the joins, and
+leaves every unclaimed `X:config` for coordinate to refuse — config for a
+plugin that isn't there is a compile error, never a silent no-op.
+
 ## Why stderr stayed, and why that is not a compromise
 
 The bus adds consumers; it never replaces the renderer. stderr survives
@@ -60,3 +68,9 @@ consumer of that directory.
 - Minted backends don't participate: arms are silently ignored there. That
   is a live gap — if it stays silent rather than refusing loudly, it is a
   defect to fix, not an exception to the belief.
+- Sink-side durability knobs must survive the failure paths: the first
+  `flush: false` sketch batched inserts into a transaction the finish hook
+  committed at pipeline end — but diagnostics exist on the paths that exit
+  through `process.exit`, where no deferred commit runs. `flush` became the
+  fsync pragma instead. If a future sink wants real batching, the
+  correctness argument has to hold on the exit-early paths first.

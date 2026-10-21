@@ -2165,17 +2165,138 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    return null;
             \\}
             \\
+            \\// `X:config { k: v }` — a module-targeted directive block, same family
+            \\// as `compiler:use` and `x:new`. The braces arrive as verbatim
+            \\// source in a `source` arg; the plugin owns the grammar inside —
+            \\// `key: literal` entries separated by newline or `,`. The pass
+            \\// claims the flow only when X's module actually carries a
+            \\// `std/compiler(diagnostic)` join; any other `X:config` stays in
+            \\// the tree and coordinate refuses it, so config on a non-plugin
+            \\// module is a compile error, not a silent no-op.
+            \\const DiagConfigEntry = struct { key: []const u8, value: []const u8 };
+            \\
+            \\// A config qualifier names its plugin module by logical name —
+            \\// `koru/compiler/sqlite:config` and `koru.compiler.sqlite:config`
+            \\// both normalize to the decl's dotted `logical_name`.
+            \\fn diagConfigKeyMatches(qualifier: []const u8, logical_name: []const u8) bool {
+            \\    if (qualifier.len != logical_name.len) return false;
+            \\    for (qualifier, logical_name) |a, b| {
+            \\        if ((if (a == '/') '.' else a) != b) return false;
+            \\    }
+            \\    return true;
+            \\}
+            \\
+            \\fn diagPluginNameFor(plugin_names: *__koru_std.StringHashMap(void), qualifier: []const u8) ?[]const u8 {
+            \\    var it = plugin_names.keyIterator();
+            \\    while (it.next()) |k| {
+            \\        if (diagConfigKeyMatches(qualifier, k.*)) return k.*;
+            \\    }
+            \\    return null;
+            \\}
+            \\
+            \\fn diagConfigQualifier(f: *const __koru_ast.Flow) ?[]const u8 {
+            \\    if (f.body.node) |*n| {
+            \\        if (n.* != .invocation) return null;
+            \\        const inv = &n.invocation;
+            \\        const mq = inv.path.module_qualifier orelse return null;
+            \\        if (inv.path.segments.len != 1) return null;
+            \\        if (!__koru_std.mem.eql(u8, inv.path.segments[0], "config")) return null;
+            \\        return mq;
+            \\    }
+            \\    return null;
+            \\}
+            \\
+            \\fn diagParseConfig(allocator: __koru_std.mem.Allocator, source: []const u8) __koru_std.ArrayList(DiagConfigEntry) {
+            \\    var out = __koru_std.ArrayList(DiagConfigEntry){};
+            \\    var start: usize = 0;
+            \\    var in_str = false;
+            \\    var i: usize = 0;
+            \\    while (i <= source.len) : (i += 1) {
+            \\        if (i < source.len and source[i] == '"' and (i == 0 or source[i - 1] != '\\')) in_str = !in_str;
+            \\        const at_sep = i == source.len or (!in_str and (source[i] == '\n' or source[i] == ','));
+            \\        if (!at_sep) continue;
+            \\        const chunk = __koru_std.mem.trim(u8, source[start..i], " \t\r");
+            \\        start = i + 1;
+            \\        if (chunk.len == 0) continue;
+            \\        const colon = __koru_std.mem.indexOfScalar(u8, chunk, ':') orelse {
+            \\            __koru_std.debug.print("⚠️  diagnostic config: '{s}' is not a 'key: value' entry — skipped\n", .{chunk});
+            \\            continue;
+            \\        };
+            \\        const key = __koru_std.mem.trim(u8, chunk[0..colon], " \t\r");
+            \\        var value = __koru_std.mem.trim(u8, chunk[colon + 1 ..], " \t\r");
+            \\        if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') value = value[1 .. value.len - 1];
+            \\        if (key.len == 0 or value.len == 0) continue;
+            \\        out.append(allocator, .{ .key = key, .value = value }) catch {};
+            \\    }
+            \\    return out;
+            \\}
+            \\
+            \\fn diagConfigGet(entries: ?[]const DiagConfigEntry, key: []const u8) ?[]const u8 {
+            \\    const list = entries orelse return null;
+            \\    var found: ?[]const u8 = null;
+            \\    for (list) |e| {
+            \\        if (__koru_std.mem.eql(u8, e.key, key)) found = e.value;
+            \\    }
+            \\    return found;
+            \\}
+            \\
+            \\fn diagItemsContainJoin(items: []const __koru_ast.Item) bool {
+            \\    for (items) |*item| {
+            \\        switch (item.*) {
+            \\            .flow => |*f| {
+            \\                if (f.body.node) |*n| {
+            \\                    if (n.* == .invocation and isDiagJoinInvocation(&n.invocation)) return true;
+            \\                }
+            \\            },
+            \\            .module_decl => |*md| {
+            \\                if (diagItemsContainJoin(md.items)) return true;
+            \\            },
+            \\            else => {},
+            \\        }
+            \\    }
+            \\    return false;
+            \\}
+            \\
+            \\fn findDiagPluginModules(items: []const __koru_ast.Item, out: *__koru_std.StringHashMap(void)) void {
+            \\    for (items) |*item| {
+            \\        switch (item.*) {
+            \\            .module_decl => |*md| {
+            \\                if (diagItemsContainJoin(md.items)) out.put(md.logical_name, {}) catch {};
+            \\                findDiagPluginModules(md.items, out);
+            \\            },
+            \\            else => {},
+            \\        }
+            \\    }
+            \\}
+            \\
+            \\fn collectDiagConfigFlows(allocator: __koru_std.mem.Allocator, items: []const __koru_ast.Item, plugin_names: *__koru_std.StringHashMap(void), configs: *__koru_std.StringHashMap(__koru_std.ArrayList(DiagConfigEntry))) void {
+            \\    for (items) |*item| {
+            \\        switch (item.*) {
+            \\            .flow => |*f| {
+            \\                const mq = diagConfigQualifier(f) orelse continue;
+            \\                const key = diagPluginNameFor(plugin_names, mq) orelse continue;
+            \\                const src = diagArgText(f.body.node.?.invocation.args, "source") orelse "";
+            \\                configs.put(key, diagParseConfig(allocator, src)) catch {};
+            \\            },
+            \\            .module_decl => |*md| collectDiagConfigFlows(allocator, md.items, plugin_names, configs),
+            \\            else => {},
+            \\        }
+            \\    }
+            \\}
+            \\
             \\// One `!` arm = one consumer. Stage-0 semantics: the arm's tor name
             \\// resolves against builtin sinks — the Koru spelling is the contract,
             \\// the builtin is the implementation (arbitrary user-authored sink
-            \\// bodies need the interpreter; that is a later conversation).
-            \\fn registerDiagArms(allocator: __koru_std.mem.Allocator, join_flow: *const __koru_ast.Flow) void {
+            \\// bodies need the interpreter; that is a later conversation). Sink
+            \\// parameters come from the declaring module's `X:config` entries
+            \\// (cfg) with per-site arm args winning over module-level keys.
+            \\fn registerDiagArms(allocator: __koru_std.mem.Allocator, join_flow: *const __koru_ast.Flow, cfg: ?[]const DiagConfigEntry) void {
             \\    for (join_flow.body.continuations) |*cont| {
             \\        const step = cont.node orelse continue;
             \\        if (step != .invocation) continue;
             \\        const name = diagArmSinkName(&step.invocation);
             \\        if (__koru_std.mem.eql(u8, name, "jsonl")) {
-            \\            const path = diagArgText(step.invocation.args, "path") orelse "koru-diagnostics.jsonl";
+            \\            const path = diagArgText(step.invocation.args, "path") orelse (diagConfigGet(cfg, "file") orelse "koru-diagnostics.jsonl");
             \\            const file = __koru_std.fs.cwd().createFile(path, .{}) catch |err| {
             \\                __koru_std.debug.print("⚠️  diagnostic sink: cannot open '{s}': {s}\n", .{ path, @errorName(err) });
             \\                continue;
@@ -2187,7 +2308,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
 
         if (wants_sqlite) try writer.writeAll(
             \\        } else if (__koru_std.mem.eql(u8, name, "sqlite")) {
-            \\            registerDiagSqliteSink(allocator, &step.invocation);
+            \\            registerDiagSqliteSink(allocator, &step.invocation, cfg);
         );
 
         try writer.writeAll(
@@ -2197,7 +2318,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    }
             \\}
             \\
-            \\fn filterDiagJoinItems(allocator: __koru_std.mem.Allocator, items: []const __koru_ast.Item) []const __koru_ast.Item {
+            \\fn filterDiagJoinItems(allocator: __koru_std.mem.Allocator, items: []const __koru_ast.Item, mod_name: ?[]const u8, plugin_names: *__koru_std.StringHashMap(void), configs: *__koru_std.StringHashMap(__koru_std.ArrayList(DiagConfigEntry))) []const __koru_ast.Item {
             \\    var kept = __koru_std.ArrayList(__koru_ast.Item){};
             \\    for (items) |*item| {
             \\        switch (item.*) {
@@ -2207,14 +2328,21 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\                    if (n.* == .invocation and isDiagJoinInvocation(&n.invocation)) is_join = true;
             \\                }
             \\                if (is_join) {
-            \\                    registerDiagArms(allocator, f);
+            \\                    const cfg: ?[]const DiagConfigEntry = if (mod_name) |mn|
+            \\                        (if (configs.get(mn)) |c| c.items else null)
+            \\                    else
+            \\                        null;
+            \\                    registerDiagArms(allocator, f, cfg);
             \\                    continue;
+            \\                }
+            \\                if (diagConfigQualifier(f)) |mq| {
+            \\                    if (diagPluginNameFor(plugin_names, mq) != null) continue;
             \\                }
             \\                kept.append(allocator, item.*) catch {};
             \\            },
             \\            .module_decl => |*md| {
             \\                const mutable = @constCast(md);
-            \\                mutable.items = filterDiagJoinItems(allocator, md.items);
+            \\                mutable.items = filterDiagJoinItems(allocator, md.items, md.logical_name, plugin_names, configs);
             \\                kept.append(allocator, item.*) catch {};
             \\            },
             \\            else => kept.append(allocator, item.*) catch {},
@@ -2224,7 +2352,11 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\}
             \\
             \\fn collectDiagJoins(allocator: __koru_std.mem.Allocator, prog: *Program) *const Program {
-            \\    prog.items = filterDiagJoinItems(allocator, prog.items);
+            \\    var plugin_names = __koru_std.StringHashMap(void).init(allocator);
+            \\    findDiagPluginModules(prog.items, &plugin_names);
+            \\    var configs = __koru_std.StringHashMap(__koru_std.ArrayList(DiagConfigEntry)).init(allocator);
+            \\    collectDiagConfigFlows(allocator, prog.items, &plugin_names, &configs);
+            \\    prog.items = filterDiagJoinItems(allocator, prog.items, null, &plugin_names, &configs);
             \\    return prog;
             \\}
             \\
@@ -2253,6 +2385,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\
             \\const DiagSqliteSink = struct {
             \\    stmt: ?*DiagSqliteC.Stmt,
+            \\    db: ?*DiagSqliteC.Db,
             \\
             \\    // SQLITE_STATIC (null dtor): the rows bind slices out of the
             \\    // compile arena, which outlives every sqlite3_step before
@@ -2275,10 +2408,23 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        if (rc != 101) __koru_std.debug.print("⚠️  diagnostic sink: sqlite insert failed (rc={d})\n", .{rc});
             \\        _ = DiagSqliteC.sqlite3_reset(stmt);
             \\    }
+            \\
+            \\    fn finish(ctx: *anyopaque) void {
+            \\        const self: *DiagSqliteSink = @ptrCast(@alignCast(ctx));
+            \\        _ = DiagSqliteC.sqlite3_finalize(self.stmt);
+            \\        _ = DiagSqliteC.sqlite3_close_v2(self.db);
+            \\    }
             \\};
             \\
-            \\fn registerDiagSqliteSink(allocator: __koru_std.mem.Allocator, inv: *const __koru_ast.Invocation) void {
-            \\    const path = diagArgText(inv.args, "path") orelse "koru-diagnostics.db";
+            \\fn registerDiagSqliteSink(allocator: __koru_std.mem.Allocator, inv: *const __koru_ast.Invocation, cfg: ?[]const DiagConfigEntry) void {
+            \\    const path = diagArgText(inv.args, "path") orelse (diagConfigGet(cfg, "db-file") orelse "koru-diagnostics.db");
+            \\    // `flush` is the fsync discipline, not a transaction toggle —
+            \\    // diagnostics exist on the failure paths, and failed backends
+            \\    // exit through process.exit where no deferred commit could run.
+            \\    // true (default): synchronous=FULL, durable per row. false:
+            \\    // synchronous=OFF — still committed per insert (survives the
+            \\    // backend dying), lost only on OS/power failure.
+            \\    const flush_each = !__koru_std.mem.eql(u8, diagConfigGet(cfg, "flush") orelse "true", "false");
             \\    const zpath = allocator.dupeZ(u8, path) catch return;
             \\    var db: ?*DiagSqliteC.Db = null;
             \\    if (DiagSqliteC.sqlite3_open(zpath.ptr, &db) != 0 or db == null) {
@@ -2296,9 +2442,12 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\        __koru_std.debug.print("⚠️  diagnostic sink: sqlite prepare failed: {s}\n", .{DiagSqliteC.sqlite3_errmsg(db)});
             \\        return;
             \\    }
+            \\    if (!flush_each) {
+            \\        _ = DiagSqliteC.sqlite3_exec(db, "PRAGMA synchronous=OFF;", null, null, null);
+            \\    }
             \\    const sink = allocator.create(DiagSqliteSink) catch return;
-            \\    sink.* = .{ .stmt = stmt };
-            \\    errors_mod.registerDiagSink(allocator, .{ .ctx = sink, .emit = DiagSqliteSink.emit }) catch {};
+            \\    sink.* = .{ .stmt = stmt, .db = db };
+            \\    errors_mod.registerDiagSink(allocator, .{ .ctx = sink, .emit = DiagSqliteSink.emit, .finish = DiagSqliteSink.finish }) catch {};
             \\}
             \\
         );
@@ -2452,6 +2601,7 @@ fn generateBackendCode(allocator: std.mem.Allocator, input_file: []const u8, sou
             \\    // Each pass takes PROGRAM_AST pointer and current AST pointer
             \\    // Returns same pointer if no changes, or new heap-allocated AST if optimized
             \\    const current_ast: *const Program = collectDiagJoins(compile_allocator, seed_ast);
+            \\    defer errors_mod.finishDiagSinks();
             \\
             \\    // DUMP POINT 1: Original AST at backend entry
             \\    dumpAST(seed_ast, "1-backend-start", compile_allocator);

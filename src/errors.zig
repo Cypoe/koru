@@ -233,6 +233,10 @@ pub const DiagSink = struct {
     /// report back through the reporter — re-entrant dispatch is dropped by
     /// `in_diag_dispatch`, not relayed.
     emit: *const fn (ctx: *anyopaque, err: *const ParseError) void,
+    /// Called once at pipeline end — the batched-write side of a `flush:
+    /// false` config (COMMIT of an open transaction, close of a handle). A
+    /// sink with nothing to tear down leaves it null.
+    finish: ?*const fn (ctx: *anyopaque) void = null,
 };
 
 var diag_sinks: std.ArrayList(DiagSink) = .empty;
@@ -243,6 +247,15 @@ var in_diag_dispatch = false;
 /// Single-threaded by the same argument as `diagnostics_were_printed`.
 pub fn registerDiagSink(allocator: std.mem.Allocator, sink: DiagSink) !void {
     try diag_sinks.append(allocator, sink);
+}
+
+/// Pipeline-end drain: let sinks commit/close whatever `emit` batched. The
+/// emitted backend defers this right after sink registration so every return
+/// path out of `main` flushes what was buffered.
+pub fn finishDiagSinks() void {
+    for (diag_sinks.items) |sink| {
+        if (sink.finish) |f| f(sink.ctx);
+    }
 }
 
 fn dispatchDiag(err: *const ParseError) void {
