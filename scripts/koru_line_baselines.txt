@@ -68,7 +68,8 @@ koru_std/compiler.directives.kz	15
 koru_std/compiler.dump.kz	24
 koru_std/compiler.flags.kz	6
 koru_std/compiler.kz	2672
-koru_std/compiler.materialize.kz	472
+koru_std/compiler.materialize-build.kz	329
+koru_std/compiler.materialize.kz	174
 koru_std/compiler.paths.kz	33
 koru_std/compiler.prelate.kz	35
 koru_std/compiler.stages.kz	40

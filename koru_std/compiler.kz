@@ -1,5 +1,4 @@
 ~[comptime]
-
 ~import std/testing
 ~import std/inter
 ~import std/deps
@@ -15,6 +14,7 @@
 ~part stages
 ~part prelate
 ~part materialize
+~part materialize-build
 // Compiler system dependencies
 ~std/deps:requires.system {
     "name": "zig",

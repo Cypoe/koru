@@ -165,8 +165,9 @@ pub const ErrorCode = enum(u16) {
     KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
     KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
-    KORU207, // A `!` arm at an impl flow's head references the implementing tor's params — the arm lowers to a context-free `Handlers_*` fn that sees module scope only, so the reference dies in emitted Zig ('x' not accessible from inner function). Emitted by src/flow_checker.zig.
+    KORU207, // --deep-check witness: output_emitted.zig does not parse as Zig (emitted text is not the verdict; emitted *valid* text is). Printed by the validate-emitted tor in koru_std/compiler.materialize.kz (510_126). Formerly the flow_checker `!` arm param refusal — that site retired when Handlers_* fns learned to capture (400_208).
     KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
+    KORU209, // `dir:` relocates the emitted artifact while the program declares build:requires — generated build_output.zig stages output_emitted.zig in cwd. Printed by the host-build-zig tor in koru_std/compiler.materialize.kz.
 };
 
 pub const SourceLocation = struct {

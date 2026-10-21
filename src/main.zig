@@ -3100,8 +3100,8 @@ fn enforceLangNamespace(
     program: *const ast.Program,
     lang: []const u8,
 ) !void {
-    // Emitters wired into the stage-C dispatch (koru_std/compiler.kz).
-    if (std.mem.eql(u8, lang, "zig") or std.mem.eql(u8, lang, "js")) return;
+    // Emitters wired into the target-of dispatch (koru_std/compiler.materialize.kz).
+    if (std.mem.eql(u8, lang, "zig") or std.mem.eql(u8, lang, "js") or std.mem.eql(u8, lang, "cs")) return;
 
     var declared = std.StringHashMap(void).init(allocator);
     defer declared.deinit();
@@ -3125,7 +3125,7 @@ fn enforceLangNamespace(
         try lw.writeAll(n);
     }
 
-    try printStderr(allocator, "error[KORU126]: --lang='{s}' names no emitter and no proc variant declared in this program\n  emitters: zig, js\n  declared variant tags: {s}\n  `--lang=<tag>` selects which `~proc <tor>|<tag>` bodies get emitted — a tag nothing declares still compiles, under a name that selects nothing\n  fix: pass one of the declared tags, or declare `~proc <tor>|{s} {{ ... }}` bodies for the target first\n", .{ lang, if (names.items.len == 0) "(none)" else list.items, lang });
+    try printStderr(allocator, "error[KORU126]: --lang='{s}' names no emitter and no proc variant declared in this program\n  emitters: zig, js, cs\n  declared variant tags: {s}\n  `--lang=<tag>` selects which `~proc <tor>|<tag>` bodies get emitted — a tag nothing declares still compiles, under a name that selects nothing\n  fix: pass one of the declared tags, or declare `~proc <tor>|{s} {{ ... }}` bodies for the target first\n", .{ lang, if (names.items.len == 0) "(none)" else list.items, lang });
     std.process.exit(1);
 }
 

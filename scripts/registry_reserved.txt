@@ -99,6 +99,12 @@ KORU179
 # `ln|zig` transforms — .kz graft passes, same situation as KORU178 above.
 KORU180
 
+# Diagnostic codes printed inline by koru_std pipeline tors — .kz emit
+# sites are invisible to the zig-only scan. KORU207 is the deep-check
+# ast-witness (510_126); KORU209 refuses `dir:` + build:requires together.
+KORU207
+KORU209
+
 # `unknownConstruct` was the only emitter and nothing called it — the DEAD check
 # could not see that until 2026-09-17, when the emit-scan stopped crediting a
 # `.KORUxxx` tag in src/errors.zig whose enclosing helper has no call site. The
