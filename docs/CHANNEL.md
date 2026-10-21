@@ -125,10 +125,33 @@ std/rings:new(feed, capacity: 256) { value: u64 }
 
 What is NOT settled:
 
-- Broadcast spelling (`! each` or otherwise) — deferred.
-- Per-flow select (one flow waiting on two channels) — a spelling
-  question, not a mechanism gap; the pump-join answer is pinned
-  (`699_010` — two channels stepped on one pump).
+- Broadcast spelling — **proposal (Lars, ccomp-line, heavy
+  recommendation — fork review pending): `! each kind v |>`.** The `each`
+  word sits between the sigil and the kind word; a competing arm stays
+  `! reading v`, a broadcast arm spells `! each reading v`. House style
+  is words over symbols (`capacity: 0` is "the rendezvous spelling");
+  `!!`/`!*` were rejected as cryptic sigils. Semantics: every `! each`
+  arm receives a copy of each firing of its kind — mixing with plain
+  `!` arms on one channel is coherent (workers compete, listeners copy).
+  The refusal set carries over: obligated kinds and borrows refuse —
+  custody cannot be copied. Mechanism is NOT free, flagged honestly:
+  competing arms share one pop cursor; each `each` arm needs its own
+  read position on the ring (per-consumer cursor or SPMC fan-out), a
+  widening of the pinned drain, not new machinery.
+- Per-flow select (one flow waiting on two channels) — the mechanism is
+  pinned (`699_010` — two channels stepped on one pump); **spelling
+  proposal (Lars, ccomp-line, heavy recommendation — fork review
+  pending): `std/channel:select(a, b)` returning a channel-name-tagged
+  sum, discriminated by arms:**
+  `std/channel:select(left, right) | left v |> .. | right v |> .. | none |> .. | closed |> ..`
+  — the arm word names which channel fired (the same name-in-arm idiom
+  `! kind` and `kind: payload` already use), `none` keeps it nonblocking,
+  `closed` means all selected channels closed (first-close firing would
+  strand the other channel's values). Mechanism: one participant whose
+  `step` iterates the selected rings — a widening of the pinned
+  pump-join, no runtime `selectgo`. Rejected alternatives: a `select {}`
+  block (new grammar for what arms already express) and arm-sets on the
+  bare join (muddles program-wide consumers with a per-flow wait).
 - `std/supervisor` on a `std/channel:` verb — same-module wrapper
   composition is measured (`699_019`: supervised bounded send, retry →
   `full` in kind); supervising the std verb directly refuses
