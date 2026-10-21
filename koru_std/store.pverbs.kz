@@ -318,7 +318,7 @@ if (step_arm) |*sa| {
             for (px) |*p| p.* = "";
             break :blk_spx px;
         } };
-        h.storeRefsContH(allocator, program, &body_clone, sscope, pstore_identity, &[_][]const u8{});
+        storeRefsContH(allocator, program, &body_clone, sscope, pstore_identity, &[_][]const u8{});
         const snode = body_clone.node.?;
         if (snode == .inline_code) {
             // A nested store-read site spliced its loop here before
@@ -392,7 +392,7 @@ if (step_arm) |*sa| {
             for (px) |*p| p.* = "";
             break :blk_dpx px;
         } };
-        h.storeRefsContH(allocator, program, &dclone, dscope, pstore_identity, &[_][]const u8{});
+        storeRefsContH(allocator, program, &dclone, dscope, pstore_identity, &[_][]const u8{});
         const dnode = dclone.node.?;
         if (dnode == .inline_code) {
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
@@ -629,7 +629,7 @@ if (wait_arm) |*wa| {
         for (px) |*p| p.* = "";
         break :blk_wpx px;
     } };
-    h.storeRefsContH(allocator, program, &wbody_clone, wscope, pstore_identity, &[_][]const u8{});
+    storeRefsContH(allocator, program, &wbody_clone, wscope, pstore_identity, &[_][]const u8{});
     const wnode = wbody_clone.node.?;
     if (wnode == .inline_code) {
         // A host-proc interest body returns the record itself.

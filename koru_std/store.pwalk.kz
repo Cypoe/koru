@@ -1,0 +1,141 @@
+// Koru Standard Library: the `pwalk` part of store.kz.
+// Joined via `~part pwalk` in store.kz; merged into the module at load.
+
+// ------------------------------------------------------------------
+// The plural-store whole-program reference walk: `storeRefsContH` /
+// `storeRefsFlowH`, created for `new`'s declaring-module namespace
+// (empty prefixes — a plural-walk reader sits where the store was
+// declared). The identity-store walk is `Rewrite.rewriteCont` in
+// store.new.kz; the two enumerate the same AST positions and drift is
+// the known defect shape — `frag-a-fix-lands-in-one-lowering-path`.
+// ------------------------------------------------------------------
+
+// A whole-program walk over one flow, lowering every text slot an
+// expression may stand in. `scope` carries the program's store names
+// with the prefix each needs (empty here — the plural walk reads from
+// the declaring module's own namespace).
+fn storeRefsContH(alloc: std.mem.Allocator, prog: *const ast_find.Program, cont: *ast_find.Continuation, scope: StoreScope, ident: []const []const u8, bound: []const []const u8) void {
+    const ast2 = @import("ast");
+    // A continuation's OWN bindings shadow store names (690_090): a
+    // row binding (`! query items`) or shape-destructure makes
+    // `<store>.<field>` mean THE ROW for everything under the arm. The
+    // Walk runs before the site transform, so without the skip the
+    // binding loses its name to the cell rewrite and the body reads the
+    // whole column array where the row's value belongs.
+    var own_buf: [16][]const u8 = undefined;
+    var own_len: usize = 0;
+    if (cont.binding) |b| {
+        own_buf[own_len] = b;
+        own_len += 1;
+    }
+    for (cont.destructure) |df| {
+        own_buf[own_len] = df.name;
+        own_len += 1;
+    }
+    const own = own_buf[0..own_len];
+    const bound_all: []const []const u8 = if (own_len == 0)
+        bound
+    else blk: {
+        const all = alloc.alloc([]const u8, bound.len + own_len) catch unreachable;
+        @memcpy(all[0..bound.len], bound);
+        @memcpy(all[bound.len..], own);
+        break :blk all;
+    };
+    if (cont.condition) |cond| {
+        @constCast(cont).condition = storeLowerText(alloc, prog, cond, scope, ident, bound_all);
+    }
+    if (cont.node) |*n| {
+        // No `|*inv|` on `switch (n.*)` — that captures a TEMPORARY
+        // Invocation; assigning `inline_body` there is a no-op on the
+        // live AST. Arg slices still alias heap, so they "worked" and
+        // hid this. Mutate via `n.invocation` (690_074).
+        switch (n.*) {
+            .invocation => {
+                const inv = &n.invocation;
+                const skip = blk: {
+                    if (inv.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.store")) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (!skip) {
+                    for (inv.args) |*a| {
+                        @constCast(a).value = storeLowerText(alloc, prog, a.value, scope, ident, bound_all);
+                        if (a.expression_value) |ev| {
+                            const fresh = alloc.create(ast2.CapturedExpression) catch unreachable;
+                            fresh.* = ev.*;
+                            fresh.text = storeLowerText(alloc, prog, ev.text, scope, ident, bound_all);
+                            @constCast(a).expression_value = fresh;
+                        }
+                    }
+                }
+                // Template expand (`if`/`for`) bakes Expression args into
+                // Invocation.inline_body BEFORE store:create runs — rewriting
+                // args alone is too late; the freeze lives here (690_074).
+                if (inv.inline_body) |ib| {
+                    inv.inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_all);
+                }
+            },
+            .inline_code => {
+                n.* = .{ .inline_code = storeLowerText(alloc, prog, n.inline_code, scope, ident, bound_all) };
+            },
+            // A branch-resolution payload (`| then => got s.n`) is a
+            // THIRD text position, alongside the guard and the args, and
+            // it was the only one the walk did not carry: the guard
+            // lowered to `__koru_store_s.n` while the payload one line
+            // below reached Zig as a bare `s` (690_256). The emitter
+            // reads `plain_value` for the single-value form and
+            // `expression_str orelse type` per field for the record
+            // form, so the rewrite must land in exactly those slots.
+            .branch_constructor => {
+                const bc = &n.branch_constructor;
+                if (bc.plain_value) |pv| bc.plain_value = storeLowerText(alloc, prog, pv, scope, ident, bound_all);
+                for (bc.fields) |*fld| {
+                    const has_expr = fld.expression_str != null;
+                    const lowered = storeLowerText(alloc, prog, fld.expression_str orelse fld.type, scope, ident, bound_all);
+                    if (has_expr) {
+                        @constCast(fld).expression_str = lowered;
+                    } else {
+                        @constCast(fld).type = lowered;
+                    }
+                }
+            },
+            // A produce arm (`| then -> s[h].f`) is an expression
+            // node — a FOURTH text position this walk did not
+            // carry: the guard under the same `if` lowered while
+            // the arm's return text reached Zig verbatim as
+            // `s[h].f`, an undeclared identifier (690_376). The
+            // identity-store walk carries this arm already
+            // (110_022); this is its plural twin.
+            .expression => {
+                @constCast(n).* = .{ .expression = storeLowerText(alloc, prog, n.expression, scope, ident, bound_all) };
+            },
+            else => {},
+        }
+    }
+    for (cont.continuations) |*c| storeRefsContH(alloc, prog, @constCast(c), scope, ident, bound_all);
+}
+fn storeRefsFlowH(alloc: std.mem.Allocator, prog: *const ast_find.Program, f: *ast_find.Flow, scope: StoreScope, ident: []const []const u8) void {
+    const bound_params = flowParamNamesStore(alloc, prog, f);
+    storeRefsContH(alloc, prog, &f.body, scope, ident, bound_params);
+    if (f.inline_body) |ib| {
+        @constCast(f).inline_body = storeLowerText(alloc, prog, ib, scope, ident, bound_params);
+    }
+}
+
+/// A flow's OWN parameters shadow store names inside its body, exactly the way
+/// 690_090 extends the rule to continuation bindings (`! query items`). Without
+/// this, `~transit = reframe(goal, history)` with a store also named `history`
+/// rewrites the punned argument to the store cell (`__koru_store_history`)
+/// instead of leaving the parameter name for Zig to resolve. Resolve the flow's
+/// implementing tor and return its input-field names so a walk can seed its
+/// bound-set; returns empty for a flow with no `impl_of`.
+fn flowParamNamesStore(alloc: std.mem.Allocator, prog: *const ast_find.Program, f: *const ast_find.Flow) []const []const u8 {
+    const path_val = f.impl_of orelse return &.{};
+    const path: *const ast_find.DottedPath = &path_val;
+    const decl = findEventByPathStore(prog.items, path) orelse return &.{};
+    if (decl.input.fields.len == 0) return &.{};
+    const names = alloc.alloc([]const u8, decl.input.fields.len) catch unreachable;
+    for (decl.input.fields, 0..) |field, i| names[i] = field.name;
+    return names;
+}
