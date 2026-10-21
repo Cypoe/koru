@@ -93,4 +93,4 @@ which judges `name(` as a call regardless of namespacing. The lesson is
 in the wall's own contract now: a pass/fail admission predicate on
 complete text must parse ALL of it, because "parseable prefix + garbage"
 is exactly the shape an adversary (or a namespaced callee) uses to walk
-past a prefix judge. Pin: 320_175_namespaced_call_in_produce.
+past a prefix judge. Pin: 320_178_namespaced_call_in_produce.
