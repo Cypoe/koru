@@ -42,7 +42,7 @@ choices*, not the lane itself — the four cells are green.
   lane. Driven end-to-end through `run_regression.sh`:
   `400_212_c_transducer_equiv` PASS.
 - Three refusal cells PASS, each naming its pinned axis (KORU047,
-  located, `C_REFUSES` substring-matched): `400_208` raw host lines,
+  located, `C_REFUSES` substring-matched): `400_217` raw host lines,
   `400_209` `!` effect arms, `400_210` concurrency.
 - Multi-axis refusals name every co-present axis — C2's "name all"
   recommendation, implemented rather than ruled.
@@ -698,7 +698,7 @@ pass — it cannot see marks and was left unchanged rather than printing a
 zero-row lie. `comptime_main` also runs at Phase 2.3.5 (pre-transform
 prime), so the enforce print is gated on `witnessSites() > 0`.
 
-**Pinned:** `690_364_witness_marks_ride_lowered_stored_writes` — an
+**Pinned:** `690_378_witness_marks_ride_lowered_stored_writes` — an
 `enforce`-declared program with one proven-lossless write and one
 unproven write; `expected_comptime.txt` pins the census line. 690_160
 still refuses identically (KORU161, f64→f32). Control slice over the
@@ -734,7 +734,7 @@ before the census:
     [witness] stored-write-numeric: lossless=3 deferred=0 rounds=1 non-numeric=0 refused=0
 
 Mark parsing is strict (four quoted fields); a malformed mark is counted
-and printed nowhere. 690_364 pins four writes (f64<-f32, literal 1.5,
+and printed nowhere. 690_378 pins four writes (f64<-f32, literal 1.5,
 literal 0.1, literal 16777217 into f64).
 
 **K3 — `verify/witness/WitnessCheck.lean` (Lean 4.31.0, pinned in
@@ -749,7 +749,7 @@ must all MATCH; `forged.txt` (15 lines: wrong verdicts, narrowing claimed
 lossless, unknown tokens, unknown kind) must all be rejected (N4).
 
 **Gate: `scripts/witness_gate.sh`** — Role A check, golden, real
-corpus (default: 690_364's backend.err, so run that test first), forged.
+corpus (default: 690_378's backend.err, so run that test first), forged.
 Missing Lean is FAIL. Negative-probed: one corrupted golden verdict flips
 the gate to FAIL; restored, PASS. Measured: real corpus 4/4 MATCH.
 
@@ -767,7 +767,7 @@ witness-check` split. It is a no-op unless the program declared
 only registers `emitter_helpers.witness_enforced = true` (build:variants
 registry shape) and the pass owns all printing: site lines in walk order,
 then per-kind census lines (`stored-write-numeric: …` byte-identical to
-before; `auto-discharge: sole=N preferred=N`). 690_364 passes unchanged —
+before; `auto-discharge: sole=N preferred=N`). 690_378 passes unchanged —
 the numeric marks survive from transform to analysis.
 
 **Discharge witnesses.** `selectWithWitness` (src/auto_discharge_inserter.zig)
@@ -782,16 +782,16 @@ preferred and a sole pick.
 `[strict]` + enforce, every `stored-write-numeric` mark verdicted `rounds` or
 `deferred` is a KORU161 refusal at the write's flow:
 `std/witness: [strict] requires every stored write to be proven lossless —
-'bodies.x' (f32) is written from literal 0.1, which rounds in f32`. 690_365
-pins the refusal, 690_366 the admitted case. KORU161 because no witness-family
+'bodies.x' (f32) is written from literal 0.1, which rounds in f32`. 690_379
+pins the refusal, 690_380 the admitted case. KORU161 because no witness-family
 code is reserved (scripts/registry_reserved.txt) and this is the store's
 write-refusal class — a W3 code decision for Lars.
 
 **K3.** The Lean file gained the `auto-discharge` kind: `pick` re-runs the
 policy over the recorded candidates, `pick_sound` proves a pick is a
 candidate and forced (only candidate, or only `[!]`). Golden +3, forged +7.
-Real corpora: 330_145 2/2 MATCH, 690_365 1/1, 690_364 4/4, 690_366 2/2.
-330_145 and 690_366 carry WITNESS_CHECK. Stated limit: the checker cannot see
+Real corpora: 330_145 2/2 MATCH, 690_379 1/1, 690_378 4/4, 690_380 2/2.
+330_145 and 690_380 carry WITNESS_CHECK. Stated limit: the checker cannot see
 whether the recorded candidate list is complete.
 
 ## Tranche: numeric check reaches the honest floor (commits 47500f627..a410df5e2)

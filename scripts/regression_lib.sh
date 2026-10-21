@@ -376,7 +376,7 @@ regression_check_js_equivalence() {
             RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
-    timeout "${REGRESSION_TEST_TIMEOUT:-30}" node "$js_out" "${RUN_ARGS[@]}" >"$js_actual" 2>&1
+    timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" node "$js_out" "${RUN_ARGS[@]}" >"$js_actual" 2>&1
     local node_exit=$?
     if [ "$node_exit" -ne 0 ]; then
         _js_equiv_fail "js-runtime" "node exited $node_exit (see actual.js.txt)"
@@ -479,7 +479,7 @@ regression_check_cs_equivalence() {
             RUN_ARGS+=("${_arg%$'\r'}")
         done < "$test_dir/ARGS"
     fi
-    timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
+    timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$cs_app" "${RUN_ARGS[@]}" >"$cs_actual" 2>&1
     local cs_exit=$?
     if [ "$cs_exit" -ne 0 ]; then
         _cs_equiv_fail "cs-runtime" "apphost exited $cs_exit (see actual.cs.txt)"
@@ -623,9 +623,9 @@ regression_check_c_equivalence() {
         done < "$test_dir/ARGS"
     fi
     if [ -f "$test_dir/STDIN" ]; then
-        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" < "$test_dir/STDIN" >"$c_actual" 2>&1
+        timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$c_app" "${RUN_ARGS[@]}" < "$test_dir/STDIN" >"$c_actual" 2>&1
     else
-        timeout "${REGRESSION_TEST_TIMEOUT:-30}" "$c_app" "${RUN_ARGS[@]}" >"$c_actual" 2>&1
+        timeout "$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")" "$c_app" "${RUN_ARGS[@]}" >"$c_actual" 2>&1
     fi
     local c_exit=$?
     if [ "$c_exit" -ne 0 ]; then
@@ -644,13 +644,46 @@ regression_check_c_equivalence() {
     echo -e "${GREEN}  ✓ C equivalence (ccomp binary output matches expected.txt)${NC}"
 }
 
+# Per-lane timeout multiplier (a C-line residual ruling, 2026-10-21): slow
+# lanes — musl Debug binaries are the measured case — stretch every per-test
+# budget by one factor rather than each lane raising pins locally. Applied to
+# the binary-run timeout, the equivalence-lane timeouts, and the per-test
+# wall-clock watchdog; NEVER to SELFTEST_TIMEOUT, whose job is to catch a hang
+# fast. Integer or decimal; floors at 1s. Default 1 = no scaling.
+regression_scaled_timeout() {
+    awk -v t="$1" -v s="${KORU_TEST_TIMEOUT_SCALE:-1}" 'BEGIN{ r=int(t*s); print (r < 1 ? 1 : r) }'
+}
+
+# NOT-ARMED — the named verdict for a marked oracle leg whose arming env is
+# unset. It is not a pass and not a fail: it is a verdict the oracle never
+# produced, and it must never wear green. The marker file records the leg on
+# disk so the parallel path can count it; the counter/list keep the serial
+# path honest. KORU_ORACLE_REQUIRED=1 promotes not-armed to FAIL — the
+# posture-A bridge for lanes that provision every oracle (the C5 ruling's
+# migration step).
+regression_oracle_not_armed() {
+    local test_dir="$1" leg="$2" hint="$3"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+    if [ -f "$test_dir/SUCCESS" ]; then
+        rm -f "$test_dir/SUCCESS"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+    fi
+    if [ ! -f "$test_dir/NOTARMED" ]; then
+        NOT_ARMED_TESTS=$(( ${NOT_ARMED_TESTS:-0} + 1 ))
+        NOT_ARMED_LIST="${NOT_ARMED_LIST} ${TEST_NAME}(${leg})"
+    fi
+    echo "$leg" >> "$test_dir/NOTARMED"
+    echo -e "${YELLOW}  ⚠ NOT-ARMED $leg — $hint${NC}"
+}
+
 # Witness oracle leg — opt-in via a `WITNESS_CHECK` marker AND KORU_WITNESS=1.
 # The Lean checker (verify/witness/WitnessCheck.lean) re-decides every
 # `[witness] site` verdict the compiler printed into backend.err; the gate
 # script also self-checks against its golden/forged corpora. Opt-in because
 # the oracle needs an external Lean toolchain: a marker without KORU_WITNESS
-# is a noted skip, never a verdict — the normal board must not redden on
-# machines without Lean. With KORU_WITNESS=1 a missing Lean is FAIL: the gate
+# is a named NOT-ARMED verdict — never green, and FAIL under
+# KORU_ORACLE_REQUIRED=1. With KORU_WITNESS=1 a missing Lean is FAIL: the gate
 # already refuses an absent oracle (set KORU_LEAN to point at one).
 regression_check_witness_oracle() {
     local test_dir="$1"
@@ -660,11 +693,6 @@ regression_check_witness_oracle() {
     [ -f "$test_dir/WITNESS_CHECK" ] || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
 
-    if [ "${KORU_WITNESS:-0}" != "1" ]; then
-        echo -e "${BLUE}  (witness oracle not run — set KORU_WITNESS=1)${NC}"
-        return 0
-    fi
-
     _witness_oracle_fail() {
         rm -f "$test_dir/SUCCESS"
         echo "$1" > "$test_dir/FAILURE"
@@ -672,6 +700,15 @@ regression_check_witness_oracle() {
         [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
         echo -e "${RED}  ✗ witness oracle: $2${NC}"
     }
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        if [ "${KORU_ORACLE_REQUIRED:-0}" = "1" ]; then
+            _witness_oracle_fail "witness-oracle" "marker is the contract but the oracle is not armed (set KORU_WITNESS=1)"
+        else
+            regression_oracle_not_armed "$test_dir" "witness-oracle" "set KORU_WITNESS=1"
+        fi
+        return 0
+    fi
 
     # The gate cds into verify/witness before reading its corpus args — the
     # backend.err path must be absolute to survive that cd.
@@ -690,10 +727,10 @@ regression_check_witness_oracle() {
 # every `[flow-eval]` claim the fold-comptime walker printed into
 # backend.err — entry args, graph, fuel, result-or-refuse, thunk oracle
 # leaves — and every claim must MATCH. Opt-in for the same reason as
-# WITNESS_CHECK: the oracle needs Lean, so a marker without KORU_WITNESS
-# is a noted skip, never a verdict. A marked test whose run printed no
-# `[flow-eval]` lines FAILS inside the gate — the pin is the claim's
-# presence, not just its verdict.
+# WITNESS_CHECK: a marker without KORU_WITNESS is a named NOT-ARMED
+# verdict — never green, FAIL under KORU_ORACLE_REQUIRED=1. A marked test
+# whose run printed no `[flow-eval]` lines FAILS inside the gate — the
+# pin is the claim's presence, not just its verdict.
 regression_check_flow_eval_oracle() {
     local test_dir="$1"
     local TEST_NAME
@@ -702,11 +739,6 @@ regression_check_flow_eval_oracle() {
     [ -f "$test_dir/FLOW_EVAL_CHECK" ] || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
 
-    if [ "${KORU_WITNESS:-0}" != "1" ]; then
-        echo -e "${BLUE}  (flow-eval oracle not run — set KORU_WITNESS=1)${NC}"
-        return 0
-    fi
-
     _flow_eval_oracle_fail() {
         rm -f "$test_dir/SUCCESS"
         echo "$1" > "$test_dir/FAILURE"
@@ -714,6 +746,15 @@ regression_check_flow_eval_oracle() {
         [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
         echo -e "${RED}  ✗ flow-eval oracle: $2${NC}"
     }
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        if [ "${KORU_ORACLE_REQUIRED:-0}" = "1" ]; then
+            _flow_eval_oracle_fail "flow-eval-oracle" "marker is the contract but the oracle is not armed (set KORU_WITNESS=1)"
+        else
+            regression_oracle_not_armed "$test_dir" "flow-eval-oracle" "set KORU_WITNESS=1"
+        fi
+        return 0
+    fi
 
     # The gate cds into verify/semantics before reading its corpus args —
     # the backend.err path must be absolute to survive that cd.
@@ -734,7 +775,9 @@ regression_check_flow_eval_oracle() {
 # equal the __koru_stdout_write* sequence in output_emitted.c — the
 # graph→C seam checked per-instance rather than trusted. Claims are
 # paired with koru_flow_N() calls in `main` order; a marked test whose
-# claims/C fall outside the declared subset FAILS, it does not skip.
+# claims/C fall outside the declared subset FAILS, it does not skip. A
+# marker without KORU_WITNESS is a named NOT-ARMED verdict — never green,
+# FAIL under KORU_ORACLE_REQUIRED=1.
 regression_check_c_refine_oracle() {
     local test_dir="$1"
     local TEST_NAME
@@ -743,11 +786,6 @@ regression_check_c_refine_oracle() {
     [ -f "$test_dir/C_REFINE_CHECK" ] || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
 
-    if [ "${KORU_WITNESS:-0}" != "1" ]; then
-        echo -e "${BLUE}  (c-refine oracle not run — set KORU_WITNESS=1)${NC}"
-        return 0
-    fi
-
     _c_refine_oracle_fail() {
         rm -f "$test_dir/SUCCESS"
         echo "$1" > "$test_dir/FAILURE"
@@ -755,6 +793,15 @@ regression_check_c_refine_oracle() {
         [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
         echo -e "${RED}  ✗ c-refine oracle: $2${NC}"
     }
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        if [ "${KORU_ORACLE_REQUIRED:-0}" = "1" ]; then
+            _c_refine_oracle_fail "c-refine-oracle" "marker is the contract but the oracle is not armed (set KORU_WITNESS=1)"
+        else
+            regression_oracle_not_armed "$test_dir" "c-refine-oracle" "set KORU_WITNESS=1"
+        fi
+        return 0
+    fi
 
     if [ ! -s "$test_dir/output_emitted.c" ] || [ ! -f "$test_dir/compile_c.err" ]; then
         _c_refine_oracle_fail "c-refine-check" "no output_emitted.c/compile_c.err — marker needs the c lane (add 'c' to LANGUAGES)"
@@ -835,10 +882,10 @@ regression_check_alive2_oracle() {
 # custody checker (verify/holds/HoldsCheck.lean) re-decides every event
 # a world-mounted bridge wrote to holds.log — session spans, the
 # mint→release pairing, died-holding — in code independent of the pool
-# that wrote it. Opt-in for the same reason as WITNESS_CHECK: the oracle
-# needs Lean, so a marker without KORU_WITNESS is a noted skip, never a
-# verdict. A marked test that left no holds.log FAILs — the pin is the
-# record's presence, not just its verdict.
+# that wrote it. Opt-in for the same reason as WITNESS_CHECK: a marker
+# without KORU_WITNESS is a named NOT-ARMED verdict — never green, FAIL
+# under KORU_ORACLE_REQUIRED=1. A marked test that left no holds.log
+# FAILs — the pin is the record's presence, not just its verdict.
 regression_check_holds_oracle() {
     local test_dir="$1"
     local TEST_NAME
@@ -847,11 +894,6 @@ regression_check_holds_oracle() {
     [ -f "$test_dir/HOLDS_CHECK" ] || return 0
     [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
 
-    if [ "${KORU_WITNESS:-0}" != "1" ]; then
-        echo -e "${BLUE}  (holds oracle not run — set KORU_WITNESS=1)${NC}"
-        return 0
-    fi
-
     _holds_oracle_fail() {
         rm -f "$test_dir/SUCCESS"
         echo "$1" > "$test_dir/FAILURE"
@@ -859,6 +901,15 @@ regression_check_holds_oracle() {
         [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
         echo -e "${RED}  ✗ holds oracle: $2${NC}"
     }
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        if [ "${KORU_ORACLE_REQUIRED:-0}" = "1" ]; then
+            _holds_oracle_fail "holds-oracle" "marker is the contract but the oracle is not armed (set KORU_WITNESS=1)"
+        else
+            regression_oracle_not_armed "$test_dir" "holds-oracle" "set KORU_WITNESS=1"
+        fi
+        return 0
+    fi
 
     # The world dir is per-test; the record lands wherever the test mounts
     # it — or at the test root if a post.sh that cleaned the world
@@ -1219,7 +1270,8 @@ regression_run_one_test() {
           "$test_dir/program_ast.zig" \
           "$test_dir/_combined_emit.zig" \
           "$test_dir/SUCCESS" \
-          "$test_dir/FAILURE"
+          "$test_dir/FAILURE" \
+          "$test_dir/NOTARMED"
 
     # Clean up build directories from crashed/interrupted tests
     rm -rf "$test_dir/zig-out" \
@@ -2028,7 +2080,7 @@ EOF
     if [ -f "$test_dir/output" ] && [ -f "$test_dir/MUST_RUN" ]; then
         # Run the program under a timeout so a runaway binary can't wedge the harness.
         # Override the default with REGRESSION_TEST_TIMEOUT (seconds).
-        TEST_TIMEOUT="${REGRESSION_TEST_TIMEOUT:-30}"
+        TEST_TIMEOUT="$(regression_scaled_timeout "${REGRESSION_TEST_TIMEOUT:-30}")"
         # Watchdog self-test: an EXPECT_TIMEOUT test is SUPPOSED to hang at runtime
         # (it pins the timeout safety net). Cap the binary timeout low so the
         # self-test resolves in seconds rather than the default 30.
@@ -2494,7 +2546,7 @@ EOF
 # stall — but only after a SECOND attempt agrees (see run_one_test_watched).
 # Default 300s ≫ the slowest legit test (no false positives); tune via
 # KORU_TEST_TIMEOUT.
-: "${KORU_TEST_TIMEOUT:=300}"
+: "${KORU_TEST_TIMEOUT:=$(regression_scaled_timeout 300)}"
 
 # One attempt under the watchdog. Returns 137 iff the watchdog fired.
 _run_one_test_attempt() {

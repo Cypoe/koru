@@ -1,0 +1,8 @@
+name: dispatch-borrow-window
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a copy that rescues borrowed stack bytes must run zero calls deep —
+  call-mediated "owns it immediately" claims over dead frames are layout
+  luck, not contracts.

@@ -9,7 +9,7 @@
 //   b.x: 1.5     — decimal literal exactly representable in f32:
 //                  lossless, carrying its text as literal:1.5
 //
-// The refusing twin is 690_365; the un-strict marks census is 690_364.
+// The refusing twin is 690_379; the un-strict marks census is 690_378.
 
 [strict]
 

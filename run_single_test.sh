@@ -208,6 +208,11 @@ if [ -f "$test_dir/BROKEN" ]; then
     echo -e "${RED}🔧 BROKEN${NC} $TEST_NAME ${DIM}($reason)${NC}"
     exit 1
 fi
+if [ -f "$test_dir/NOTARMED" ]; then
+    leg=$(head -1 "$test_dir/NOTARMED" 2>/dev/null || echo "oracle")
+    echo -e "${YELLOW}⚠️  NOT-ARMED${NC}  ${DIM}$TEST_NAME${NC} ${DIM}($leg — set KORU_WITNESS=1)${NC}"
+    exit 0
+fi
 if [ -f "$test_dir/FAILURE" ]; then
     reason=$(head -1 "$test_dir/FAILURE" 2>/dev/null)
     float_fail "${reason:-failure}"

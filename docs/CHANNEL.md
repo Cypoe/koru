@@ -125,14 +125,39 @@ std/rings:new(feed, capacity: 256) { value: u64 }
 
 What is NOT settled:
 
-- Broadcast spelling (`! each` or otherwise) — deferred.
-- Per-flow select (one flow waiting on two channels) — a spelling
-  question, not a mechanism gap; the pump-join answer is pinned
-  (`699_010` — two channels stepped on one pump).
+- Broadcast spelling — **proposal (Lars, ccomp-line, heavy
+  recommendation — fork review pending): `! each kind v |>`.** The `each`
+  word sits between the sigil and the kind word; a competing arm stays
+  `! reading v`, a broadcast arm spells `! each reading v`. House style
+  is words over symbols (`capacity: 0` is "the rendezvous spelling");
+  `!!`/`!*` were rejected as cryptic sigils. Semantics: every `! each`
+  arm receives a copy of each firing of its kind — mixing with plain
+  `!` arms on one channel is coherent (workers compete, listeners copy).
+  The refusal set carries over: obligated kinds and borrows refuse —
+  custody cannot be copied. Mechanism is NOT free, flagged honestly:
+  competing arms share one pop cursor; each `each` arm needs its own
+  read position on the ring (per-consumer cursor or SPMC fan-out), a
+  widening of the pinned drain, not new machinery.
+- Per-flow select (one flow waiting on two channels) — the mechanism is
+  pinned (`699_010` — two channels stepped on one pump); **spelling
+  proposal (Lars, ccomp-line, heavy recommendation — fork review
+  pending): `std/channel:select(a, b)` returning a channel-name-tagged
+  sum, discriminated by arms:**
+  `std/channel:select(left, right) | left v |> .. | right v |> .. | none |> .. | closed |> ..`
+  — the arm word names which channel fired (the same name-in-arm idiom
+  `! kind` and `kind: payload` already use), `none` keeps it nonblocking,
+  `closed` means all selected channels closed (first-close firing would
+  strand the other channel's values). Mechanism: one participant whose
+  `step` iterates the selected rings — a widening of the pinned
+  pump-join, no runtime `selectgo`. Rejected alternatives: a `select {}`
+  block (new grammar for what arms already express) and arm-sets on the
+  bare join (muddles program-wide consumers with a per-flow wait).
 - `std/supervisor` on a `std/channel:` verb — same-module wrapper
   composition is measured (`699_019`: supervised bounded send, retry →
   `full` in kind); supervising the std verb directly refuses
-  (`699_020` OWED — the `320_113` boundary).
+  (`699_020` — the `320_113` boundary, RULED 2026-10-21: the wrapper is
+  the intended surface; the same-module re-entry boundary is design,
+  not debt).
 - Enclosing-arm fold — an unhandled `closed` claiming the nearest
   enclosing `| closed` arm (`699_021` OWED — the `320_120`/`320_170`
   fold family, needs the post-transform claim pass).
@@ -156,9 +181,9 @@ What is NOT settled:
   `| ok` alone. Pins `699_022`–`699_026`, `699_028` green. Open:
   `699_027` (a minted-but-undisposed consumer binding is silently
   settled by auto-discharge — transit mints have no
-  `not_auto_dischargeable` class yet) and `699_029` (the pin's own
-  `| ok` arm reads `v.id` after `v` was consumed — the input contradicts
-  the poison law it documents; needs a doctrine ruling).
+  `not_auto_dischargeable` class yet) and `699_029` (RESOLVED 2026-10-21:
+  the pin's `| ok` arm read `v.id` after `v` was consumed — input
+  re-spelled, byte-exact green, poison law stands).
   `frag-custody-transit-is-an-edge-contract` carries the ruling.
 - **Composite custody — a proto may declare owned leaves.**
   `r1: *app/lib/res:Resource<owned!>` inside a `std/proto` lifts the

@@ -1,0 +1,9 @@
+name: spelling-proposal
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: a surface spelling was proposed against pinned mechanisms rather
+  than floating free — the arm-grammar idiom (discriminate by name)
+  carried both select and broadcast; the proposal is a recommendation,
+  fork review is the oracle that can refuse it

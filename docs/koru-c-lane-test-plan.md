@@ -33,13 +33,13 @@ each shape is cloned or modelled on a passing test cited per cell.
 
 | cell | doc row | files | pins |
 |------|---------|-------|------|
-| 400_208_c_host_lines_refuse | refusal 1: host lines | input.kz | C_REFUSES `cannot lower to C` |
+| 400_217_c_host_lines_refuse | refusal 1: host lines | input.kz | C_REFUSES `cannot lower to C` |
 | 400_209_c_effect_arms_refuse | refusal 2: `!`-effect arms | input.kz | C_REFUSES `resume semantics out of oracle scope` |
 | 400_210_c_concurrency_refuses | refusal 3: pump/rings/worker.spawn | input.k + lib.kz | C_REFUSES `no verified concurrency` |
 | 400_211 | refusal 4: comptime/transform leak | — | RESERVED — needs Lars's exemplar for the leak spelling |
 | 400_212_c_transducer_equiv | G-CC-1 positive: byte transducer | input.k | zig+c parity vs expected.txt |
 
-Exemplars: 400_208 ≈ 400_191_zig_only_proc_js_build_refuses (`.kz` host
+Exemplars: 400_217 ≈ 400_191_zig_only_proc_js_build_refuses (`.kz` host
 shape); 400_209 ≈ 400_070_effect_branch_minimal (producer/consumer `!`
 pair); 400_210 = 115_049_pump_run_in_module verbatim (proven pump join);
 400_212 ≈ 020_014_pure_subflow_impl (pure subflow + `print.ln`).
@@ -275,7 +275,7 @@ The deflated milestone exists and the four cells are green:
   -Wl,-s` → run → stdout diff vs `expected.txt`.
 - `400_212_c_transducer_equiv` — PASS through the harness; stdout
   byte-identical with the default zig lane (`prefix: hello :suffix\n`).
-- `400_208` / `400_209` / `400_210` — PASS; each refusal names its
+- `400_217` / `400_209` / `400_210` — PASS; each refusal names its
   pinned axis, co-present axes listed together.
 - `NoCProcBody` exists as a named error class at the point of meet
   (proc reached with no `|c` body and no Koru impl) — C3's "own axis"

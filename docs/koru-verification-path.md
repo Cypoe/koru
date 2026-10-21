@@ -385,7 +385,7 @@ not a loophole of the layers.
 |---|---|---|
 | declared-width arithmetic | pinned | wrapping ops use *declared* integer width, not storage width; 230_007 pins refusal where neither operand resolves to a declared integer width |
 | `usize` | pinned as `u64` | on Zig and C lanes `usize` lowers to u64; `usize -> i64` claims are *deferred*, not refused — named gap |
-| watches / interceptors / rules | **refused** | no C-lane lowering; refusal is named, not silent omission — pinned per class: `690_336` rules, `690_370`/`371` watches+interceptors, `690_372`-`377` tree/char[N]/index/entity/owned/ref |
+| watches / interceptors / rules | **refused** | no C-lane lowering; refusal is named, not silent omission — pinned per class: `690_336` rules, `690_385`/`386` watches+interceptors, `690_387`-`392` tree/char[N]/index/entity/owned/ref |
 | host lines, `!`-effect arms, pump/rings/worker.spawn | refused | §1 refusal table — sequential deterministic subset only |
 
 ### 5.4 Alive2 leg (K2, landed shape)

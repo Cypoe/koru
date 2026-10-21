@@ -54,7 +54,7 @@ record (site, dest, src, narrows); `stored|zig` mints
 `@witness("stored-write-numeric","bodies.x","f32<-f64","lossless")` onto
 each lowered write call; `enforce` prints
 `[witness] stored-write-numeric: lossless=… deferred=… non-numeric=… refused=…`
-— one stable line, pinned by `expected_comptime.txt` (690_364), greppable
+— one stable line, pinned by `expected_comptime.txt` (690_378), greppable
 from `backend.err` as the verbatim record a Lean checker consumes.
 
 ## Rung 2: the receipt is re-decidable, and something re-decides it

@@ -500,17 +500,47 @@ but no manifest row says "this tor borrows." If the spec surface should show
 borrows the way it shows issue/consume, that is a channel addition; the ledger
 already produces the edges it would pin.
 
+**Ruled 2026-10-21 (Lars, ccomp-line proposal — fork review pending): no new
+channel.** The rendered vocabulary signature already spells the borrow — the
+wire output shows `append(handle: string<!open>, ...)`, so a borrow param
+renders its bare `<state>` in the arg text, generated from the same enforced
+register the ledger reads. The spec arrays (`creates_spec`/`discharges_spec`)
+encode the mint/settle algebra; a borrow is neither minted nor settled, so
+wedging it in muddies that algebra. If a structured consumer ever needs a
+machine-readable row, the shape is a separate `borrows_spec_fn`, not an entry
+in the existing arrays — build it then, not before.
+
 ### C2 — `699_029`: the pin contradicts the poison law it documents
 The pin's own `| ok` arm reads `v.id` after `v` was consumed — the input
 program violates the post-consume rule the test exists to pin. The pin is
 self-contradictory: it needs either a re-spelled input or a ruling that the
 read is legal in that position.
 
+**RESOLVED 2026-10-21 (re-spell):** the input was re-spelled — peek-borrow
+before send, explicit `dispose` on the retained-custody arms, outbox closed
+inside the relay arm — and runs byte-exact against `expected.txt`. The poison
+law stands; the rejected alternative was ruling the post-consume read legal,
+which would have carved a permanent exception into the consume law.
+
 ### C3 — `699_020`: supervision boundary on std verbs
 Supervising a std verb directly refuses (the `320_113` boundary); composing a
 wrapper works. Two sub-questions: (a) should std verbs be supervisable
 directly, or is the wrapper the intended surface? (b) the broadcast/select
 spellings — no spelling ruled yet.
+
+**Ruled 2026-10-21 (Lars, ccomp-line proposal — fork review pending):
+(a) the wrapper is the intended surface — the boundary is design, not debt.**
+Supervision composes a policy onto a named re-entry target; in Koru that
+composition happens on a user-declared tor, and a std verb is a leaf whose
+contract is fixed. The wrapper costs one small tor declaration per supervised
+call shape and is already the measured path (`699_019`, `320_110`–`112`).
+The alternative — relaxing KORU161 so generated retry code re-enters a
+cross-module verb — buys ergonomics nobody has concretely asked for at the
+price of letting generated code carry a contract nobody named locally.
+`320_113`'s TODO/input comments are rewritten: the pin documents the refusal
+as intended, not as an OWED flip. **(b) spellings stay deferred** — broadcast
+(`! each`) and per-flow select remain spelling questions against the pinned
+`699_010` pump-join mechanism; candidates to be drafted against those pins.
 
 ### C4 — `origin/ccomp` sync state
 `fork/ccomp` carries the merge line plus custody/harness work past it;
@@ -519,6 +549,11 @@ spellings — no spelling ruled yet.
 not on `origin/main` yet — the merge line takes `origin/main` whenever it
 lands. No action needed from the ccomp side; noting so both sides read the
 same picture.
+
+**Updated 2026-10-21:** the note is stale in two places — `90d0de48d` is on
+`origin/main` now, and local `ccomp` has been fast-forwarded to the fork tip
+`d5c3c3300` (plus local commits on top; nothing pushed). Residual is cadence
+only: the ccomp line takes the next `origin/main` merge whenever it lands.
 
 ## Landed on the ccomp line (informational, no ruling needed)
 - **`held -> borrow -> issued` relay** — a tor `h: *Handle<!owned>` returning
@@ -558,6 +593,26 @@ goes red `c-oracle` today — or does "not armed" become a named verdict
 distinct from green? The current state prints a blue parenthetical and
 reports PASS, which reads as a verdict the oracle never produced.
 
+**Ruled 2026-10-21 (Lars, ccomp-line proposal — fork review pending):
+posture A for the Lean legs.** `HoldsCheck` re-decides `holds.log` — the
+custody ledger's oracle — and the custody ledger is the language's center;
+an opt-in oracle there means a green run on a Lean-less host certifies a
+claim nobody checked. ALIVE2 already set the precedent: it moved to
+posture A when it left opt-in. Migration order: land a named `NOT-ARMED`
+verdict first so a skip is never green even during transition, then flip
+the Lean legs to A once host provisioning is scripted.
+**NOT-ARMED landed same day:** a marked leg without `KORU_WITNESS=1`
+writes a `NOTARMED` marker, counts in neither passed nor failed, reports
+`N not-armed` in both summaries, and the run banner reads
+`⚠ PASSED — N test(s) carry NOT-ARMED oracle legs` instead of
+`ALL TESTS PASSED`. `KORU_ORACLE_REQUIRED=1` promotes not-armed to FAIL —
+the posture-A-on-demand bridge. Measured: `330_146` reports
+`0 passed, 0 failed, 1 not-armed` unarmed and `1 failed (witness-oracle)`
+under REQUIRED. The rejected
+alternative — formalizing posture B with `NOT-ARMED` as a legitimate
+terminal verdict — keeps a permanent category where "suite green"
+includes legs that never ran, the hole fail-loud exists to close.
+
 ## C-line residuals (surfaced 2026-10-19, arm-accounting board on WSL)
 
 Surfaced while landing `2bc5e6f91` (the KORU183 runner floor) on
@@ -569,30 +624,81 @@ design calls; the design calls are marked.
   (new pin) shares its number with the `690_370_c_lane_*` series in the
   same cluster. Filters match both. Renumber the pin or rule that
   numbers are cluster-scoped.
+  **RESOLVED 2026-10-21 (renumber):** the ccomp-side newcomers moved off
+  the forked range — witness/strict/singleton/literal/binding pins are
+  now `690_378`–`690_383`, `rule_unclaimed_arm_refused` is `690_384`, and
+  the `c_lane` series is `690_385`–`690_392` (order preserved). Same
+  session also renumbered `400_208_c_host_lines_refuse` → `400_217` and
+  `510_126_proc_zig_body_stray_koru_line` → `510_128` (within-cluster dups
+  against shared pins). Census scope note: `main`'s `690_365`–`690_374`
+  are different tests again — the range had forked across branches, and
+  the renumber keeps this branch collision-free at merge. Pre-existing
+  dups left alone: `690_350` (within-cluster, present on both branches),
+  `220_046` (cross-cluster, shared ancestor).
 - **`440_030`/`440_036` — real pre-existing bug, newly observable.** The
   bridge dispatcher hands back a slice into a dead stack buffer; under
   musl the emitted binary finally runs on this host and prints the
   garbage. The tests' own comment says the seam "never once worked" —
   under glibc-target binaries it could never run at all, so it read
   green. This is a `std/bridge` runtime defect, not arm-accounting.
+  **FIXED 2026-10-21 (macOS-verified, musl unmeasured):** root cause was
+  `__koru_own` being a *call* — `dupe`'s frames descend into the proc's
+  vacated stack region and can scribble the payload before the copy reads
+  it. Reproduced on macOS: a `bufPrint` slice at dead-frame offset 8000
+  printed garbage through the real emitted pipeline. Fix in
+  `koru_std/runtime.kz`: `__koru_snapshot`, an `inline fn` that byte-copies
+  the dead bytes into per-dispatcher `threadlocal` storage in the
+  dispatcher's own frame before any call descends; `ownDispatchResult`
+  owns from there unchanged. Verified: offset-8000 probe clean, both
+  fields of a two-string struct payload survive, 440 cluster 45/45.
+  Capped at 64KiB per dispatch (panic on overflow) — an intrinsic bound:
+  no unbounded same-frame destination exists in Zig. The musl run itself
+  is still unmeasured — same mechanism, different frame layout.
 - **musl system-lib lane** — tests linking `-lsqlite3`/`-lz` can't link
   under musl (`310_021`, `901`, `350_*`, `643_*`). Either provision
   static libs for the lane or declare a system-lib lane that keeps the
   native target.
+  **Ruled 2026-10-21 (Lars, ccomp-line proposal): declare the lane.** The
+  tests exercise Koru's `-l` interop surface, not musl-ness; provisioning
+  static musl sqlite/zlib buys nothing semantically. A system-lib lane
+  that keeps the native target keeps them green on glibc hosts.
 - **glibc-2.34 post.sh builds** — tests whose `post.sh` runs a bare
   `zig build-exe`/`zig build` ignore `KORU_BACKEND_TARGET` and produce
   glibc-2.34 binaries that cannot run on this host (`310_120`,
   `310_125`, `330_057`, `641_040` c-lane, `510_062`/`067`). Question:
   should post.sh honor the target env, or is that out of contract?
+  **Ruled 2026-10-21 (Lars, ccomp-line proposal): yes, honor it.** The
+  env is already the contract for the main backend compile; a post.sh
+  that ignores it produces binaries the lane cannot run — false reds,
+  not a contract boundary.
 - **cs-runtime needs `DOTNET_ROOT`** — the emitted `a_cs_equiv` builds
   but won't run without `DOTNET_ROOT=/home/cypoe/.nix-profile/share/dotnet`.
   Host-provisioning fact; a documented env var fixes it.
 - **`320_148` tail-call refusal** — emitted `always_tail` is refused by
   stage2_x86_64 under `-mcpu baseline` (the musl target's default cpu).
   Target-lane artifact; was it green under a cpu-specific target?
+  **MEASURED + FIXED 2026-10-21:** never green under any cpu — the
+  refusal is `stage2_x86_64` (zig 0.15's default backend for x86_64
+  Debug), which has no tail-call support at all; baseline, v2/v3,
+  znver3, skylake all refuse identically on this host (zig 0.15.2).
+  `-fllvm` compiles the same source clean. Fix: the emitted driver adds
+  `-fllvm` to the output-binary `build-exe` when `generated_code`
+  carries `@call(.always_tail` — LLVM only where tail calls exist,
+  stage2 kept elsewhere. `320_148`/`320_149` green natively;
+  musl-target compile verified, musl run still unmeasured here. The
+  `build_output.zig` path (programs with user deps) has no `-fllvm`
+  CLI flag — a same-shaped program with deps would need the generated
+  build file to set `use_llvm`; unbuilt, noted for the fork.
 - **30s timeouts under musl Debug** — `390_113`/`390_114` produce
   correct output in ~40s; the harness timeout is 30s. Raise the
   timeout per-lane or accept the red on slow hosts.
+  **Ruled 2026-10-21 (Lars, ccomp-line proposal): per-lane scale env**
+  (`KORU_TEST_TIMEOUT_SCALE`, default 1). A blanket raise makes hangs
+  take longer to catch on fast lanes; accepting the red on slow hosts
+  trains ignoring red — the worst outcome. **Landed same day:** the
+  scale multiplies the binary-run timeout, the equivalence-lane
+  timeouts, and the per-test wall-clock watchdog — never
+  `SELFTEST_TIMEOUT`, whose job is to catch a hang fast.
 - **`330_002` pin drift** — the pinned stack frames expect
   `in <fn> (koruc)`; zig 0.15.1 prints `in <fn> (module.zig)`. The pin
   was refreshed 2026-09-11 for a resolver move, against an older
@@ -642,6 +748,11 @@ design calls; the design calls are marked.
   the open item is whether `requires` gets a surface annotation beyond
   the contract slot, plus the `part`-system reorganization. Ledger item
   only — the shape is Lars's.
+  **Ruled 2026-10-21 (Lars, ccomp-line proposal): `requires` stays
+  contract-scoped** — a surface annotation beyond the contract slot is a
+  grammar commitment; defer until a second consumer exists. The `part`
+  reorganization remains unruled — the shape is still Lars's to
+  articulate.
 - **FlowDialect terminality — port-back** — the isar-proofs work
   models koru flows as a `FlowDialect` instance
   (`concepts/frag-terminality-collapses-pairwise-congruence`,
@@ -650,3 +761,7 @@ design calls; the design calls are marked.
   is whether the Lean-side dialect modeling ports back into this repo's
   verification architecture (K3's corpus-facing consumer) or stays
   ISAR-local.
+  **Ruled 2026-10-21 (Lars, ccomp-line proposal): port the insight, not
+  the dialect** — where K3's consumer does pairwise emitter congruence,
+  terminality collapses it N²→N; wholesale porting couples the repo's
+  verification architecture to an ISAR project's ontology.

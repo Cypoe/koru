@@ -57,5 +57,13 @@ parenthetical is the only place the distinction lives.
 
 ## Open
 
-- Recorded in `docs/OUTSTANDING_DESIGN_DECISIONS.md` as C5: do the Lean
-  legs join posture A, or does "not armed" become a named verdict?
+- ~~Recorded in `docs/OUTSTANDING_DESIGN_DECISIONS.md` as C5: do the Lean
+  legs join posture A, or does "not armed" become a named verdict?~~
+  **Ruled 2026-10-21 (ccomp-line proposal, fork review pending): posture
+  A.** `HoldsCheck` re-decides `holds.log` — the custody ledger's oracle —
+  and an opt-in oracle on the language's center means a green run can
+  certify a claim nobody checked. Migration: land a named `NOT-ARMED`
+  verdict first (a skip is never green even in transition), then flip the
+  Lean legs once host provisioning is scripted. `NOT-ARMED` survives as
+  transition plumbing and for genuinely-optional legs — it is not a
+  terminal verdict the suite can pass on.
