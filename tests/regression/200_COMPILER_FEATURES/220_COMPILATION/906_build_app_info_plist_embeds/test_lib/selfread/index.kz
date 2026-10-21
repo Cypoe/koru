@@ -1,0 +1,26 @@
+// PIN: std/build:app { name:, id:, version: } embeds an Info.plist into
+// the Mach-O binary — __TEXT,__info_plist is what NSBundle.mainBundle
+// reads, so an unbundled binary answers a real CFBundleIdentifier (the
+// gate notifications, process identity, and AppKit's app checks key on).
+// This module is the oracle: getsectiondata reads the running binary's
+// own section; the test passes only if the declared id is present.
+
+const std = @import("std");
+
+extern fn getsectiondata(mhp: *const anyopaque, segname: [*:0]const u8, sectname: [*:0]const u8, size: *c_ulong) ?[*]const u8;
+extern var _mh_execute_header: anyopaque;
+
+~pub tor id {}
+| id string
+| none
+
+~proc id|zig {
+    var size: c_ulong = 0;
+    const data = getsectiondata(&_mh_execute_header, "__TEXT", "__info_plist", &size) orelse {
+        return .{ .none = .{} };
+    };
+    if (std.mem.indexOf(u8, data[0..size], "org.koru.regtest") != null) {
+        return .{ .id = "org.koru.regtest" };
+    }
+    return .{ .none = .{} };
+}

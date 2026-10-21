@@ -117,6 +117,87 @@ fn appendRequirementWrapper(
     append(buffer, pos, "(__koru_b, __koru_exe, __koru_target, __koru_optimize);\n\n");
 }
 
+/// Escape one plist string value for its two host syntaxes: XML entities
+/// (`&` `<` `>` `"`) so the value can't break the dict shape, and C `\` so a
+/// backslash in a name can't splice escapes. Control bytes can't spell a C
+/// string portably — they collapse to spaces.
+fn writePlistEscaped(w: anytype, s: []const u8) !void {
+    for (s) |c| switch (c) {
+        '\\' => try w.writeAll("\\\\"),
+        '&' => try w.writeAll("&amp;"),
+        '<' => try w.writeAll("&lt;"),
+        '>' => try w.writeAll("&gt;"),
+        '"' => try w.writeAll("&quot;"),
+        else => if (c < 0x20) try w.writeByte(' ') else try w.writeByte(c),
+    };
+}
+
+/// Synthesize the build requirement for `std/build:app { name:, id:, version: }`:
+/// a generated C object carrying the Info.plist in __TEXT,__info_plist of the
+/// macho output — Zig 0.15's std.Build exposes no arbitrary linker-arg seam for
+/// -sectcreate, but addCSourceFile + the section attribute lands the same bytes.
+/// Guarded on the resolved target so non-macho builds compile unchanged.
+pub fn appInfoPlistRequirement(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    id: []const u8,
+    version: ?[]const u8,
+) !BuildRequirement {
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
+
+    // Each `\\` line below lands in generated Zig as a raw multiline literal —
+    // the `\"` it carries arrives in the .c file as a C escape, untouched.
+    try w.writeAll(
+        \\            if (target.result.os.tag == .macos) {
+        \\                const __plist_c = b.addWriteFiles().add("koru_info_plist.c",
+        \\                    \\__attribute__((used, section("__TEXT,__info_plist")))
+        \\                    \\const char __koru_info_plist[] =
+        \\                    \\    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        \\                    \\    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
+        \\                    \\    "<plist version=\"1.0\">"
+        \\                    \\    "<dict>"
+        \\
+    );
+
+    const Entry = struct { key: []const u8, value: []const u8 };
+    const entries = [_]Entry{
+        .{ .key = "CFBundleIdentifier", .value = id },
+        .{ .key = "CFBundleName", .value = name },
+        .{ .key = "CFBundleDisplayName", .value = name },
+        .{ .key = "CFBundlePackageType", .value = "APPL" },
+        .{ .key = "NSPrincipalClass", .value = "NSApplication" },
+        .{ .key = "LSMinimumSystemVersion", .value = "10.13" },
+    };
+    for (entries) |e| {
+        try w.print("                    \\\\    \"<key>{s}</key><string>", .{e.key});
+        try writePlistEscaped(w, e.value);
+        try w.writeAll("</string>\"\n");
+    }
+    if (version) |v| {
+        inline for (.{ "CFBundleShortVersionString", "CFBundleVersion" }) |key| {
+            try w.print("                    \\\\    \"<key>{s}</key><string>", .{key});
+            try writePlistEscaped(w, v);
+            try w.writeAll("</string>\"\n");
+        }
+    }
+
+    try w.writeAll(
+        \\                    \\    "</dict></plist>"
+        \\                    \\;
+        \\                );
+        \\                exe.addCSourceFile(.{ .file = __plist_c });
+        \\            }
+        \\
+    );
+
+    return .{
+        .module_name = "app",
+        .source_code = try buf.toOwnedSlice(allocator),
+    };
+}
+
 /// Generate a build.zig file from collected requirements
 ///
 /// Parameters:

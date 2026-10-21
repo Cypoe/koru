@@ -168,3 +168,10 @@ members=950
 # zero parser.zig lines in its top-20 — the +2/+2 is committed src/
 # drift since ffc019f2d's same-day pin (continuation_codegen /
 # emitter_helpers / emitter_test idioms). Re-pinned to measured.
+# Re-pinned on the std/build:app landing: measured own delta +1/+2 —
+# HEAD-only src/ censuses at exactly 844/950 (detached worktree), so
+# the growth is this diff. The census names zero lines of new code at
+# this tier; the delta is maximal-member re-shaping inside the
+# documented requires-fixture-AST test cluster in compiler_requires.zig.
+clusters=845
+members=952

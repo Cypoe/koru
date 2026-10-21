@@ -1,0 +1,19 @@
+// Declare app bundle identity — Usage:
+//   std/build:app { name: "Tray Spike", id: "org.koru.trayspike", version: "0.1" }
+// The compiler collects the declaration and embeds an Info.plist into
+// __TEXT,__info_plist of the output binary (macho targets): an unbundled
+// binary answers a real CFBundleIdentifier/CFBundleName — the gate
+// notifications, process identity, and AppKit's real-app checks key on.
+// The block is a Source capture like requires — key: "value" pairs the
+// collector parses (name + id required, version optional); a declared-but-
+// empty or malformed block is a parse error at collection, never a
+// silently-defaulted identity.
+~[comptime|norun]pub tor app {
+    source: Source
+}
+| ?added
+| ?parse-error string
+
+~proc app|zig {
+    return .{ .added = .{} };
+}

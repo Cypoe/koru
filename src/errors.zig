@@ -168,6 +168,7 @@ pub const ErrorCode = enum(u16) {
     KORU207, // --deep-check witness: output_emitted.zig does not parse as Zig (emitted text is not the verdict; emitted *valid* text is). Printed by the validate-emitted tor in koru_std/compiler.materialize.kz (510_126). Formerly the flow_checker `!` arm param refusal — that site retired when Handlers_* fns learned to capture (400_208).
     KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
     KORU209, // `dir:` relocates the emitted artifact while the program declares build:requires — generated build_output.zig stages output_emitted.zig in cwd. Printed by the host-build-zig tor in koru_std/compiler.materialize.kz.
+    KORU210, // A std/build:app declaration is malformed — the Source block did not parse as `name: "…", id: "…"` plus optional `version: "…"`, or carried a key the collector does not know. An identity is whole or refused; never defaulted. Emitted by src/compiler_requires.zig at requirement collection.
 };
 
 pub const SourceLocation = struct {

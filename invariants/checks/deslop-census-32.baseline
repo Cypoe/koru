@@ -219,3 +219,16 @@ members=2463
 # idioms (1277/2996/3513/3838/6761...) — none in the hint's 1774-1815
 # block; the +1 cluster is tree drift under rolls that missed.
 # Re-pinned to measured.
+# Re-pinned on the std/build:app landing: measured own delta +4/+7 —
+# HEAD-only src/ censuses at exactly 1925/2463 (detached worktree),
+# so the growth is this diff. The only new-code member the census names
+# is compiler_requires.zig:191 — a 41-token while_simple in the
+# app-decl key parser's whitespace skipper twinning two emitter_helpers
+# while-loops (micro-idiom, not a foldable clone); the rest is
+# maximal-member re-shaping inside the documented requires-fixture-AST
+# test cluster. The app-decl parser helpers (skipWs/skipSep/readKey/
+# readQuoted) are keyed to a two-syntax grammar no existing parser
+# shares — folding them into one of the file's Source readers would be
+# a forced abstraction, not a lift.
+clusters=1929
+members=2470

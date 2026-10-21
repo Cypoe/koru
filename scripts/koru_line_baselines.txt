@@ -43,6 +43,7 @@ koru_std/bridge.turnscan.kz	47
 koru_std/bridge.types.kz	11
 koru_std/bridge.wiregate.kz	84
 koru_std/bridge.world.kz	104
+koru_std/build.app.kz	19
 koru_std/build_image.kz	357
 koru_std/build.kz	586
 koru_std/ccp_aspirational.kz	108

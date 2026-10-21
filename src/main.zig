@@ -8788,6 +8788,7 @@ pub fn main() !void {
 
     const compiler_requirements_raw = requires_collector.getCompilerRequirements();
     const build_requirements_raw = requires_collector.getBuildRequirements();
+    const app_decl = requires_collector.getAppDecl();
 
     // Use koru_home from resolver (computed from executable path)
     const koru_lib_path = resolver.koru_home;
@@ -9029,9 +9030,9 @@ pub fn main() !void {
         }
     }
 
-    // Generate build_output.zig for OUTPUT binary (user build:requires + synthesized MLIR links)
-    if (build_requirements_raw.len > 0 or mlir_build_reqs.items.len > 0) {
-        var output_build_reqs = try std.ArrayList(emit_build_zig.BuildRequirement).initCapacity(allocator, build_requirements_raw.len + mlir_build_reqs.items.len);
+    // Generate build_output.zig for OUTPUT binary (user build:requires + synthesized MLIR links + std/build:app identity)
+    if (build_requirements_raw.len > 0 or mlir_build_reqs.items.len > 0 or app_decl != null) {
+        var output_build_reqs = try std.ArrayList(emit_build_zig.BuildRequirement).initCapacity(allocator, build_requirements_raw.len + mlir_build_reqs.items.len + 1);
         defer output_build_reqs.deinit(allocator);
 
         for (build_requirements_raw) |req| {
@@ -9043,6 +9044,17 @@ pub fn main() !void {
         }
         for (mlir_build_reqs.items) |req| {
             try output_build_reqs.append(allocator, req);
+        }
+
+        // std/build:app → embed the declared identity as __TEXT,__info_plist
+        // in the output binary (macho; no-op elsewhere).
+        var app_req_source: ?[]u8 = null;
+        defer if (app_req_source) |s| allocator.free(s);
+        if (app_decl) |decl| {
+            const app_req = try emit_build_zig.appInfoPlistRequirement(allocator, decl.name, decl.id, decl.version);
+            app_req_source = @constCast(app_req.source_code);
+            try output_build_reqs.append(allocator, app_req);
+            try printStdout(allocator, "✓ Embedding app identity '{s}' ({s})\n", .{ decl.id, decl.name });
         }
 
         if (build_requirements_raw.len > 0)
