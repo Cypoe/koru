@@ -264,7 +264,7 @@ fn isConcurrencyPath(path: ast.DottedPath) bool {
 
 /// Print one line per applicable axis and return RefusedConstruct. The
 /// pinned phrases are the refusal table's own wording — the regression
-/// cells grep stderr for them (400_208/209/210).
+/// cells grep stderr for them (400_217/209/210).
 fn refuseAxes(census: *const AxisCensus) CEmitError {
     std.debug.print("error[KORU047]: C lane refusal — program uses constructs outside the CompCert-verified fragment:\n", .{});
     if (census.resumable) |loc| {

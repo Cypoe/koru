@@ -30,7 +30,7 @@ koru compiles to C through `src/c_emitter.zig`, and the emit is not a second lan
     { name: "400_212 C transducer equivalence", directory: "400_212_c_transducer_equiv", categorySlug: "400_RUNTIME_FEATURES", description: "A finite byte transducer over std/io — both backends, identical stdout bytes and rc." },
     { name: "400_211 counted-for equivalence", directory: "400_211_c_for_counted_equiv", categorySlug: "400_RUNTIME_FEATURES", description: "Counted loops emit through both lanes to identical output." },
     { name: "230_007 unresolvable width refuses", directory: "230_007_wrap_op_unresolvable_operand_c_refuses", categorySlug: "200_COMPILER_FEATURES/230_CODEGEN", description: "Wrapping arithmetic uses declared integer width; where neither operand resolves, the C lane refuses." },
-    { name: "690_370 store watch refused", directory: "690_370_c_lane_refuses_store_watch", categorySlug: "600_STDLIB/690_STORE", description: "A named refusal class — watches have no C lowering." }
+    { name: "690_385 store watch refused", directory: "690_385_c_lane_refuses_store_watch", categorySlug: "600_STDLIB/690_STORE", description: "A named refusal class — watches have no C lowering." }
   ]}
 />
 

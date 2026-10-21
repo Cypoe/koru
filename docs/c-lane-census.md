@@ -140,7 +140,7 @@ transform-synthesized procs stamping `.target = "zig"` under `--lang=c`).
 
 `400_211` counted for · `400_213` if/else · `400_214` if inside `! each`
 (the sieve skeleton) · `400_215` const file-scope — all `zig c`,
-byte-identical under ccomp. The four refusal pins (`400_208`/`209`/`210`,
+byte-identical under ccomp. The four refusal pins (`400_217`/`209`/`210`,
 plus `400_212` transducer) still hold.
 
 ### Prime sieve status
@@ -193,14 +193,14 @@ the refusal is part of the contract, not just the census:
 
 | pin | gated surface | pinned text |
 |---|---|---|
-| 690_370 | store watch (singleton) | watches, interceptors and dischargers … |
-| 690_371 | `! inserted`/`! removed` arms | lifecycle interceptors and watches … |
-| 690_372 | `[tree]` | [tree] stores are outside … |
-| 690_373 | `char[N]` column | char[N] columns are outside … |
-| 690_374 | `std/indexes:store` | `std/indexes` columns are outside … |
-| 690_375 | `[entity]` | [entity] stores are outside … |
-| 690_376 | owned column | owned columns are outside … |
-| 690_377 | `ref()` home column | ref() home columns are outside … |
+| 690_385 | store watch (singleton) | watches, interceptors and dischargers … |
+| 690_386 | `! inserted`/`! removed` arms | lifecycle interceptors and watches … |
+| 690_387 | `[tree]` | [tree] stores are outside … |
+| 690_388 | `char[N]` column | char[N] columns are outside … |
+| 690_389 | `std/indexes:store` | `std/indexes` columns are outside … |
+| 690_390 | `[entity]` | [entity] stores are outside … |
+| 690_391 | owned column | owned columns are outside … |
+| 690_392 | `ref()` home column | ref() home columns are outside … |
 | 690_336 | `std/store:rule` sweep (pre-existing) | rule/preorder sweeps … |
 
 Not yet pinned: drain stores (needs an ambiguous-discharger column

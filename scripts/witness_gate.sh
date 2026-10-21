@@ -7,7 +7,7 @@
 # toolchain is a FAIL, never a skip: an oracle that did not run did not pass.
 #
 # Usage: scripts/witness_gate.sh [corpus ...]
-#   default corpus: 690_364's backend.err (run the regression test first).
+#   default corpus: 690_378's backend.err (run the regression test first).
 set -u -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$ROOT/scripts/lean_resolve.sh"
@@ -18,7 +18,7 @@ if [ ! -x "$LEAN" ]; then
     exit 1
 fi
 if [ $# -eq 0 ]; then
-    set -- "$ROOT/tests/regression/600_STDLIB/690_STORE/690_364_witness_marks_ride_lowered_stored_writes/backend.err"
+    set -- "$ROOT/tests/regression/600_STDLIB/690_STORE/690_378_witness_marks_ride_lowered_stored_writes/backend.err"
 fi
 cd "$DIR" || exit 1
 fail=0
