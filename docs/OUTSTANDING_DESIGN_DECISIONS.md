@@ -598,6 +598,43 @@ design calls; the design calls are marked.
   was refreshed 2026-09-11 for a resolver move, against an older
   toolchain's frame dialect.
 
+### Verification-path follow-ups (surfaced 2026-10-21, command-marks session)
+
+- **Catalog-hash M→V upgrade for `admission` marks** — today
+  `WitnessCheck.lean` re-decides the *evidence shape* of a committed
+  mark (bound ⇒ mechanism + `row=` + provenance + grade; refused ⇒
+  `none` + named reason) and the row↔site correspondence
+  (`rowServesSite`), but the row *match itself* stays solver-side:
+  the checker trusts that `row=koruos/silo` was honestly drawn from
+  the catalog. The named upgrade is to commit the catalog's content
+  hash (or the catalog itself) into the marks corpus so the checker
+  re-runs the match rather than trusting it — turning "shape
+  verified, match trusted" into "match verified." Source: koru-os
+  `notes/verification-path-asks.md` honest-bounds discussion.
+- **`[flow-eval]` emission premise corrected** — the koru-os ask
+  recorded "koruc doesn't emit flow-eval claims." Measured stale:
+  `comptime_eval.zig` emits `[flow-eval]` on the `std/witness:enforce`
+  path and `310_141_flow_eval_claims_redecide` runs `FLOW_EVAL_CHECK`
+  over emitted lines; `semantics gate: PASS` 2026-10-21.
+- **`|c[verified]` minting stays Lars-blocked** — parked ruling in
+  `koru-c-lane-test-plan.md` ("come back only if measured refusal
+  rates prove the wall costs too much") plus the open `requires`
+  annotation surface. The `std/witness` census counts the qualifier;
+  nothing mints it and nothing should until the ruling moves.
+- **Grade alphabet upstream, grades consumer-side** — the V/M/C/D
+  evidence-grade meanings belong to this repo's marks vocabulary
+  (shared across corpora; `WitnessCheck.ruleAdmission` already
+  requires `grade=` in bound payloads), while each consumer row
+  assigns its own grade. Payoff: decidable policy over marks —
+  "admitted set requires grade ∈ {V,M}" is a boot gate. The checker
+  treats the grade as committed data, not re-decided fact; the M→V
+  upgrade above is what would lift it.
+- **Path B adjacency strengthened** — `admissionCheck`'s corpus laws
+  (one verdict per `(site,arm)`, one arm per marks file, splice
+  detection) are the invariants `transform-oblige` wants for
+  artifact re-decision. Residual is pre/post IR exposure — deep
+  emitter work, not a marks-channel change.
+
 ### Carry-forwards from the session ledger (thin — need Lars's articulation)
 
 - **`requires` annotation surface + `part` reorg** — `contract:requires`
