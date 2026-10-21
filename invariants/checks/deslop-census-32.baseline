@@ -105,8 +105,17 @@
 # working-tree drift in parser.zig (uncommitted edits from a sibling
 # session — the census reads the working tree, so it counts). Census
 # re-measured: 1919/2451.
-clusters=1919
-members=2451
+# Re-pinned in "signal: fold contract onto design — orphan from
+# 190e679df": the roll fired on +3 clusters / +2 members of foreign
+# committed drift — the diag-bus merge window landed the
+# package_requires.zig / compiler_requires.zig twin generated-flow
+# tables (semantically distinct twins: parallel requires surfaces
+# differing only in the module qualifier they target, the class the
+# 48-token rule calls duplicated by design) plus residual test-file
+# literal idiom already documented above. This commit carries zero
+# src/ delta — a signal tombstone and a board pointer only.
+clusters=1922
+members=2453
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
