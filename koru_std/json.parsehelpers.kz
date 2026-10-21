@@ -244,7 +244,7 @@ const ParseH = struct {
         switch (ty.*) {
             .raw => {
                 ctx.n += 1;
-                w(out, ctx, "{{ const __rst{d} = p.*; if (!__jskip{s}(s, p, e)) return null; {s} = s[__rst{d}..p.*]; }} ", .{ ctx.n, ctx.sfx, dst, ctx.n });
+                w(out, ctx, "{{ const __rst{d} = p.*; if (!__jskip{s}(s, p, e, a)) return null; {s} = s[__rst{d}..p.*]; }} ", .{ ctx.n, ctx.sfx, dst, ctx.n });
             },
             .str => {
                 w(out, ctx, "{s} = __jstr{s}(s, p, e, a) orelse return null; ", .{ dst, ctx.sfx });
