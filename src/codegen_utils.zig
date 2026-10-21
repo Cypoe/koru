@@ -1052,18 +1052,23 @@ pub const HostShape = struct {
 
     /// `| name { a, b }` — a record payload. `body` is the already-joined field
     /// list in the host's own spelling, which `payloadPair` produces — cs's
-    /// payload member is a named tuple, so its pair separator is `:` like js,
-    /// not `=` like member-init. `decl_fields` is the declared field count: C#
-    /// has no 1-tuple, so a one-field record spells `new { f = v }` and lands
-    /// in the member's `dynamic` fallback, matching `branchPayloadCsType`.
+    /// payload member is the generated `<name>_payload` struct nested in the
+    /// event class WHEN the decl is a real record, so its pairs spell
+    /// member-init `f = v` and the produce constructs `new <name>_payload
+    /// { … }`, resolvable bare inside the handler the way `Output` is.
+    /// `decl_fields` carries the arity rule the transform side enforces
+    /// upstream: a single-field payload collapses to the value's own type
+    /// (`__type_ref` identity, or no record at all), so a record decl has
+    /// 2+ fields and any smaller count keeps the anonymous object — its
+    /// member is `dynamic`.
     pub fn branchRec(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, body: []const u8, decl_fields: usize) []const u8 {
         const esc_name = escapeZigIdentifier(alloc, name) catch name;
         return switch (t) {
             .js => std.fmt.allocPrint(alloc, "{{ tag: \"{s}\", {s}: {{ {s} }} }}", .{ name, name, body }) catch unreachable,
-            .cs => if (decl_fields < 2)
-                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable
+            .cs => if (decl_fields >= 2)
+                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {s}_payload {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), csMember(alloc, name), body }) catch unreachable
             else
-                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = ({s}) }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
+                std.fmt.allocPrint(alloc, "new Output {{ tag = \"{s}\", {s} = new {{ {s} }} }}", .{ name, csPayloadMember(alloc, name), body }) catch unreachable,
             .zig => std.fmt.allocPrint(alloc, ".{{ .{s} = .{{ {s} }} }}", .{ esc_name, body }) catch unreachable,
         };
     }
@@ -1100,39 +1105,30 @@ pub const HostShape = struct {
         };
     }
 
-    /// One `name: value` pair inside a record payload spelled as a TUPLE.
-    /// cs arm payloads are named tuples — `(tx: v, n: v)` — because that is
-    /// the record shape C# can carry across a signature (`new { … }` is
-    /// unnameable; that is what kept arm params on `dynamic`). js/zig spell
-    /// exactly what `recField` produces — only the cs separator differs.
-    pub fn tupField(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
-        const esc_name = escapeZigIdentifier(alloc, name) catch name;
-        return switch (t) {
-            .js => std.fmt.allocPrint(alloc, "{s}: {s}", .{ name, value }) catch unreachable,
-            .cs => std.fmt.allocPrint(alloc, "{s}: {s}", .{ csMember(alloc, name), value }) catch unreachable,
-            .zig => std.fmt.allocPrint(alloc, ".{s} = {s}", .{ esc_name, value }) catch unreachable,
-        };
-    }
-
-    /// A record-payload field pair, picked by the declared field count: a
-    /// ≥2-field payload is a cs tuple (`f: v`), a 1-field payload is the
-    /// `new { f = v }` fallback (no 1-tuple). js/zig spellings coincide.
-    pub fn payloadPair(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8, decl_fields: usize) []const u8 {
-        return if (decl_fields < 2) recField(alloc, t, name, value) else tupField(alloc, t, name, value);
+    /// A record-payload field pair. cs payloads construct the generated
+    /// `<b>_payload` struct — member-init `f = v` — so every field count
+    /// spells recField there; the tuple spelling is gone. js/zig spellings
+    /// coincide at any count.
+    pub fn payloadPair(alloc: std.mem.Allocator, t: HostTarget, name: []const u8, value: []const u8) []const u8 {
+        return recField(alloc, t, name, value);
     }
 
     /// An ARM's record payload at its fire — zig `.{ … }`, js `{ … }`,
-    /// cs a tuple literal `(f: v, …)` matching the tuple-typed arm
-    /// signature (see `armParamCsType`). `body` is the already-joined
-    /// `payloadPair` list; `decl_fields < 2` spells the `new { … }` the
-    /// `dynamic` signature expects.
-    pub fn armPayload(alloc: std.mem.Allocator, t: HostTarget, body: []const u8, decl_fields: usize) []const u8 {
+    /// cs `new <arm>_payload { … }` matching the struct-typed arm
+    /// parameter (see `armParamCsType`) when the arm decl is a real record.
+    /// `decl_fields` is the same arity rule `branchRec` carries: a
+    /// single-field arm payload is the identity value, so a record arm
+    /// decl has 2+ fields and any smaller count keeps the anonymous
+    /// record. `body` is the already-joined `payloadPair` list; the text
+    /// lands inside the arm's event class, where the nested payload
+    /// struct resolves bare.
+    pub fn armPayload(alloc: std.mem.Allocator, t: HostTarget, arm: []const u8, body: []const u8, decl_fields: usize) []const u8 {
         return switch (t) {
             .js, .zig => argRec(alloc, t, body),
-            .cs => if (decl_fields < 2)
-                std.fmt.allocPrint(alloc, "new {{ {s} }}", .{body}) catch unreachable
+            .cs => if (decl_fields >= 2)
+                std.fmt.allocPrint(alloc, "new {s}_payload {{ {s} }}", .{ csMember(alloc, arm), body }) catch unreachable
             else
-                std.fmt.allocPrint(alloc, "({s})", .{body}) catch unreachable,
+                argRec(alloc, t, body),
         };
     }
 

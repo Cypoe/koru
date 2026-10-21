@@ -2,6 +2,6 @@
     var chars = new byte[] { (byte)'a', (byte)'b', (byte)'q', (byte)'c' };
     var i = 0;
     for (; i < (long)count && i < chars.Length; i += 1) {
-        key((ch: chars[i], code: chars[i]));
+        key(new key_payload { ch = chars[i], code = chars[i] });
     }
 }

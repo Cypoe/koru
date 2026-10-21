@@ -2,7 +2,7 @@
     __koru_stdout_write($"Count: {current}\n");
 
     if (current < target) {
-        return new Output { tag = "next", next = (current + 1, target) };
+        return new Output { tag = "next", next = new next_payload { value = current + 1, target = target } };
     } else {
         return new Output { tag = "done", done = current };
     }

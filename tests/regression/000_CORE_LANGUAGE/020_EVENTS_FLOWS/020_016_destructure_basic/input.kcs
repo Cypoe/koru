@@ -1,4 +1,4 @@
 ~proc fetch|cs {
-    if (id == 1) return new Output { tag = "found", found = ("lars", 44) };
+    if (id == 1) return new Output { tag = "found", found = new found_payload { name = "lars", age = 44 } };
     return new Output { tag = "missing", missing = new { } };
 }

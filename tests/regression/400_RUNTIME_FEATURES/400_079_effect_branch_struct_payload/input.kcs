@@ -1,5 +1,5 @@
 ~proc tokenize|cs {
     _ = source;
-    token((kind: 1, lexeme: "first"));
-    token((kind: 2, lexeme: "second"));
+    token(new token_payload { kind = 1, lexeme = "first" });
+    token(new token_payload { kind = 2, lexeme = "second" });
 }
