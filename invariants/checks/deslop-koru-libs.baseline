@@ -78,12 +78,24 @@
 # scripted/live pairs — plus the seed() arg vocabulary (which/bn/gn).
 # Named top offenders are foreign, unchanged: spec_click↔spec_sel_live,
 # the bench/spec six-pack, ponkatris levels.
-clusters=1533
-members=511
+clusters=1684
+members=555
 skipped=20
-spellings=715
+spellings=742
 # Re-pinned 2026-10-20: roll fired on the signal-vocab commit after the
 # bench_boxes pair landed. Own contribution: bench_boxes.k +
 # bench_boxes_gate.k — nanoui hillclimb ports, same spec dialect shape
 # as the bench/spec six-pack, members 509→511 on existing clusters.
 # Clusters fell 1559→1533 (census re-run, foreign drift resolved).
+# Re-pinned 2026-10-20: roll fired on the raw-el.* gate commit in
+# koru-libs. Own contribution is the per-side-padding capability cycle —
+# the declaration surface widened one pad arg to four (padl/r/t/b) across
+# el.cfg/el.clip signatures, view-store columns, and call sites
+# (mechanical quadruplication on an intentional surface change), plus
+# fuzz_gate's REF/MUT walks now structurally twinning on raw el.* (the
+# mutation target MUST shadow the reference — twinning is the design),
+# plus the image-float args and el.text tor. Spellings 715→742 ride the
+# same surface (padl/padr/padt/padb, eid, el.text). Foreign drift since
+# the last pin: theme_preview.k ↔ theme_preview_live.k pair at #8,
+# commander/ and offscreen_split.k in the untracked set — the census
+# reads the working tree. Ponkatris levels persist at #7, unchanged.

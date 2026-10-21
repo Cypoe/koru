@@ -137,6 +137,16 @@ floor — deterministic, no clocks, no sockets. Six tors, all leaves:
   transition, different wire and durability levels, and both floors
   named — 121µs buffered / 139µs synced (in-process, no wire) vs
   ~4.6ms acknowledged (HTTP + V8 + SQLite + docker VM).
+- **The routed turn is priced (evolved 2026-10-21,
+  `tests/benchmarks/015_fleet_mail`).** The mailbox's two halves are
+  timed separately because in production they are different
+  processes: `send` ~97µs/post vs a ~87µs file-lifecycle floor (the
+  protocol adds ~10µs over makePath+tmp+rename); `deliver` ~185µs/mail
+  vs a ~48µs drain-file floor (the remainder is the durable turn
+  itself plus ~16µs of mail parse/dispatch). End-to-end ≈ 280µs —
+  the koru spelling of celld's remote call, at ~16× under its 4.6ms
+  HTTP path, asymmetries unchanged (no wire, buffered commit, one
+  shared filesystem).
 - **Ownership is enforced at the identity boundary and the write
   fence now gates the write path.** `std/node` consults the record on
   every identity-changing path (evolved 2026-10-20): `spawn` and member
