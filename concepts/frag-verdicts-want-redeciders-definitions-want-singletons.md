@@ -104,6 +104,15 @@ again, with the disagreement hidden inside one file.
   joined the relation vocabulary, and the corpus-level law (one verdict
   per (site, arm) per run) is checker-enforced. A command's verdict is a
   claim, so it gets a re-decider — same wall, wider door.
+- The same doctrine closes the M→V gap at the artifact boundary:
+  koru-os's `realize matrix` now commits the *catalog* itself as marks
+  (`catalog` rows: `declared_by=` + `binds=`) alongside the derived
+  `projection` cells (`bound=<n> total=<m>`). The printed `n/m` cell
+  was trusted output; committing the input data lets `projectionCheck`
+  RECOUNT the transform instead of re-printing it — the projection is a
+  checked transform, not a believed one. This is the pattern Path B
+  wants for artifact re-decision generally: don't trust the derived
+  surface, commit the pre-image and recount.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

@@ -1301,6 +1301,116 @@ def admissionCheck (sites : List SiteLine) : List String :=
   dupes.map (fun k => s!"{k} admitted twice") ++
     (if arms.length > 1 then [s!"{arms.length} arms in one marks corpus: {", ".intercalate arms}"] else [])
 
+/-! ## Kinds `catalog` / `projection` — matrix-mode re-decision (koruos/realize)
+
+`realize matrix` commits the resolved catalog as data plus one derived
+cell per arm:
+
+    @witness("catalog","<iface>","row<-declared","listed","declared_by=<prov> binds=<csv>|binds=none")
+    @witness("projection","<arm>","matrix<-catalog","holds","bound=<n> total=<m>")
+
+The printed `arm-matrix.txt` cell `<arm>: n/m` is a projection of the
+catalog — committing both lets the checker RECOUNT the projection over
+the committed rows (`projectionCheck`) instead of trusting the cell:
+`total` must equal the catalog mark count and `bound` the number of
+catalog rows carrying the arm in their binds. -/
+
+/-- `catalog` per-line shape: declared provenance plus the row's arm
+set. `binds=none` is a row serving no arm — it still counts in `total`,
+which is what a forged `bound` would have to account for. -/
+def ruleCatalog (s : SiteLine) : Ruling :=
+  if s.arrow != "row<-declared" || s.verdict != "listed" || s.site.isEmpty then .malformed else
+  match s.extra.splitOn " " with
+  | [p, b] =>
+    if hasProv p "declared_by=" &&
+       (b == "binds=none" || (b.startsWith "binds=" && b.length > 6))
+    then .match_ else .malformed
+  | _ => .malformed
+
+def parseNatField (tok pfx : String) : Option Nat :=
+  if tok.startsWith pfx then (tok.drop pfx.length).toString.toNat? else none
+
+/-- `projection` per-line shape: `bound=<n> total=<m>` with `n ≤ m` —
+a cell cannot claim more bounds than rows exist. -/
+def ruleProjection (s : SiteLine) : Ruling :=
+  if s.arrow != "matrix<-catalog" || s.verdict != "holds" || s.site.isEmpty then .malformed else
+  match s.extra.splitOn " " with
+  | [b, t] =>
+    match parseNatField b "bound=", parseNatField t "total=" with
+    | some n, some m => if n ≤ m then .match_ else .malformed
+    | _, _ => .malformed
+  | _ => .malformed
+
+/-- Corpus-level projection laws: every `total` must equal the committed
+catalog size, each cell's `bound` must equal the recount over catalog
+binds, each arm cell appears once, each catalog row is listed once, and
+every arm named in a catalog bind carries a cell. Violation lines;
+empty = clean. Malformed payload lines are skipped — the per-line pass
+flags them. -/
+def projectionCheck (sites : List SiteLine) : List String :=
+  let cats := sites.filter (·.kind == "catalog")
+  let projs := sites.filter (·.kind == "projection")
+  if cats.isEmpty && projs.isEmpty then [] else
+  let rowIfaces := cats.map (·.site)
+  let dupeRows := (rowIfaces.filter fun i => rowIfaces.count i > 1).eraseDups
+  let rowBinds : List (List String) := cats.filterMap fun s =>
+    match s.extra.splitOn " " with
+    | [_, b] =>
+      if b.startsWith "binds=" && b != "binds=none" then some ((b.drop 6).toString.splitOn ",")
+      else if b == "binds=none" then some []
+      else none
+    | _ => none
+  let boundArms := rowBinds.flatten.eraseDups
+  let projArms := projs.map (·.site)
+  let dupeCells := (projArms.filter fun a => projArms.count a > 1).eraseDups
+  let cellViolations := projs.filterMap fun s =>
+    match s.extra.splitOn " " with
+    | [b, t] =>
+      match parseNatField b "bound=", parseNatField t "total=" with
+      | some n, some m =>
+        let recounted := rowBinds.countP (·.contains s.site)
+        if m != cats.length then some s!"{s.site}: total={m} but catalog has {cats.length} rows"
+        else if n != recounted then some s!"{s.site}: bound={n} but recount gives {recounted}"
+        else none
+      | _, _ => none
+    | _ => none
+  let missingCells := boundArms.filter fun a => !projArms.contains a
+  dupeRows.map (fun i => s!"catalog row {i} listed twice") ++
+    dupeCells.map (fun a => s!"{a} projected twice") ++
+    cellViolations ++
+    missingCells.map (fun a => s!"{a} bound in catalog but no projection cell")
+
+-- catalog: provenance plus an arm set (csv or the explicit `none`)
+example : ruleCatalog ⟨"catalog","koruos/silo","row<-declared","listed","declared_by=koruos.silo binds=u,koru-native"⟩ = .match_ := by native_decide
+example : ruleCatalog ⟨"catalog","std.fmt:ln","row<-declared","listed","declared_by=builtin binds=none"⟩ = .match_ := by native_decide
+example : ruleCatalog ⟨"catalog","x","row<-declared","listed","binds=u"⟩ = .malformed := by native_decide
+example : ruleCatalog ⟨"catalog","x","row<-declared","listed","declared_by= binds=u"⟩ = .malformed := by native_decide
+example : ruleCatalog ⟨"catalog","x","row<-declared","bound","declared_by=p binds=u"⟩ = .malformed := by native_decide
+
+-- projection: the cell claims a count within the committed catalog size
+example : ruleProjection ⟨"projection","koru-native","matrix<-catalog","holds","bound=2 total=8"⟩ = .match_ := by native_decide
+example : ruleProjection ⟨"projection","koru-native","matrix<-catalog","holds","bound=9 total=8"⟩ = .malformed := by native_decide
+example : ruleProjection ⟨"projection","koru-native","matrix<-catalog","holds","bound=x total=8"⟩ = .malformed := by native_decide
+example : ruleProjection ⟨"projection","koru-native","matrix<-catalog","holds","bound=2"⟩ = .malformed := by native_decide
+
+-- the recount is the re-decision: agreeing cells pass, drifted bound or
+-- total fails, and a bound arm with no cell is caught
+example : projectionCheck [
+    ⟨"catalog","r1","row<-declared","listed","declared_by=p binds=u,koru-native"⟩,
+    ⟨"catalog","r2","row<-declared","listed","declared_by=p binds=u"⟩,
+    ⟨"projection","u","matrix<-catalog","holds","bound=2 total=2"⟩,
+    ⟨"projection","koru-native","matrix<-catalog","holds","bound=1 total=2"⟩] = [] := by native_decide
+example : (projectionCheck [
+    ⟨"catalog","r1","row<-declared","listed","declared_by=p binds=u,koru-native"⟩,
+    ⟨"projection","u","matrix<-catalog","holds","bound=2 total=1"⟩]).length > 0 := by native_decide
+example : (projectionCheck [
+    ⟨"catalog","r1","row<-declared","listed","declared_by=p binds=u,koru-native"⟩,
+    ⟨"projection","u","matrix<-catalog","holds","bound=1 total=1"⟩]).length > 0 := by native_decide
+example : (projectionCheck [
+    ⟨"catalog","r1","row<-declared","listed","declared_by=p binds=u"⟩,
+    ⟨"catalog","r1","row<-declared","listed","declared_by=p binds=u"⟩,
+    ⟨"projection","u","matrix<-catalog","holds","bound=2 total=2"⟩]).length > 0 := by native_decide
+
 
 def rule (s : SiteLine) : Ruling :=
   if s.kind == "stored-write-numeric" then ruleNumeric s
@@ -1318,6 +1428,8 @@ def rule (s : SiteLine) : Ruling :=
   else if s.kind == "pass-graph-census" then rulePassGraphCensus s
   else if s.kind == "admission" then ruleAdmission s
   else if s.kind == "declaration" then ruleDeclaration s
+  else if s.kind == "catalog" then ruleCatalog s
+  else if s.kind == "projection" then ruleProjection s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -1394,6 +1506,11 @@ def main (args : List String) : IO UInt32 := do
   for v in admissionCheck sites.reverse do
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} ADMIT-DRIFT  {v}"
+  -- Corpus-level projection re-decision: the matrix cells are recounted
+  -- over the committed catalog marks, never trusted as printed.
+  for v in projectionCheck sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} PROJ-DRIFT  {v}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)

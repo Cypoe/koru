@@ -222,6 +222,10 @@ pub fn flushCommandMarks(allocator: std.mem.Allocator, stem: []const u8) !void {
     try hw.print("# the domain rides site/payload as data.\n", .{});
     try f.writeAll(header.items);
     for (command_marks[0..command_marks_count]) |line| try f.writeAll(line);
+    // the batch is consumed: the channel owns the committed lines and
+    // frees them on flush (a command run never marks twice)
+    for (command_marks[0..command_marks_count]) |line| allocator.free(line);
+    command_marks_count = 0;
 }
 
 /// Controls which modules/taps to emit based on annotations
