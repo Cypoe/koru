@@ -830,6 +830,18 @@
                 // author to write `item.<field>` would send them at a record
                 // that no longer exists.
                 const disch_identity = field_names.len == 1 and field_owned_info[0] != null;
+                // 690_108: `! discharge _` discards the element the arm exists
+                // to drain — a drain arm exists BECAUSE the column has no
+                // discharge path the store can fire itself, so discarding the
+                // element is the one thing the construct cannot mean. Refuse
+                // here, naming the author's `_`, before the body reaches the
+                // obligation checker and comes back about a synthetic name.
+                if (ic.binding != null and std.mem.eql(u8, ic.binding.?, "_")) {
+                    if (disch_identity) {
+                        return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): `! discharge _` discards the element the drain arm exists to discharge — if the column had a discharger the store could fire itself, this arm would not exist. Thread the value into the drain call: `! discharge item |> {s}:<exit>(<param>: item)`", .{ store_name, ambig_module }) } };
+                    }
+                    return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): `! discharge _` discards the row the drain arm exists to discharge — if its columns had dischargers the store could fire itself, this arm would not exist. Thread the row into the drain call: `! discharge item |> {s}:<exit>(item.<field>)`", .{ store_name, ambig_module }) } };
+                }
                 if (ic.binding == null or ic.destructure.len != 0) {
                     if (disch_identity) {
                         return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): `! discharge` binds the column itself - spell it `! discharge item |> ...(<param>: item)`", .{store_name}) } };
