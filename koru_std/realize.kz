@@ -41,11 +41,17 @@
 
 ~import std/spec
 
-// A lift declares its own row by invoking `std/realize:row { ...json... }`
+// A lift declares its own row by invoking
+//   `~std/realize:row(iface: koruos/ext2) { ...json... }`
 // at module top level — norun data in the AST, harvested by the command
-// consumer. `arm` declares a coverage-matrix column: a prospective arm needs
-// no bindings to appear — its empty column IS the provider gap.
-~[comptime|norun]pub tor row { source: Source }
+// consumer. The `iface` arg is a *name* the resolver can know (bare path or
+// member chain; a quoted string stays verbatim — an explicitly conceptual
+// iface that opts out of resolution). Everything in the Source block is
+// foreign data — stacks, prose, arm names, mechanism deltas — strings by
+// nature, JSON by honesty. `arm` declares a coverage-matrix column: a
+// prospective arm needs no bindings to appear — its empty column IS the
+// provider gap.
+~[comptime|norun]pub tor row { iface: Expression, source: Source }
 ~[comptime|norun]pub tor arm { source: Source }
 
 const std = @import("std");
@@ -85,7 +91,7 @@ pub const BindDecl = struct {
 };
 
 pub const RowDecl = struct {
-    iface: []const u8 = "",
+    iface: []const u8 = "", // legacy — refused when present; iface lives in the site arg now
     stack: u64 = 0,
     resources: []const u8 = "",
     evidence: []const u8 = "",
@@ -146,6 +152,37 @@ pub fn declField(line: []const u8, comptime key: []const u8) ?[]const u8 {
     const rest = line[i + k.len ..];
     const j = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
     return rest[0..j];
+}
+
+// ============================================================================
+// IFACE RESOLUTION — the arg is a name, not a string
+// ============================================================================
+//
+// `iface: koruos/ext2` or `iface: std.io.print` — a bare path/member chain the
+// resolver can know. `'/'` normalizes to '.'; longest-prefix match against the
+// program's module table splits `mod` from `tor` — `std.io.print` →
+// `std.io`+`print`, `koruos.ext2` → module whole. A quoted name stays
+// verbatim — an explicitly conceptual iface (`"koru.runtime"` — the emitted
+// seam, not a module) that opts out of resolution. Unresolvable bare names
+// stay whole: conceptual or not-yet-loaded interfaces are legal to declare.
+
+fn resolveIface(modules: []const []const u8, raw: []const u8, ra: std.mem.Allocator) []const u8 {
+    const t = std.mem.trim(u8, raw, " \t\r\n");
+    if (t.len == 0) return "";
+    if (t.len >= 2 and (t[0] == '"' or t[0] == '\'') and t[t.len - 1] == t[0]) {
+        return ra.dupe(u8, t[1 .. t.len - 1]) catch return "";
+    }
+    const norm = ra.dupe(u8, t) catch return "";
+    std.mem.replaceScalar(u8, norm, '/', '.');
+    var i: usize = norm.len;
+    while (true) {
+        for (modules) |m| if (std.mem.eql(u8, m, norm[0..i])) {
+            if (i == norm.len) return norm;
+            return std.fmt.allocPrint(ra, "{s}:{s}", .{ norm[0..i], norm[i + 1 ..] }) catch return "";
+        };
+        const dot = std.mem.lastIndexOfScalar(u8, norm[0..i], '.') orelse return norm;
+        i = dot;
+    }
 }
 
 // ============================================================================
@@ -300,9 +337,15 @@ pub fn collectRows(
         }
     }
 
-    // b+c) declared sites — `~std/realize:row { ...json... }` in a lift module
-    //      or at program level (the program's own provider for an iface it
-    //      does not own), harvested through std/spec's site walker.
+    // b+c) declared sites — `~std/realize:row(iface: <name>) { ...json... }` in
+    //      a lift module or at program level, harvested through std/spec's site
+    //      walker. `iface` is the resolvable-name arg; the Source block is the
+    //      foreign half (stack, resources, evidence, binds).
+    // the module table the iface resolver works against
+    var modules = std.ArrayListUnmanaged([]const u8){};
+    for (program.items) |item| {
+        if (item == .module_decl) modules.append(ra, item.module_decl.logical_name) catch {};
+    }
     // site list lives in the row arena — arena teardown owns it; freeing a
     // bare `out.items` slice with `al` would mis-bucket (len != capacity).
     const site_list = spec_mod.sites(program, ra, "std.realize", "row");
@@ -315,7 +358,18 @@ pub fn collectRows(
             continue;
         };
         const decl = parsed.value;
-        if (decl.iface.len == 0 or decl.binds.len == 0) {
+        const iface_raw = spec_mod.siteArg(site.flow, "iface") orelse {
+            malformed.writer(al).print("refused: std/realize:row in {s} lacks the `iface:` arg — spell ~std/realize:row(iface: <name>)\n", .{prov}) catch {};
+            commitMarkf(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "lacks-iface-arg", .{});
+            continue;
+        };
+        if (decl.iface.len != 0) {
+            malformed.writer(al).print("refused: std/realize:row in {s} carries \"iface\" in the JSON body — it is the arg now\n", .{prov}) catch {};
+            commitMarkf(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "iface-in-json", .{});
+            continue;
+        }
+        const iface = resolveIface(modules.items, iface_raw, ra);
+        if (iface.len == 0 or decl.binds.len == 0) {
             malformed.writer(al).print("refused: std/realize:row in {s} lacks required field \"iface\" or \"binds\"\n", .{prov}) catch {};
             commitMarkf(al, "declaration", "{s}", .{prov}, "decl<-parsed", .{}, "refused", "lacks-iface-or-binds", .{});
             continue;
@@ -332,7 +386,7 @@ pub fn collectRows(
             bs[i] = .{ .arm = bd.arm, .mechanism = bd.mechanism, .deltas = bd.deltas, .declared_by = prov };
         }
         if (!ok) continue;
-        mergeDecl(rows, malformed, al, ra, prov, decl.iface, decl.stack, decl.resources, decl.evidence, bs);
+        mergeDecl(rows, malformed, al, ra, prov, iface, decl.stack, decl.resources, decl.evidence, bs);
     }
 
     // stack is a post-merge invariant, not a per-declaration rule: a stackless

@@ -168,9 +168,19 @@ pub const DocLookupFn = *const fn ([]const u8) []const u8;
 pub const Site = struct {
     prov: []const u8, // declaring site: module logical name, or the file for program-level sites
     source: []const u8, // the raw `source` block text — the consumer owns the payload's grammar
+    flow: *const ast.Flow, // the site itself — consumers read named args (e.g. `iface: <expr>`) off it
     file: []const u8,
     line: usize,
 };
+
+/// A named arg on a site — e.g. `iface: koruos/ext2` — carried as its raw
+/// text; the consumer owns the name's grammar (module path, tor, foreign id).
+pub fn siteArg(fl: *const ast.Flow, comptime name: []const u8) ?[]const u8 {
+    for (fl.inv().args) |arg| {
+        if (std.mem.eql(u8, arg.name, name)) return arg.value;
+    }
+    return null;
+}
 
 fn siteMatch(fl: *const ast.Flow, qualifier: []const u8, tor_name: []const u8) ?[]const u8 {
     const mq = fl.inv().path.module_qualifier orelse return null;
@@ -197,7 +207,7 @@ pub fn sites(
         for (item.module_decl.items) |*mi| {
             if (mi.* != .flow) continue;
             const src = siteMatch(&mi.flow, qualifier, tor_name) orelse continue;
-            out.append(al, .{ .prov = prov, .source = src, .file = mi.flow.location.file, .line = mi.flow.location.line }) catch return out.items;
+            out.append(al, .{ .prov = prov, .source = src, .flow = &mi.flow, .file = mi.flow.location.file, .line = mi.flow.location.line }) catch return out.items;
         }
     }
     // b) program-level sites — the program supplies a declaration for an
@@ -205,7 +215,7 @@ pub fn sites(
     for (program.items) |*item| {
         if (item.* != .flow) continue;
         const src = siteMatch(&item.flow, qualifier, tor_name) orelse continue;
-        out.append(al, .{ .prov = item.flow.location.file, .source = src, .file = item.flow.location.file, .line = item.flow.location.line }) catch return out.items;
+        out.append(al, .{ .prov = item.flow.location.file, .source = src, .flow = &item.flow, .file = item.flow.location.file, .line = item.flow.location.line }) catch return out.items;
     }
     return out.items;
 }

@@ -24,7 +24,7 @@ A program that calls `std.io:print` is asking for something no grammar rule can 
 | `std/build` | `requires`, `command`, `step`, `variants` | `Source` | build.zig generation | assembly spec — how the backend build gets assembled |
 | `std/invariants` | `inferred`, `aspirational` | `Source` (prose) | `koruc <file> invariants` — a listing | rules declared, never enforced — addressed to a reader |
 | `std/spec` | `spec`, plus `sites()` harvest | `Source` | any consumer | typed vocabulary — the contract surface |
-| `std/realize` | `row`, `arm` | `Source` (JSON) | a solver — today `koruc <file> realize` | formal data, **decided** at configure |
+| `std/realize` | `row`, `arm` | `iface: Expression` arg + `Source` (JSON body) | a solver — today `koruc <file> realize` | formal data, **decided** at configure |
 
 `std/spec` is the base of the stack: the contract vocabulary — `FieldValue`, `NamedField`, `DispatchResult`, `DispatchFn`, the obligation and branch descriptors (`ScopeEvent`, `ScopeDescriptor`, `InputFieldSpec`) — moved wholesale out of `koru_runtime` and `koru_interpreter`, which now alias it. `runtime.specs` survives as a re-export shim so `koru_std.koru_runtime.ScopeEvent` keeps resolving; the types' home moved, the spelling didn't have to.
 
@@ -40,8 +40,7 @@ A program that calls `std.io:print` is asking for something no grammar rule can 
 A lift states its own terms by invoking `std/realize:row` at module top level — data beside the code it describes:
 
 ```
-~std/realize:row {
-    "iface": "koruos/ext2",
+~std/realize:row(iface: koruos/ext2) {
     "stack": 8192,
     "resources": "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free",
     "evidence": "V: koru/ext2/index.kz externs uk_blkdev_*/malloc/memalign; M2 author lines name the LIBVIRTIO deltas now derived here",
@@ -54,7 +53,7 @@ A lift states its own terms by invoking `std/realize:row` at module top level �
 }
 ```
 
-`iface` is the demand-side identity — not a symbol name but the *required interface*: operation vocabulary, branch vocabulary, obligations, costs. `binds` names which platform arms serve it and how. The solver walks the program's actual tor usage, demands a row for every used interface, and resolves each against the selected arm's bindings — `bound`, `refused`, or `waived`, with refusals naming the missing axis. A non-empty refusal table means no image.
+`iface` is the demand-side identity — not a symbol name but the *required interface*: operation vocabulary, branch vocabulary, obligations, costs. The declaration splits by resolvability: `iface` is an `Expression` arg, resolved longest-prefix against the program's module table (`koruos/ext2` → the `koruos.ext2` module; `std.io.print` → `std.io` + `print`), with a quoted spelling opting out verbatim (`iface: "koru.runtime"` — a conceptual seam, not `koru`'s `runtime` tor). The `Source` block is the foreign half — stacks, prose evidence, arm names, mechanism deltas — things the compiler can't resolve stay strings by nature and JSON by honesty. `binds` names which platform arms serve it and how. The solver walks the program's actual tor usage, demands a row for every used interface, and resolves each against the selected arm's bindings — `bound`, `refused`, or `waived`, with refusals naming the missing axis. A non-empty refusal table means no image.
 
 The split that landed: `std/realize` owns the mechanics — the `row`/`arm` declaration tors, `Row`/`Binding` types, `collectRows`/`collectArms`/`collectUsed`, `admit` (the verdict engine), `writeMatrix`/`writeRowsJson` (the catalog artifacts). `koruos/realize` keeps only policy: the `realize` command, koru-os's baseline rows and arm declarations (declared through the same `~std/realize:row` sites a lift uses — `declared_by=koruos.realize`), the Unikraft artifact emitters (Kraftfile, Makefile.uk), `manifest-<arm>.txt`, and the `koruos/nid` link phase. Nothing in the engine knows Unikraft exists.
 
@@ -97,8 +96,6 @@ Same contract each time: declared input, a phase that admits or refuses by name,
 
 ## The aspirational shape
 
-**`expr: Expression` payloads.** Today's carriers are `Source` blocks — text a consumer re-parses as JSON. `std/compiler:use` and `[norun|expand] sort` already prove norun sites can carry real AST nodes. A spec row written as a Koru expression is typed, checked, and becomes part of the spec itself — the payload stops being JSON-in-string and starts being structure.
-
 **Realize as a pipeline stage, not a command.** The routed-emission work — `emission` as an overridable `~[comptime|abstract]` tor, `target-of` routing each target through a spelled chain of `write-artifact`/`host-build-*` steps — is exactly the shape admission wants: `realize` as the configure stage of the same pipeline, its refusals becoming compile failures instead of a side-channel exit code. koru-os's artifacts (Kraftfile, manifests, marks) become `write-artifact` steps. The command is the donor shape; the pipeline is the home.
 
 **Emit grammar as a demanded interface.** `koru.emit` — one more iface the catalog admits per arm. `mechanism: "zig"` then names a provider, not the ambient default; a program demanding `cs` on an arm without a C# lane refuses by name. koru-os is free-standing — Unikraft is one dataset (donor material) among the arm table — and the same admission applies to emitters, drivers, and hosts alike.
@@ -108,7 +105,7 @@ Same contract each time: declared input, a phase that admits or refuses by name,
 ## Questions for Lars
 
 - **Home (provisionally answered):** the split landed as `std/spec` (vocabulary + `sites()`) + `std/realize` (generic solver) + `koruos/realize` (policy). Keep, or repartition — `spec`/`row` as a formal disposition inside `std/invariants`?
-- **Payload:** `expr: Expression` vs `source: Source` — should spec data be typed AST now?
+- **Payload (provisionally answered):** the resolvable/foreign divide landed — `iface` is an `Expression` arg, the body stays `Source`. Extend to other args (`arm` names? `deltas` as structured deltas?), or is `iface` the only field that ever wants resolution?
 - **Timing:** does `realize` become a configure-stage `emission`-family tor — refusals as compile failures — or stay a command?
 - **`--lang` conflation:** split `emit:` and `variant:` namespaces, or let the catalog name which axis a mechanism claims?
 - **Mechanism-as-variant-tag:** should an arm's `mechanism` be able to drive which `|tag` bodies lower?
