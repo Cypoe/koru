@@ -220,8 +220,10 @@ BROKEN_TESTS=0
 BENCHMARK_TESTS=0
 LEAKED_TESTS=0
 PRIORITY_TESTS=0
+NOT_ARMED_TESTS=0
 FAILED_TESTS=""
 PRIORITY_LIST=""
+NOT_ARMED_LIST=""
 
 # Memory leak detection flag (default: ON)
 # Use --ignore-leaks to disable strict leak checking
@@ -1159,7 +1161,7 @@ PY
             if [ -f "$(dirname "$dir")/SKIP" ]; then
                 continue
             fi
-            rm -f "$dir/SUCCESS" "$dir/FAILURE" 2>/dev/null
+            rm -f "$dir/SUCCESS" "$dir/FAILURE" "$dir/NOTARMED" 2>/dev/null
         done < "$FILTERED_LIST"
     fi
 
@@ -1179,8 +1181,10 @@ PY
     BROKEN_TESTS=0
     BENCHMARK_TESTS=0
     NO_MARKER_COUNT=0
+    NOT_ARMED_TESTS=0
     FAILED_LIST=()
     BROKEN_LIST=()
+    NOT_ARMED_LIST=()
 
     while IFS= read -r -d '' dir; do
         TEST_NAME=$(basename "$dir")
@@ -1216,6 +1220,11 @@ PY
             continue
         fi
 
+        if [ -f "$dir/NOTARMED" ] && [ ! -f "$dir/FAILURE" ]; then
+            NOT_ARMED_TESTS=$((NOT_ARMED_TESTS + 1))
+            NOT_ARMED_LIST+=("$TEST_NAME($(head -1 "$dir/NOTARMED" 2>/dev/null || echo not-armed))")
+            continue
+        fi
         if [ -f "$dir/SUCCESS" ] && [ -f "$dir/FAILURE" ]; then
             FAILED_COUNT=$((FAILED_COUNT + 1))
             FAILED_LIST+=("$TEST_NAME(unknown)")
@@ -1243,6 +1252,9 @@ PY
     fi
     if [ $SKIPPED_TESTS -gt 0 ]; then
         SUMMARY_LINE="$SUMMARY_LINE, $SKIPPED_TESTS skipped"
+    fi
+    if [ $NOT_ARMED_TESTS -gt 0 ]; then
+        SUMMARY_LINE="$SUMMARY_LINE, $NOT_ARMED_TESTS not-armed"
     fi
     if [ $BROKEN_TESTS -gt 0 ]; then
         SUMMARY_LINE="$SUMMARY_LINE, $BROKEN_TESTS broken"
@@ -1313,6 +1325,16 @@ PY
         echo ""
     fi
 
+    if [ "$NOT_ARMED_TESTS" -gt 0 ]; then
+        echo ""
+        echo -e "${YELLOW}NOT-ARMED (marked oracle legs that never ran — those verdicts are unmeasured):${NC}"
+        for item in "${NOT_ARMED_LIST[@]}"; do
+            echo "  $item"
+        done
+        echo "  Arm with KORU_WITNESS=1; require with KORU_ORACLE_REQUIRED=1"
+        echo ""
+    fi
+
     # Same full-run gate as the snapshot above: a filtered run asks about a few
     # tests and has no business blocking on corpus-wide coherence.
     if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
@@ -1341,7 +1363,7 @@ PY
     # float has to live inside this block, and stays AFTER the no-match guard
     # so a start with no done still means "the suite died mid-run." (Parallel
     # counts into FAILED_COUNT; the tail's FAILED_TESTS string stays empty.)
-    board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_COUNT:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0}}"
+    board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_COUNT:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0},\"notarmed\":${NOT_ARMED_TESTS:-0}}"
 
     if [ "$FAILED_COUNT" -gt 0 ] || [ "$BROKEN_TESTS" -gt 0 ] || [ "$NO_MARKER_COUNT" -gt 0 ] || [ -n "$FAILED_TESTS" ]; then
         echo -e "${RED}❌ Some tests failed${NC}"
@@ -1353,6 +1375,13 @@ PY
         exit 1
     fi
 
+    if [ "$NOT_ARMED_TESTS" -gt 0 ]; then
+        # A not-armed run is not green: the banner names what was never
+        # measured. Exit 0 — the transition posture keeps an unarmed oracle
+        # out of FAILED; KORU_ORACLE_REQUIRED=1 is the flip that fails it.
+        echo -e "${YELLOW}⚠️  PASSED — $NOT_ARMED_TESTS test(s) carry NOT-ARMED oracle legs; those verdicts are unmeasured${NC}"
+        exit 0
+    fi
     echo -e "${GREEN}✅ ALL TESTS PASSED!${NC}"
     exit 0
 fi
@@ -1490,6 +1519,13 @@ if [ $SKIPPED_TESTS -gt 0 ]; then
         MARKERS="$SKIPPED_TESTS skipped"
     fi
 fi
+if [ $NOT_ARMED_TESTS -gt 0 ]; then
+    if [ -n "$MARKERS" ]; then
+        MARKERS="$MARKERS, $NOT_ARMED_TESTS not-armed"
+    else
+        MARKERS="$NOT_ARMED_TESTS not-armed"
+    fi
+fi
 if [ $BROKEN_TESTS -gt 0 ]; then
     if [ -n "$MARKERS" ]; then
         MARKERS="$MARKERS, $BROKEN_TESTS broken"
@@ -1542,6 +1578,13 @@ if [ -n "$FAILED_TESTS" ]; then
     for item in $FAILED_TESTS; do
         echo "  $item$(failure_verdict "$item")"
     done
+fi
+
+# Report not-armed oracle legs — a verdict the oracle never produced is
+# named, never green.
+if [ "${NOT_ARMED_TESTS:-0}" -gt 0 ]; then
+    echo -e "${YELLOW}⚠️  NOT-ARMED ($NOT_ARMED_TESTS):$NOT_ARMED_LIST${NC}"
+    echo "   Arm with KORU_WITNESS=1; require with KORU_ORACLE_REQUIRED=1"
 fi
 
 # Report priority tests
@@ -1603,7 +1646,7 @@ if [ ${#TEST_FILTERS[@]} -eq 0 ] && [ "$SMOKE_MODE" = false ]; then
 fi
 
 FAILED_N=$(echo $FAILED_TESTS | wc -w | tr -d ' ')
-board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_N:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0}}"
+board_float "{\"_type\":\"koru.regression.done\",\"head\":\"$KORU_BOARD_HEAD\",\"scope\":\"$KORU_RUN_SCOPE\",\"passed\":${PASSED_TESTS:-0},\"failed\":${FAILED_N:-0},\"todo\":${TODO_TESTS:-0},\"skipped\":${SKIPPED_TESTS:-0},\"notarmed\":${NOT_ARMED_TESTS:-0}}"
 
 # Exit with appropriate code
 # Success = all regression tests passed AND (unit tests passed OR skipped)
@@ -1611,6 +1654,12 @@ if [ -z "$FAILED_TESTS" ]; then
     if [ "$RUN_UNIT_TESTS" = true ] && [ "$UNIT_TESTS_PASSED" = false ]; then
         echo -e "${YELLOW}⚠️  Regression tests passed, but UNIT TESTS FAILED${NC}"
         exit 1
+    elif [ "${NOT_ARMED_TESTS:-0}" -gt 0 ]; then
+        # A not-armed run is not green: the banner names what was never
+        # measured. Exit 0 — transition posture; KORU_ORACLE_REQUIRED=1
+        # is the flip that makes an unarmed oracle a FAIL.
+        echo -e "${YELLOW}⚠️  PASSED — $NOT_ARMED_TESTS test(s) carry NOT-ARMED oracle legs; those verdicts are unmeasured${NC}"
+        exit 0
     else
         echo -e "${GREEN}✅ ALL TESTS PASSED!${NC}"
         exit 0

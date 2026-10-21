@@ -600,7 +600,15 @@ an opt-in oracle there means a green run on a Lean-less host certifies a
 claim nobody checked. ALIVE2 already set the precedent: it moved to
 posture A when it left opt-in. Migration order: land a named `NOT-ARMED`
 verdict first so a skip is never green even during transition, then flip
-the Lean legs to A once host provisioning is scripted. The rejected
+the Lean legs to A once host provisioning is scripted.
+**NOT-ARMED landed same day:** a marked leg without `KORU_WITNESS=1`
+writes a `NOTARMED` marker, counts in neither passed nor failed, reports
+`N not-armed` in both summaries, and the run banner reads
+`⚠ PASSED — N test(s) carry NOT-ARMED oracle legs` instead of
+`ALL TESTS PASSED`. `KORU_ORACLE_REQUIRED=1` promotes not-armed to FAIL —
+the posture-A-on-demand bridge. Measured: `330_146` reports
+`0 passed, 0 failed, 1 not-armed` unarmed and `1 failed (witness-oracle)`
+under REQUIRED. The rejected
 alternative — formalizing posture B with `NOT-ARMED` as a legitimate
 terminal verdict — keeps a permanent category where "suite green"
 includes legs that never ran, the hole fail-loud exists to close.
