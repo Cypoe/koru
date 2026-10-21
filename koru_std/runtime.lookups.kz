@@ -1,14 +1,15 @@
 // Koru Standard Library: the `lookups` part of runtime — the fn-ptr
 // vocabulary a scope descriptor answers through. Joined via
 // `~part lookups` in runtime.kz; merged into the runtime module at load.
+// Definitions uplifted to std/spec; aliased here.
 
 // Branches lookup function type for shape validation
-pub const BranchesLookupFn = *const fn([]const u8) []const BranchSpec;
+pub const BranchesLookupFn = @import("root").koru_std.koru_spec.BranchesLookupFn;
 // Event-name enumeration type — the scope's whole vocabulary, order-preserving
-pub const EventsLookupFn = *const fn() []const []const u8;
+pub const EventsLookupFn = @import("root").koru_std.koru_spec.EventsLookupFn;
 // Input-field lookup type — an tor's argument vocabulary; null = the name
 // is not this scope's verb (vocabulary membership answers first).
-pub const InputLookupFn = *const fn([]const u8) ?[]const InputFieldSpec;
+pub const InputLookupFn = @import("root").koru_std.koru_spec.InputLookupFn;
 // Doc lookup type — an tor's declaration prose; empty when the decl
 // carried none.
-pub const DocLookupFn = *const fn([]const u8) []const u8;
+pub const DocLookupFn = @import("root").koru_std.koru_spec.DocLookupFn;

@@ -22,6 +22,7 @@
 
 ~[runtime]
 
+~import std/spec
 ~import std/build
 
 const std = @import("std");
@@ -199,18 +200,11 @@ const flow_parser = @import("flow_parser");
 // INTERPRETER VALUE - Runtime representation of Koru values
 // ============================================================================
 
-pub const FieldValue = union(enum) {
-    string_val: []const u8,
-    int_val: i64,
-    float_val: f64,
-    bool_val: bool,
-    string_array: []const []const u8,
-};
-
-pub const NamedField = struct {
-    name: []const u8,
-    value: FieldValue,
-};
+// Field payload + dispatch-contract vocabulary lives in std/spec — the
+// spec layer these names were uplifted to. Aliased here so every existing
+// reference (koru_std.koru_interpreter.*) keeps resolving to one definition.
+pub const FieldValue = @import("root").koru_std.koru_spec.FieldValue;
+pub const NamedField = @import("root").koru_std.koru_spec.NamedField;
 
 pub const Value = struct {
     branch: []const u8,              // Which branch was taken/constructed
@@ -377,10 +371,7 @@ pub const BudgetState = struct {
 // DISPATCH RESULT - What dispatchers return to the interpreter
 // ============================================================================
 
-pub const DispatchResult = struct {
-    branch: []const u8,
-    fields: []const NamedField,  // Direct typed field values
-};
+pub const DispatchResult = @import("root").koru_std.koru_spec.DispatchResult;
 
 // ============================================================================
 // INTERPRETER CONTEXT - Passed to the execution loop

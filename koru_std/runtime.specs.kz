@@ -2,48 +2,14 @@
 // scope metadata types the generated dispatchers and the shape checker
 // speak. Joined via `~part specs` in runtime.kz; merged into the
 // runtime module at load.
+//
+// The definitions were uplifted to std/spec — the descriptor vocabulary is
+// the spec of a surface, not a runtime concern. Aliased here so the emitted
+// `koru_std.koru_runtime.*` references generated code writes keep resolving
+// to the one definition.
 
-// Branch field metadata for shape validation
-pub const BranchField = struct {
-    name: []const u8,
-    type_name: []const u8,
-    is_optional: bool = false,
-};
-
-// Branch metadata for shape validation
-pub const BranchSpec = struct {
-    name: []const u8,
-    fields: []const BranchField,
-    is_optional: bool = false,
-};
-
-// Input-field metadata — the argument vocabulary of an tor, what a caller
-// must NAME when invoking it. Carries the raw possession phantom (`!open`
-// discharges, `open!` creates) so the vocabulary is renderable as
-// `handle: string<!open>` — the exact spelling the scope enforces.
-pub const InputFieldSpec = struct {
-    name: []const u8,
-    type_name: []const u8,
-    is_optional: bool = false,
-    phantom: ?[]const u8 = null,
-};
-
-pub const ScopeEvent = struct {
-    name: []const u8,
-    cost: u64,  // Budget cost for this tor
-    creates_obligations: []const []const u8,    // Legacy: just obligation names
-    discharges_obligations: []const []const u8, // Legacy: just obligation names
-    creates_specs: []const CreateSpec,          // Full specs with field names
-    discharges_specs: []const DischargeSpec,    // Full specs with arg names
-    branches: []const BranchSpec = &.{},        // Branch specs for shape validation
-    input_fields: []const InputFieldSpec = &.{}, // Input/argument vocabulary
-    doc: []const u8 = "",                        // Declaration prose — what the verb IS, rendered beside its signature
-    dispatcher: DispatchFn,
-};
-pub const ScopeDescriptor = struct {
-    name: []const u8,
-    events: []const ScopeEvent,
-};
-
-// The lookup-fn vocabulary — BranchesLookupFn, EventsLookupFn,
-// InputLookupFn, DocLookupFn — moved to the `lookups` part.
+pub const BranchField = @import("root").koru_std.koru_spec.BranchField;
+pub const BranchSpec = @import("root").koru_std.koru_spec.BranchSpec;
+pub const InputFieldSpec = @import("root").koru_std.koru_spec.InputFieldSpec;
+pub const ScopeEvent = @import("root").koru_std.koru_spec.ScopeEvent;
+pub const ScopeDescriptor = @import("root").koru_std.koru_spec.ScopeDescriptor;

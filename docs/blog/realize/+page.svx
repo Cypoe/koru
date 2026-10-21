@@ -1,9 +1,9 @@
 ---
 title: "Realize: Declared Specs and Arm Admission"
 subject: "realize"
-date: 2026-10-23
-excerpt: "koruos/realize treats a program's demanded interfaces as declared data in the AST — [comptime|norun] spec blocks harvested by a solver that answers, per platform arm, bound / refused / waived before an image exists."
-readTime: 7 min read
+date: 2026-10-24
+excerpt: "std/spec and std/realize split the declared-spec solver out of koru-os: [comptime|norun] row sites harvested by a generic engine that answers, per platform arm, bound / refused / waived before an image exists."
+readTime: 10 min read
 tags: [language design, koru, realize, spec, verification]
 ai_authored: mostly
 draft: true
@@ -13,19 +13,20 @@ draft: true
   import RegressionTestLink from '$lib/components/RegressionTestLink.svelte';
 </script>
 
-A program that calls `std.io:print` is asking for something no grammar rule can check: a console that exists on whatever this compiles to. `realize` is the solver for that question — and its mechanism is already the third member of a shipped family, not a new construct.
+A program that calls `std.io:print` is asking for something no grammar rule can check: a console that exists on whatever this compiles to. `realize` is the solver for that question — and as of this week it is two modules in `koru_std`, not a koru-os command with a solver trapped inside it.
 
-## The idiom already ships three times
+## The idiom already ships four times
 
-`[comptime|norun]` marks a tor nobody calls: the call site is *data in the AST*, harvested after the parse by whoever asks. Three modules consume that shape today, and they differ only in disposition — what the declared data is *for*:
+`[comptime|norun]` marks a tor nobody calls: the call site is *data in the AST*, harvested after the parse by whoever asks. The family now counts four, differing only in disposition — what the declared data is *for*:
 
 | module | tors | payload | consumer | disposition |
 |---|---|---|---|---|
 | `std/build` | `requires`, `command`, `step`, `variants` | `Source` | build.zig generation | assembly spec — how the backend build gets assembled |
 | `std/invariants` | `inferred`, `aspirational` | `Source` (prose) | `koruc <file> invariants` — a listing | rules declared, never enforced — addressed to a reader |
-| `koruos/realize` | `row` | `Source` (JSON) | `koruc <file> realize gen` — a solver | formal data, **decided** at configure |
+| `std/spec` | `spec`, plus `sites()` harvest | `Source` | any consumer | typed vocabulary — the contract surface |
+| `std/realize` | `row`, `arm` | `Source` (JSON) | a solver — today `koruc <file> realize` | formal data, **decided** at configure |
 
-The third row is the one that's new in kind: an `inferred` block is prose forever, an `aspirational` block is debt meant to become a check, and a `row` is already formal and already enforced — a refused verdict writes no image.
+`std/spec` is the base of the stack: the contract vocabulary — `FieldValue`, `NamedField`, `DispatchResult`, `DispatchFn`, the obligation and branch descriptors (`ScopeEvent`, `ScopeDescriptor`, `InputFieldSpec`) — moved wholesale out of `koru_runtime` and `koru_interpreter`, which now alias it. `runtime.specs` survives as a re-export shim so `koru_std.koru_runtime.ScopeEvent` keeps resolving; the types' home moved, the spelling didn't have to.
 
 <RegressionTestLink
   tests={[
@@ -36,10 +37,10 @@ The third row is the one that's new in kind: an `inferred` block is prose foreve
 
 ## What a row declares
 
-A lift states its own terms by invoking `koruos/realize:row` at module top level — data beside the code it describes:
+A lift states its own terms by invoking `std/realize:row` at module top level — data beside the code it describes:
 
 ```
-koruos/realize:row {
+~std/realize:row {
     "iface": "koruos/ext2",
     "stack": 8192,
     "resources": "blkdev: uk_blkdev queue ops over virtio-blk; heap: malloc/memalign/free",
@@ -55,13 +56,23 @@ koruos/realize:row {
 
 `iface` is the demand-side identity — not a symbol name but the *required interface*: operation vocabulary, branch vocabulary, obligations, costs. `binds` names which platform arms serve it and how. The solver walks the program's actual tor usage, demands a row for every used interface, and resolves each against the selected arm's bindings — `bound`, `refused`, or `waived`, with refusals naming the missing axis. A non-empty refusal table means no image.
 
-The verdicts are committed through the witness-marks channel (`commitCommandMark` — the same surface `invariants`-family commands use), so the catalog's decisions are re-decidable: an independent Lean checker recounts the arm matrix over the committed marks. koru-os's gate runs 13 checks over the full loop — declared rows, arm binding, named refusals, committed marks, re-decision.
+The split that landed: `std/realize` owns the mechanics — the `row`/`arm` declaration tors, `Row`/`Binding` types, `collectRows`/`collectArms`/`collectUsed`, `admit` (the verdict engine), `writeMatrix`/`writeRowsJson` (the catalog artifacts). `koruos/realize` keeps only policy: the `realize` command, koru-os's baseline rows and arm declarations (declared through the same `~std/realize:row` sites a lift uses — `declared_by=koruos.realize`), the Unikraft artifact emitters (Kraftfile, Makefile.uk), `manifest-<arm>.txt`, and the `koruos/nid` link phase. Nothing in the engine knows Unikraft exists.
+
+## Merging is order-independent — the hard way
+
+Rows merge onto each other: a lift extends `koru.runtime` onto a new arm without redeclaring its stack. The first version of the generic engine kept the merge-time rule "a new row must declare `stack`" — which made legality depend on import order: if `koruos/native`'s stackless extension row merged before koru-os's baseline, it was refused as "new" for lacking a field it never owed.
+
+The fix is the rule moving to post-merge: `stack` is a row *invariant*, not a declaration requirement. `0`/`""` mean *unspecified* — inherit — and only two differing non-empty values are a contradiction (pairwise, order-free). After all merges, a row still stackless is refused by name and dropped from the catalog.
+
+The witness channel caught the intermediate bug live: an intermediate version treated `stack=0` as a *conflicting* value rather than an unspecified one, so the baseline declaration "contradicted" the lift's empty slot. The Lean projection checker — which re-decides the arm matrix over committed `@witness` marks, independently — flagged the resulting catalog as malformed. The instrument did its job on the refactored code before a human read the diff.
+
+The verdicts are committed through the witness-marks channel (`commitCommandMark` — the same surface `invariants`-family commands use). koru-os's gate runs 13 checks over the full loop: declared rows, arm binding, named refusals, committed marks, Lean re-decision, `rows.json` recount.
 
 ## How it differs from the neighbors
 
 **`std/proto` is a different axis.** A proto names an *affinity* — nominal identity, "same thing by name only", input to layout merging. A row admits a *capability*. Proto answers "what is this shape's identity"; a row answers "who may serve this demand, on this arm."
 
-**`~proc tor|variant` is the same act one level down.** A `|c` proc body is a mechanism binding at proc granularity — this tor's host body in grammar `c`. A row binds at interface granularity. The two compose rather than compete — but `--lang` currently conflates them: one flag selects both the emitter (`zig`/`js`/`cs`/`c`) and which variant tags lower. `enforceLangNamespace` accepts either an emitter name or any declared variant tag in a single namespace.
+**`~proc tor|variant` is the same act one level down.** A `|c` proc body is a mechanism binding at proc granularity — this tor's host body in grammar `c`. A row binds at interface granularity. And variant selection happens *early* — at transform, because lowering has to know which bodies it's lowering (subflows carry variants too). So by the time emission runs, variants are bound; they cannot be the arm mechanism, but an arm's `mechanism` could name a variant tag — `mechanism: "native"` gating `~proc boot|native` bodies. That wire doesn't exist yet; the variant system already has the selection machinery it would need.
 
 <RegressionTestLink
   test={{ name: "8205 zig and gpu variants together", directory: "8205_zig_and_gpu_variants", categorySlug: "300_ADVANCED_FEATURES/370_VARIANTS", description: "Variant tags select per-tor bodies — the mechanism layer a spec row admits at catalog level." }}
@@ -69,21 +80,39 @@ The verdicts are committed through the witness-marks channel (`commitCommandMark
 
 **`std/build` is the wrong home, by charter.** Build's spec objects describe *how the build assembles*; realize decides whether a build may lawfully exist on a given arm — a strictly earlier question. Nesting admission inside assembly gives the module two charters.
 
-**`runtime.specs` is mis-filed, not mis-shaped.** `ScopeEvent` already carries the skeleton of an interface descriptor — input-field vocabulary, branch specs, obligation create/discharge, cost, doc. Nothing in the type is runtime-specific; only its current consumer is. Uplifted, it is the typed vocabulary a spec row's `iface` wants to graduate into — a descriptor, not a string.
+**Conditional `[condition]part` is a fourth axis.** `[build == macos]part macos` gates whether a module *part exists* in the program at all — declaration-level materialization, dodging variant explosion by not spelling the bodies for platforms you aren't on. A part's condition is *environmental* (what is the build host); a row's arm is *prospective* (what will this run on). They compose: a macOS part can declare its own `~std/realize:row` for the `darwin` arm and the catalog sees it only when the part does.
+
+## The axes, all told
+
+The compile has grown four selection axes, each with a declared surface and a phase:
+
+| axis | selects | declared as | resolved |
+|---|---|---|---|
+| variant tag | which *body* of a proc lowers | `~proc tor|tag` bodies | transform — before emission |
+| conditional part | which *declarations exist* | `[cond]part` | build/environment gate |
+| arm | which *provider* serves an interface | `~std/realize:row` binds | configure — `realize` admission |
+| `target-of` | which *grammar* the program emits in | `--lang` / pipeline route | emission routing |
+
+Same contract each time: declared input, a phase that admits or refuses by name, no ambient defaults. `--lang`'s flat namespace — emitter names and variant tags in one bag — is the only axis still conflating two of these (emit grammar *and* body selection).
 
 ## The aspirational shape
 
-**`expr: Expression` payloads.** Today's carriers are `Source` blocks — text a consumer parses. `std/compiler:use` and `[norun|expand] sort` already prove norun sites can carry real AST nodes. A spec row written as an expression is typed, checked, and becomes part of the spec itself — the payload stops being JSON-in-string and starts being structure.
+**`expr: Expression` payloads.** Today's carriers are `Source` blocks — text a consumer re-parses as JSON. `std/compiler:use` and `[norun|expand] sort` already prove norun sites can carry real AST nodes. A spec row written as a Koru expression is typed, checked, and becomes part of the spec itself — the payload stops being JSON-in-string and starts being structure.
 
-**Emit grammar as a demanded interface.** `koru.emit` — one more iface the catalog admits per arm. `mechanism: "zig"` then names a provider, not the ambient default; a program demanding `cs` on an arm without a C# lane refuses by name. This is arm-agnostic machinery: koru-os is free-standing, Unikraft is one dataset (donor material) among the arm table, and the same admission applies to emitters, drivers, and hosts alike.
+**Realize as a pipeline stage, not a command.** The routed-emission work — `emission` as an overridable `~[comptime|abstract]` tor, `target-of` routing each target through a spelled chain of `write-artifact`/`host-build-*` steps — is exactly the shape admission wants: `realize` as the configure stage of the same pipeline, its refusals becoming compile failures instead of a side-channel exit code. koru-os's artifacts (Kraftfile, manifests, marks) become `write-artifact` steps. The command is the donor shape; the pipeline is the home.
 
-**`std/spec` as the shared home.** The declaration surface — norun spec tors, uplifted descriptor types, harvest helpers — is std-shaped; the solver's policy (catalog, arm table, verdict semantics) stays project-side. The promote boundary runs between *shape* and *policy*.
+**Emit grammar as a demanded interface.** `koru.emit` — one more iface the catalog admits per arm. `mechanism: "zig"` then names a provider, not the ambient default; a program demanding `cs` on an arm without a C# lane refuses by name. koru-os is free-standing — Unikraft is one dataset (donor material) among the arm table — and the same admission applies to emitters, drivers, and hosts alike.
+
+**Applied to the compiler itself.** `koruc` self-compiles through `coordinate`; once `emission` routes `target-of`, the compiler's own build is one more program spelling its emission — and its module requirements are the program-#0 row catalog. The marks channel already lives in `emitter_helpers` inside the compiler; the instrument is in the meat, not grafted on.
 
 ## Questions for Lars
 
-- **Home:** `std/spec` new, `std/invariants` gaining a third (formal, decided) disposition, or the `std/build` family?
-- **Payload:** `expr: Expression` vs `source: Source` — should spec data be typed AST, and if so is the descriptor vocabulary the uplifted `runtime.specs` or a new type family?
-- **`--lang` conflation:** split `emit:` and `variant:` namespaces, or keep the flat tag namespace and let the catalog name which axis a mechanism claims?
-- **Timing:** does admission stay a post-hoc command (`realize gen`), or does the pipeline consult the catalog — moving refusal from "before an image" to "before a backend is chosen"?
-- **`iface` spelling:** `module:tor` string today; a descriptor object when the row needs §3.6 fields — or earlier, so payloads never have to migrate?
-- **The promote line:** which parts of the solver are std-worthy — harvest + marks + the verdict vocabulary — and which parts are policy (catalog, arms, refusal semantics) that should never leave the project?
+- **Home (provisionally answered):** the split landed as `std/spec` (vocabulary + `sites()`) + `std/realize` (generic solver) + `koruos/realize` (policy). Keep, or repartition — `spec`/`row` as a formal disposition inside `std/invariants`?
+- **Payload:** `expr: Expression` vs `source: Source` — should spec data be typed AST now?
+- **Timing:** does `realize` become a configure-stage `emission`-family tor — refusals as compile failures — or stay a command?
+- **`--lang` conflation:** split `emit:` and `variant:` namespaces, or let the catalog name which axis a mechanism claims?
+- **Mechanism-as-variant-tag:** should an arm's `mechanism` be able to drive which `|tag` bodies lower?
+- **Conditional parts vs rows:** `[cond]part` gates declarations; does a build-environment condition ever participate in admission (`needs:` deltas, arm-conditional parts)?
+- **`iface` descriptor:** `{name, revision, inputs, branches, effects, authority, evidence}` — fields onto `ScopeEvent`, or a dedicated `IfaceDescriptor` the row references?
+- **`430_069` pin:** descriptor witnesses now emit `|br:ok` enumeration the test didn't expect — is that drift to pin, or a pin to update?
+- **The promote line:** which parts of the solver are std-worthy — harvest + marks + the verdict vocabulary — and which are policy that should never leave the project?
