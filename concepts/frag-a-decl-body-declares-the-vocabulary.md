@@ -41,13 +41,18 @@ Measured: `std/supervisor`'s fold attaches to a ring's `| full`/`| none`
 void arms through same-module wrapper tors (320_110–112) — status arms
 are vocabulary, not types, so policy composes without either construct
 knowing the other. Boundaries found by refusal, not assumed: v1
-supervises same-module children only (KORU161; 320_113 OWED), and `|
+supervises same-module children only (KORU161; 320_113 — RULED
+2026-10-21, the wrapper is the intended surface), and `|
 retry` re-entry targets the *same* event with remapped args — the
 explicit form changes arguments, not targets.
 
 ## Open
 
-Whether `supervised` reaches cross-module children (the ring/channel
-verbs themselves) is the owed seam. If channel lane emission or ring ops
-ever expose same-module generated tors, 320_113 flips without a grammar
-change.
+~~Whether `supervised` reaches cross-module children (the ring/channel
+verbs themselves) is the owed seam.~~ **Ruled 2026-10-21 (ccomp-line
+proposal, fork review pending): the boundary is design, not debt.**
+Composition onto a std verb happens through a named wrapper tor — the
+same site where the retry policy is spelled — rather than by relaxing
+KORU161 so generated retry code re-enters a cross-module contract nobody
+named locally. `320_113` documents the refusal as intended; it is no
+longer an OWED flip.
