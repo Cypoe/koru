@@ -607,8 +607,7 @@
     // every other Zig/JS divergence here.
     const found_decl: []const u8 = if (none_arm != null)
         (if (host_is_js) "let __koru_found = false;\n" else if (host_is_c) "int __koru_found = 0;\n" else "var __koru_found = false;\n")
-    else
-        "";
+    else "";
     const none_call: []const u8 = if (none_arm != null) blk: {
         const nq = storeEventQualifier(allocator, home_ns, program.main_module_name);
         break :blk std.fmt.allocPrint(allocator, "if (!__koru_found) {{\n{s}{s});\n}}\n", .{ HS.eventCallHead(allocator, host_target, nq, nbody_name), HS.callArg(allocator, host_target, nq, nbody_name, nargb_text) }) catch unreachable;
@@ -827,6 +826,7 @@
             return .{ .transformed = .{
                 .replacement = ast.Item{ .inline_code = ast.InlineCode{ .code = loop_code, .location = flow.location, .module = allocator.dupe(u8, flow.module) catch unreachable } },
                 .appended = appended.toOwnedSlice(allocator) catch unreachable,
+                .consumed_arms = &.{ "query", "first", "none" },
             } };
         }
         // The tail rides as the replacement's continuation children: the

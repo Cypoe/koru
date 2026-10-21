@@ -6,6 +6,10 @@ provenance: 699_021 session 2026-10 — 690_364's `| done` on a query site
   replacement sat in rule and preorder; a 47-transform census found the
   same hole in constructor and capture
 ts: 2026-10-14
+evolved: 2026-10-21 — a replacement path added after the initial audit
+  (the `!is_head_site` inline-splice return in store:query) shipped without
+  `consumed_arms`; KORU183 caught it at test time. The declaration is owed
+  on EVERY replacement return, including splice-only roads added later.
 tags: [koru, transforms, store, refusal, continuations]
 ---
 
@@ -98,3 +102,12 @@ Two structural corollaries:
   while constructor:struct claims `! construct` alone. The audit takes
   the set as an argument — a shared helper hardcoding a vocabulary would
   be wrong the first time it ran on a second site.
+
+**Every replacement return owes the declaration.** The first audit
+covered the returns that existed that day; the `!is_head_site`
+inline-splice return in `store:query` was added later, spliced the loop
+without the arm set, and compiled — KORU183 is what caught it
+(115_043/044, nested site-view flows across a module boundary). An
+accounting declared on most returns is no accounting: each new
+`.transformed` return that drops named arms is a fresh hole until it
+declares `consumed_arms`.
