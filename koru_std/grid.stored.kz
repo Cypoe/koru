@@ -112,42 +112,40 @@
             inputs.append(allocator, ast.Field{ .name = yn, .type = allocator.dupe(u8, "i64") catch unreachable }) catch unreachable;
             args.append(allocator, ast.Arg{ .name = yn, .value = widen.at(allocator, (grid_read.find(names.items, t.grid) orelse unreachable).ns, t.grid, grid_read.lower(allocator, ytext, names.items)) }) catch unreachable;
         }
-        inputs.append(allocator, ast.Field{ .name = vn, .type = allocator.dupe(u8, col_ty) catch unreachable }) catch unreachable;
-        args.append(allocator, ast.Arg{ .name = vn, .value = if (proven) |pg|
-            grid_read.lowerTrusted(allocator, pr.value, names.items, .{ .name = t.x, .grid = pg })
-        else
-            grid_read.lower(allocator, pr.value, names.items) }) catch unreachable;
+        // `0[<target>]` — an index-typed field: the write CERTIFIES through
+        // the target's own __koru_at (in-range lands, out-of-range traps
+        // here), and no read of the target through this cell pays it again.
+        const idx_t = grid_idx.idxTarget(names.items, t.grid, t.field);
+        const vty = if (idx_t) |it| grid_idx.paramType(allocator, names.items, t.grid, it) else col_ty;
+        inputs.append(allocator, ast.Field{ .name = vn, .type = allocator.dupe(u8, vty) catch unreachable }) catch unreachable;
+        args.append(allocator, ast.Arg{ .name = vn, .value = blk_v: {
+            const lv = if (proven) |pg|
+                grid_read.lowerTrusted(allocator, pr.value, names.items, .{ .name = t.x, .grid = pg })
+            else
+                grid_read.lower(allocator, pr.value, names.items);
+            break :blk_v if (idx_t) |it| grid_idx.certifyArg(allocator, names.items, it, pr.value, lv) else lv;
+        } }) catch unreachable;
     }
 
-    // A top-level write is a STATEMENT in the program's flow, so the replacement
-    // has to be executable — raw code, whether host_line or inline_code, lands at
-    // module scope where an assignment is not a legal declaration.
+    // A top-level write is a STATEMENT, so the replacement has to be
+    // executable — raw code lands at module scope where an assignment is not
+    // a legal declaration. The callable is an EVENT plus a same-named `|zig`
+    // proc (a proc alone resolves as an unknown tor): the store's unit shape
+    // minus what a grid does not need — no inputs, branches, or envelope.
     //
-    // The callable is an EVENT plus a same-named `|zig` proc that implements it;
-    // a proc on its own is not invocable and resolves as an unknown tor. This is
-    // the store's own unit shape, minus everything a grid does not need: no
-    // inputs, no branches, no row argument, no envelope.
+    // KEYED PER SITE — the flow's line alone is not that: chained writes in one
+    // flow share it, and minting one name twice got the program rejected with
+    // `duplicate struct member name`, an internal leak with no diagnostic.
     //
-    // KEYED PER SITE, and the flow's line alone is not that: every chained write
-    // in one flow shares it, so `a |> std/grid:stored {..} |> std/grid:stored
-    // {..}` minted one name twice and the backend rejected the program with
-    // `duplicate struct member name` — an internal leak with no Koru-level
-    // diagnostic.
+    // Uniquifying the key was tried FIRST, while the chain tail was still being
+    // discarded, and it made things worse — the loop shape compiled and printed
+    // the wrong answer, because the collision had been the only thing making
+    // the drop loud. The drop is fixed now, so a unique key hides nothing.
     //
-    // ORDER MATTERED HERE. Uniquifying this key was tried FIRST, while the chain
-    // tail was still being discarded (see the replacement below), and it made
-    // things worse: the loop shape then compiled and silently printed the wrong
-    // answer, because the collision had been the only thing making the drop
-    // loud anywhere. The drop is fixed now, so a unique key hides nothing.
-    //
-    // The block's TEXT is what distinguishes two links of a chain. Two
-    // byte-identical writes chained at one site still collide, and that is left
-    // alone deliberately: it is a redundant duplicate, and a blunt error is a
-    // fair report of it where a counter would silently accept the second.
-    //
-    // The store never had either problem: it mints ONE unit per store and passes
-    // the field as an argument, so chained store writes are ordinary calls to a
-    // shared tor. A grid's unit carries the assignment itself.
+    // The block's TEXT distinguishes two links of a chain; two byte-identical
+    // writes still collide, deliberately — a redundant duplicate deserves a
+    // blunt error. The store mints ONE unit per store and passes the field as
+    // an argument; a grid's unit carries the assignment itself.
     const unit = std.fmt.allocPrint(allocator, "__grid_write_L{d}_{x}", .{ flow.location.line, std.hash.Wyhash.hash(0, btext) & 0xffff }) catch unreachable;
 
     // THE NAMESPACE IS IMPORT-DERIVED, NOT FILE-DERIVED. `flow.module` is the

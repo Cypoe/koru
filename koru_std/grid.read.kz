@@ -12,12 +12,9 @@ const codegen_utils_grid = @import("codegen_utils");
 //
 // `<grid>[<index>].<field>` is the grid's ONLY read spelling, and it occurs in
 // three places that used to be three different problems: a write block's value
-// (`stored`), a guard or an argument anywhere in the program (`new`'s
-// whole-program pass), and a nested index inside another read. They share this
-// function. The recurring defect this file is built to avoid is a construct
-// with TWO lowerings that agree only by having been written twice — the store
-// has paid for that four times (690_245 is the last one), and a grid read is
-// small enough that the second copy would have looked harmless.
+// (`stored`), a guard or an argument anywhere (`new`'s whole-program pass), and
+// a nested index inside another read. They share this function — a construct
+// with TWO lowerings agrees only by having been written twice (690_245).
 const ast_grid = @import("ast");
 
 const grid_read = struct {
@@ -28,6 +25,7 @@ const grid_read = struct {
     // entry file, `koru_app.koru_lib` for `app/lib` — and a read compiled into
     // any OTHER module must say so (115_018, 115_044, 115_045 are the history
     // of shipping the unqualified spelling).
+    const IdxField = struct { field: []const u8, target: []const u8 };
     const GridRef = struct {
         name: []const u8,
         ns: []const u8,
@@ -36,6 +34,9 @@ const grid_read = struct {
         // the ADDRESS FORMATTER is the only place that needs to know, and it
         // is reached from every read and every write — see `lower`.
         row: bool = false,
+        // INDEX-TYPED CELLS (`0[<grid>]`): fields certified as indices into
+        // the named grid — the write pays the bound, the read skips it.
+        idx: []const IdxField = &.{},
         // RUNTIME EXTENT (`std/grid:pool`): columns are slices, so the
         // pointer base `(&x)[i]` does not typecheck — `lower` drops the `&`.
         pool: bool = false,
@@ -68,10 +69,8 @@ const grid_read = struct {
         collectIn(alloc, prog, prog.items, null, out);
     }
     // Re-collect a grid from its ALREADY-LOWERED declaration text. The emitted
-    // text says which layout it is: a row grid declares exactly one storage
-    // member, `__koru_row`, so its presence between this header and the next
-    // is the whole test (the JS row instance spells `__koru_row: [...Array(N)]`
-    // to keep the same signature).
+    // text says the layout: a row grid's `__koru_row` member between this
+    // header and the next is the whole test.
     fn scanLowered(alloc: std.mem.Allocator, prog: *const ast_grid.Program, text: []const u8, home: ?[]const u8, out: *std.ArrayList(GridRef)) void {
         const needle = "const __KoruGridT_";
         var i: usize = 0;
@@ -82,7 +81,7 @@ const grid_read = struct {
             const stop = std.mem.indexOfPos(u8, text, e, needle) orelse text.len;
             const is_row = std.mem.indexOfPos(u8, text[0..stop], e, "__koru_row: [") != null;
             const is_pool = std.mem.indexOfPos(u8, text[0..stop], e, "__koru_pool") != null;
-            out.append(alloc, GridRef{ .name = text[s..e], .ns = nsFor(alloc, prog, home), .row = is_row, .pool = is_pool }) catch unreachable;
+            out.append(alloc, GridRef{ .name = text[s..e], .ns = nsFor(alloc, prog, home), .row = is_row, .pool = is_pool, .idx = grid_idx.scanLoweredFields(alloc, text[e..stop]) }) catch unreachable;
             i = e;
         }
     }
@@ -93,24 +92,23 @@ const grid_read = struct {
                     const inv = f.inv();
                     if (inv.path.module_qualifier) |mq| {
                         if (std.mem.eql(u8, mq, "std.grid") and inv.path.segments.len == 1 and (std.mem.eql(u8, inv.path.segments[0], "new") or std.mem.eql(u8, inv.path.segments[0], "pool"))) {
-                            // The declaration has not lowered yet, so the
-                            // layout is still on the annotation. `new` parses
-                            // this properly and REFUSES a bad facet; here we
-                            // only need the answer, and a malformed one is
-                            // left for `new` to reject with a diagnostic.
+                            // Not lowered yet, so the layout is still on the
+                            // annotation; a malformed facet is `new`'s to refuse.
                             var is_row = false;
                             for (f.annotations) |ann| {
                                 const t = std.mem.trim(u8, ann, " \t");
                                 if (!std.mem.startsWith(u8, t, "layout")) continue;
                                 if (std.mem.indexOf(u8, t, "row") != null) is_row = true;
                             }
+                            var gname: []const u8 = "";
+                            var src: []const u8 = "";
                             for (inv.args) |a| {
                                 if (std.mem.eql(u8, a.name, "expr")) {
-                                    var n = a.value;
-                                    if (n.len >= 2 and n[0] == '"') n = n[1 .. n.len - 1];
-                                    out.append(alloc, GridRef{ .name = n, .ns = nsFor(alloc, prog, home), .row = is_row, .pool = std.mem.eql(u8, inv.path.segments[0], "pool") }) catch unreachable;
-                                }
+                                    gname = a.value;
+                                    if (gname.len >= 2 and gname[0] == '"') gname = gname[1 .. gname.len - 1];
+                                } else if (std.mem.eql(u8, a.name, "source")) src = a.value;
                             }
+                            if (gname.len > 0) out.append(alloc, GridRef{ .name = gname, .ns = nsFor(alloc, prog, home), .row = is_row, .pool = std.mem.eql(u8, inv.path.segments[0], "pool"), .idx = grid_idx.scanFlowFields(alloc, src, gname, out.items) }) catch unreachable;
                         }
                     }
                 },
@@ -336,15 +334,15 @@ const grid_read = struct {
                                 std.fmt.allocPrint(alloc, "({s}{s}__koru_grid_{s}.{s})[{s}__KoruGridT_{s}.__koru_at2({s}, {s})]", .{ amp, ns, gname, fname, ns, gname, xs, ys }) catch unreachable;
                         } else blk_one: {
                             const idx = lowerTrusted(alloc, idx_raw, refs, trusted);
-                            // A trusted index skips the floor exactly as an
-                            // `[unsafe(bounds)]` declaration would: widen, cast,
-                            // no edge. The proof belongs to the transform that
-                            // minted the name, so the match is on the RAW index
-                            // text before its own recursion rewrote anything.
+                            // A trusted index skips the floor as `[unsafe(bounds)]`
+                            // would: widen, cast, no edge. The match is on the RAW
+                            // index text, before the recursion rewrote anything.
                             const proven = if (trusted) |t|
                                 std.mem.eql(u8, gname, t.grid) and std.mem.eql(u8, std.mem.trim(u8, idx_raw, " "), t.name)
                             else
-                                false;
+                                // A `G[..].f` index whose field is `0[this
+                                // grid]` came through the checked write.
+                                grid_idx.certifies(refs, std.mem.trim(u8, idx_raw, " "), gname);
                             const at = if (proven)
                                 if (std.mem.eql(u8, CompilerEnv.lang, "js"))
                                     idx
