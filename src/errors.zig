@@ -157,6 +157,7 @@ pub const ErrorCode = enum(u16) {
     KORU179, // A std/panic:catch declaration is malformed — a missing site pattern, a non-`!` arm, no `!` arms, a pattern that grafts nothing, two catches claiming one site+branch, or an absorb arm grafted into a producing flow that ends without a verdict. One code for the class; the message names the fault. Emitted by koru_std/panic.kz — reserved in scripts/registry_reserved.txt.
     KORU180, // A std/fmt call site is malformed — a fmt.blk or ln site with no `: name` bind. The `| formatted` / `| line` branch spelling was removed from the grammar, so an unbound result has no consumer and would reach Zig codegen as a dead tagged union (the 620_020 raw-Zig-leak class). Emitted by koru_std/fmt.kz and koru_std/fmt.lnzig.kz — reserved in scripts/registry_reserved.txt.
     KORU181, // An unspaced `-` joined identifiers into one kebab name that binds nothing, while every `-`-segment resolves — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
+    KORU182, // A `-`-joined member name (`p.x-c`) names no field of the receiver's statically-known record, while the first `-`-segment IS a field and the rest resolve as names — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)

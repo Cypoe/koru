@@ -1,1 +1,5 @@
-BACKEND_COMPILE_ERROR
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU182
+CONTAINS reads as the field name 'x-c', not subtraction
+CONTAINS 'p' has no field 'x-c'
+CONTAINS 'x - c'

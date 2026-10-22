@@ -61,19 +61,43 @@ not a grammar fork:
   identifier surface, and pinned as green behavior: 230_028 binds
   `a-b`, `a`, `b` together and shows `a-b` yields the name while
   `a - b` subtracts.
-- **Member-position `.x-c`** (the nbody trap itself) still resolves as
-  field `x_c` with no Koru-side diagnostic — a member name is type-
-  resolved, not scope-resolved, so flow_checker's scan cannot see it.
-  Pinned at the host boundary in 230_029 (bare BACKEND_COMPILE_ERROR +
-  `no field named` in backend.err — the tripwire flips red the day a
-  type-aware member check lands a real diagnostic).
+- **Member-position `.x-c`** (the nbody trap itself) is now diagnosed —
+  KORU182. Member names resolve against a type, not the scope map, so the
+  check needed a field-set oracle it didn't have. flow_checker now
+  enumerates statically-known receivers: impl input params (inline
+  `{ x: i64 }` record text, named types via `host_type_decl` /
+  `kernel:shape`), `| branch` payload bindings, and kernel
+  `| computed` / `| kernel` bindings inside `init(T)`/`pairwise(T)`
+  flows — `c[i].x-c` resolves `c` → the shape's fields through `[]`
+  peeling. When `x-c` is no field but `x` is and the rest resolve as
+  names, it teaches `x - c` (230_029 frontend pin, 390_130 kernel
+  receiver). Two conservative declines: a *declared* kebab field
+  (`p.x-c` where `x-c` is real → legal, run-pinned in 230_030 — emits
+  `p.x_c` correctly on named bindings) and receivers whose types don't
+  enumerate (scalars, host types, `.len`-style builtins — the host's
+  field check keeps those). Member chains descend (`a.b[i].x-c`).
+- **Immediate impls were a second hole.** `use -> p.x-c` never entered
+  the scan at all — `checkImplMatchesDecl` validated shape, not names.
+  It now runs the same token scan over produce text with the decl's
+  input fields as scope — KORU181 and KORU182 both reach `->` bodies.
+- **Arg-position record literals reach Zig unlowered** — found while
+  probing member position: `use(p: { x: 10 })` emits `{ x: 10 }`
+  verbatim (not kebab-specific; bare-return literals lower fine, the
+  inline-arg path skips it). Whether arg literals are intended grammar
+  is open — legal → lower, illegal → frontend refusal; either way not
+  a raw host error. Pinned in 230_031.
 - **Transform-captured args are a carrier gap.** `if`/`each`/etc arrive
   as invocations whose condition arg is captured `expression_value`;
   the scan does not open captured args, so `if(q-b > 0)` passes `q-b`
   through verbatim and Zig reads subtraction — right answer, wrong
-  derivation again, now on the *scan* side. Pinned green-and-documented
-  in 220_055, explicitly framed as the tripwire: fix the carrier and it
-  goes red until repinned as a MUST_ERROR twin of 220_054.
+  derivation again, now on the *scan* side. The same wall stands between
+  KORU182 and the nbody's actual carrier — `captured { energy: acc.energy
+  + c[0].x-c[j].x }` is `source_value`, never scanned — so the trap that
+  started all of this stays silent inside `captured`/`capture` bodies
+  even though the member check can now resolve `c` → the kernel shape.
+  Pinned green-and-documented in 220_055, explicitly framed as the
+  tripwire: opening captured args flips it red until repinned as a
+  MUST_ERROR twin of 220_054.
 
 Related:
 [[frag-every-name-writing-site-must-mangle]] — the same kebab glyph seen

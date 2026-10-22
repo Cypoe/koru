@@ -179,5 +179,15 @@ members=950
 # optional-free/key arms twinning the version idiom in
 # compiler_requires.zig — field handling follows the established
 # pattern field-for-field; no foldable clone surfaced.
+# Re-pinned on the KORU182 member-kebab commit: roll named the standing
+# residuals (emitter_test/visitor_emitter_test/glob_matcher_spec_test
+# scaffolding, requires-fixture twins, phantom_semantic_checker idioms,
+# the continuation_codegen x emitter_helpers port pair) — none in this
+# diff. Own delta measured: +0 clusters / +1 member — flow_checker.zig's
+# recordFieldHeads brace-strip (`trim; if {..} strip; trim`, 1857-1859)
+# twins template_processor:533-535's identical idiom. Three lines, rank
+# #137 at 52 tokens — folding a trim-brace idiom across two modules is
+# not a lift (frag-dedup-is-lift-then-delete). Re-measured on this tree:
+# 846/953.
 clusters=846
-members=952
+members=953

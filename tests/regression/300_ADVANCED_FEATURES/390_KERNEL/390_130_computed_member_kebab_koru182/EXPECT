@@ -1,0 +1,4 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU182
+CONTAINS reads as the field name 'x-c', not subtraction
+CONTAINS 'c[0]' has no field 'x-c'
