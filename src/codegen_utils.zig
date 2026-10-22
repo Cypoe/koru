@@ -3886,6 +3886,7 @@ test "intCast: @as with a non-intCast second argument is left alone" {
 //                         C's ternary is spelled identically.
 //   `@builtin(…)`       — casts and arithmetic builtins lower through
 //                         lowerCBuiltin (`@as`/`@intCast`/`@floatFromInt`/
+//                         `@intFromFloat`/`@floatCast`/`@intFromBool`/
 //                         `@divTrunc`/`@rem`/`@mod`); the rest refuse by
 //                         name through LowerDiag.
 //   reserved words      — `.koru_expr` renames `x` → `x_` for C keywords.
@@ -4229,6 +4230,13 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, "((double)(");
         try lowerCInto(out, allocator, first, mode, diag);
         try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "intFromBool")) {
+        // A C bool already IS 0/1 — the cast is the operand itself.
+        try out.append(allocator, '(');
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.append(allocator, ')');
         return j;
     }
     if (eql(u8, name, "divTrunc")) {
