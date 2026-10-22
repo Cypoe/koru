@@ -230,5 +230,12 @@ members=2463
 # readQuoted) are keyed to a two-syntax grammar no existing parser
 # shares — folding them into one of the file's Source readers would be
 # a forced abstraction, not a lift.
-clusters=1929
-members=2470
+# Re-pinned in "kebab ruling: pin the coverage map": the roll fired on
+# +2 clusters / +6 members — decomposed to zero own-delta (the commit's
+# only src/ change is the NamedBranch descent in flow_checker.zig; no
+# census member overlaps lines 1789-1810). The growth is foreign drift:
+# uncommitted parser.zig work-in-progress in the tree plus the standing
+# parser.zig errdefer/emitter_test residuals documented above. Census
+# re-measured on this tree: 1931/2476.
+clusters=1931
+members=2476

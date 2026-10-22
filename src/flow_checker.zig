@@ -1786,6 +1786,27 @@ pub const FlowChecker = struct {
             for (sites.items) |site| try scope.append(self.allocator, site.name);
         }
 
+        // NamedBranch bodies hang inside the NODE, not cont.continuations —
+        // without this descent `if(x) | then -> q-b` arm bodies go unscanned
+        // and the kebab trap slips through verbatim (validateBindingUsage
+        // walks the same branches for the same reason).
+        if (cont.node) |node| {
+            const branch_bodies: []const ast.NamedBranch = switch (node) {
+                .foreach => |*fe| fe.branches,
+                .conditional => |*cd| cd.branches,
+                .switch_result => |*sw| sw.branches,
+                else => &.{},
+            };
+            for (branch_bodies) |*branch| {
+                const branch_depth = scope.items.len;
+                if (branch.binding) |b| try scope.append(self.allocator, b);
+                for (branch.body) |*body_cont| {
+                    try self.checkUnboundReferences(body_cont, scope, bound);
+                }
+                scope.shrinkRetainingCapacity(branch_depth);
+            }
+        }
+
         for (cont.continuations) |*child| {
             try self.checkUnboundReferences(child, scope, bound);
         }

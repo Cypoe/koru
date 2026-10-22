@@ -44,7 +44,8 @@ not a grammar fork:
    (220_052). The check lives in name resolution, not the lexer, because
    only there do "both halves bound" and "whole name unbound" mean
    anything. It scans args, produce values, assignment fields, conditions,
-   and control-node expression text.
+   and control-node expression text — including named-branch bodies under
+   conditional/foreach/switch (220_053 args, 220_054 branch bodies).
 
 ## What follows
 
@@ -57,11 +58,22 @@ not a grammar fork:
 - **Residual silent case:** a *bound* `a-b` where the author meant
   `a - b` still folds to the name — uniform, rare, same class as
   COBOL's answer. Accepted as the cost of keeping kebab on the
-  identifier surface.
+  identifier surface, and pinned as green behavior: 230_028 binds
+  `a-b`, `a`, `b` together and shows `a-b` yields the name while
+  `a - b` subtracts.
 - **Member-position `.x-c`** (the nbody trap itself) still resolves as
   field `x_c` with no Koru-side diagnostic — a member name is type-
   resolved, not scope-resolved, so flow_checker's scan cannot see it.
-  Naming the gap honestly; a type-aware check would be the fix.
+  Pinned at the host boundary in 230_029 (bare BACKEND_COMPILE_ERROR +
+  `no field named` in backend.err — the tripwire flips red the day a
+  type-aware member check lands a real diagnostic).
+- **Transform-captured args are a carrier gap.** `if`/`each`/etc arrive
+  as invocations whose condition arg is captured `expression_value`;
+  the scan does not open captured args, so `if(q-b > 0)` passes `q-b`
+  through verbatim and Zig reads subtraction — right answer, wrong
+  derivation again, now on the *scan* side. Pinned green-and-documented
+  in 220_055, explicitly framed as the tripwire: fix the carrier and it
+  goes red until repinned as a MUST_ERROR twin of 220_054.
 
 Related:
 [[frag-every-name-writing-site-must-mangle]] — the same kebab glyph seen
