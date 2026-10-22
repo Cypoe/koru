@@ -73,6 +73,20 @@ Corollary for triage: when a red test's stated cause names a mechanism, check
 the mechanism before believing the sentence. Here the check was thirty seconds —
 read which stage the error came from.
 
+**The green twin.** The mechanism is not color-specific — a GREEN pin's
+assertion goes unexamined the same way, and is arguably worse: nobody asks
+"why?" at all. `460_001` was green for months printing `cell said: r1` —
+`r.bound` is the interpreter's *binding name*, not the turn's value, and the
+produce behind it (`greet -> "hello {{ name:s }}"`) never interpolated:
+`{{ }}` is fmt/print template vocabulary, not a string-literal feature. The
+green supplied its own explanation ("it passes"), so both the wrong field and
+the inert template rode along — and the blog post quoted them verbatim as a
+demonstration. The fix that surfaced it (an idiomatic `-> "hello " ++ name`)
+then hit a latent emitter defect the same green had been hiding: Zig lazy-sema
+never analyzed the uncalled handler, and `++` on a runtime operand is
+comptime-only (520_008). A pin whose claimed thing is never looked at is
+decoration — the verdict color is not an examination.
+
 ## Not an argument against red pins
 
 Pinning a bug as a failing test first is correct and stays. The discipline this

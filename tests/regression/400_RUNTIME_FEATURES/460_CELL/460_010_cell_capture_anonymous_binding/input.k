@@ -14,7 +14,7 @@ std/proto(room_state) {
 }
 
 pub tor greet { name: string } -> string
-greet -> "hello {{ name:s }}"
+greet -> name
 
 std/runtime:register(scope: "cell") {
     greet(5)

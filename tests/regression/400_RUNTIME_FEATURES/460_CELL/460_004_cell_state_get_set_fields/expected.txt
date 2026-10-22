@@ -9,5 +9,5 @@ name reset
 name = assistant-02
 awake set
 awake = true
-cell said: r1
+cell said: {"branch":"","value":"assistant"}
 assistant hibernated

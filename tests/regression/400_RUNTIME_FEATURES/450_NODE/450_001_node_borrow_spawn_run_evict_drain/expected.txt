@@ -1,5 +1,5 @@
 spawned room-42
-cell said: r1
+cell said: {"branch":"","value":"room-42"}
 captured visits=41
 nope missing
 room-42 evicted
