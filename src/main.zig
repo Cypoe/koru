@@ -9082,7 +9082,11 @@ pub fn main() !void {
         var app_req_source: ?[]u8 = null;
         defer if (app_req_source) |s| allocator.free(s);
         if (app_decl) |decl| {
-            const app_req = try emit_build_zig.appInfoPlistRequirement(allocator, decl.name, decl.id, decl.version);
+            const icon_key: ?[]const u8 = if (decl.icon) |ic|
+                emit_build_zig.appIconFileName(ic)
+            else
+                null;
+            const app_req = try emit_build_zig.appInfoPlistRequirement(allocator, decl.name, decl.id, decl.version, icon_key);
             app_req_source = @constCast(app_req.source_code);
             try output_build_reqs.append(allocator, app_req);
             try printStdout(allocator, "✓ Embedding app identity '{s}' ({s})\n", .{ decl.id, decl.name });
@@ -9568,21 +9572,26 @@ pub fn main() !void {
         // `koru bundle` — the build ran; assemble the .app beside the output.
         // app_decl is non-null here: the refusal above already fired otherwise.
         if (bundle_after_build and !is_js_target and !deep_check) {
+            // The scratch binary is consumed by the bundle — remove it on
+            // every outcome, success or refusal.
+            const scratch_path = try std.fs.path.join(allocator, &.{ output_dir_for_build, exe_name });
+            defer allocator.free(scratch_path);
             const app_path = app_bundle.assembleMacApp(
                 allocator,
                 output_dir_for_build,
+                input_dir,
                 exe_name,
                 app_decl.?,
                 exe_output_name,
             ) catch |err| switch (err) {
                 // assembleMacApp already printed the refusal — exit cleanly.
-                error.InvalidBundlePath, error.CodesignFailed => std.process.exit(1),
+                error.InvalidBundlePath, error.CodesignFailed, error.InvalidIcon, error.IconNotFound => {
+                    std.fs.cwd().deleteFile(scratch_path) catch {};
+                    std.process.exit(1);
+                },
                 else => return err,
             };
             defer allocator.free(app_path);
-            // The scratch binary is inside the bundle now — remove the staging copy.
-            const scratch_path = try std.fs.path.join(allocator, &.{ output_dir_for_build, exe_name });
-            defer allocator.free(scratch_path);
             std.fs.cwd().deleteFile(scratch_path) catch {};
             try printStdout(allocator, "✓ Bundled: {s}\n", .{app_path});
             try printStdout(allocator, "  open \"{s}\"\n", .{app_path});

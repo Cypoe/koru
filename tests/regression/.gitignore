@@ -56,6 +56,10 @@
 !**/banner.txt
 !**/hello.txt
 
+# Keep bundle fixtures — .icns is the app-icon input the bundle tests carry
+# (908_); binary, but the test IS the bytes it packages.
+!**/*.icns
+
 # Keep suite profiles — named test selections, one glob per line
 !profiles/*.txt
 
@@ -104,3 +108,7 @@
 # `vendored/` so the blanket `*.zig` artifact ignore above still holds elsewhere.
 !**/vendored/**
 !**/vendor.lock
+
+# Generated .app bundles (must come last — !*/ above would otherwise
+# un-ignore the directory and let git descend into it)
+*.app

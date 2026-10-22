@@ -6,13 +6,17 @@ const ast = @import("ast");
 /// It distinguishes between:
 /// - std.compiler:requires → for BACKEND compilation (backend.zig)
 /// - std.build:requires → for OUTPUT binary (output_emitted.zig)
-/// App bundle identity declared via `std/build:app { name:, id:, version: }`.
-/// Collected like a build requirement but consumed as DATA — the emitter turns
-/// it into an Info.plist embedded in __TEXT,__info_plist of the output binary.
+/// App bundle identity declared via `std/build:app { name:, id:, version:,
+/// icon: }`. Collected like a build requirement but consumed as DATA — the
+/// emitter turns it into an Info.plist embedded in __TEXT,__info_plist of the
+/// output binary. `icon` is a path (resolved against the entry file's dir) to
+/// an .icns that `koru bundle` drops in Contents/Resources and names as
+/// CFBundleIconFile.
 pub const AppDecl = struct {
     name: []const u8,
     id: []const u8,
     version: ?[]const u8,
+    icon: ?[]const u8,
 };
 
 pub const CompilerRequiresCollector = struct {
@@ -50,6 +54,7 @@ pub const CompilerRequiresCollector = struct {
             self.allocator.free(decl.name);
             self.allocator.free(decl.id);
             if (decl.version) |v| self.allocator.free(v);
+            if (decl.icon) |v| self.allocator.free(v);
         }
     }
 
@@ -141,6 +146,7 @@ pub const CompilerRequiresCollector = struct {
         var name: ?[]const u8 = null;
         var id: ?[]const u8 = null;
         var version: ?[]const u8 = null;
+        var icon: ?[]const u8 = null;
 
         var pos: usize = 0;
         while (true) {
@@ -157,6 +163,8 @@ pub const CompilerRequiresCollector = struct {
                 id = val;
             } else if (std.mem.eql(u8, key, "version")) {
                 version = val;
+            } else if (std.mem.eql(u8, key, "icon")) {
+                icon = val;
             } else {
                 return appRefusal();
             }
@@ -168,11 +176,13 @@ pub const CompilerRequiresCollector = struct {
             self.allocator.free(prev.name);
             self.allocator.free(prev.id);
             if (prev.version) |v| self.allocator.free(v);
+            if (prev.icon) |v| self.allocator.free(v);
         }
         self.app_decl = .{
             .name = try self.allocator.dupe(u8, name.?),
             .id = try self.allocator.dupe(u8, id.?),
             .version = if (version) |v| try self.allocator.dupe(u8, v) else null,
+            .icon = if (icon) |v| try self.allocator.dupe(u8, v) else null,
         };
     }
 
@@ -181,7 +191,7 @@ pub const CompilerRequiresCollector = struct {
     /// failed compile — never a silently-defaulted identity.
     fn appRefusal() error{AppDeclMalformed} {
         std.fs.File.stderr().writeAll(
-            "error[KORU210]: std/build:app block is malformed — expected `name: \"…\", id: \"…\"` with optional `version: \"…\"`; unknown keys refuse\n",
+            "error[KORU210]: std/build:app block is malformed — expected `name: \"…\", id: \"…\"` with optional `version: \"…\"`, `icon: \"…\"`; unknown keys refuse\n",
         ) catch {};
         return error.AppDeclMalformed;
     }

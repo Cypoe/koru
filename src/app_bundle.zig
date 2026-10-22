@@ -13,12 +13,13 @@ const compiler_requires = @import("compiler_requires");
 /// adhoc-signed — enough for local run + LaunchServices registration; release
 /// signing is a distribution concern and deliberately not defaulted here.
 ///
-/// Icons, entitlements, and non-adhoc signing are the remaining surface a
-/// future option (or a richer std/build:app key) decides — the declaration
-/// refuses unknown keys today, so that space is unclaimed.
+/// `icon:` resolves against the entry file's directory and must be an .icns —
+/// CFBundleIconFile names nothing else. Entitlements and non-adhoc signing
+/// remain the unclaimed surface a future option decides.
 pub fn assembleMacApp(
     allocator: std.mem.Allocator,
     output_dir: []const u8,
+    input_dir: []const u8,
     built_exe_name: []const u8,
     decl: compiler_requires.AppDecl,
     bundle_path_arg: ?[]const u8,
@@ -35,6 +36,24 @@ pub fn assembleMacApp(
     var root = try std.fs.cwd().openDir(output_dir, .{});
     defer root.close();
 
+    // The declared icon must resolve before anything lands on disk — a
+    // refusal after makePath would leave an empty .app shell.
+    var icon_src: ?[]const u8 = null;
+    defer if (icon_src) |s| allocator.free(s);
+    var icon_base: ?[]const u8 = null;
+    if (decl.icon) |ic| {
+        icon_base = std.fs.path.basename(ic);
+        if (!std.mem.endsWith(u8, icon_base.?, ".icns")) {
+            try printStderr(allocator, "error: app icon must be an .icns file (got '{s}') — make one with `iconutil -c icns <iconset>`\n", .{ic});
+            return error.InvalidIcon;
+        }
+        icon_src = try std.fs.path.join(allocator, &.{ input_dir, ic });
+        root.access(icon_src.?, .{}) catch {
+            try printStderr(allocator, "error: app icon not found: {s} (resolved against the input file's directory)\n", .{icon_src.?});
+            return error.IconNotFound;
+        };
+    }
+
     const contents = try std.fs.path.join(allocator, &.{ app_path, "Contents" });
     defer allocator.free(contents);
     const macos_dir = try std.fs.path.join(allocator, &.{ contents, "MacOS" });
@@ -47,7 +66,13 @@ pub fn assembleMacApp(
 
     // The executable inside the bundle is named for CFBundleExecutable — the
     // same value appInfoPlistRequirement baked into the embedded section.
-    const xml = try emit_build_zig.appInfoPlistXml(allocator, decl.name, decl.id, decl.version, decl.name);
+    // Icon likewise: CFBundleIconFile is the basename minus .icns, computed
+    // once via appIconFileName so this plist matches the embedded section.
+    const icon_key: ?[]const u8 = if (decl.icon) |ic|
+        emit_build_zig.appIconFileName(ic)
+    else
+        null;
+    const xml = try emit_build_zig.appInfoPlistXml(allocator, decl.name, decl.id, decl.version, decl.name, icon_key);
     defer allocator.free(xml);
     const plist_path = try std.fs.path.join(allocator, &.{ contents, "Info.plist" });
     defer allocator.free(plist_path);
@@ -56,6 +81,14 @@ pub fn assembleMacApp(
     const pkginfo_path = try std.fs.path.join(allocator, &.{ contents, "PkgInfo" });
     defer allocator.free(pkginfo_path);
     try root.writeFile(.{ .sub_path = pkginfo_path, .data = "APPL????" });
+
+    // The declared icon rides in Resources under its own basename — the
+    // source was validated before any bundle file was created.
+    if (icon_src) |src| {
+        const icon_dst = try std.fs.path.join(allocator, &.{ resources_dir, icon_base.? });
+        defer allocator.free(icon_dst);
+        try root.copyFile(src, root, icon_dst, .{});
+    }
 
     const dst_exe = try std.fs.path.join(allocator, &.{ macos_dir, decl.name });
     defer allocator.free(dst_exe);

@@ -61,8 +61,8 @@
 # io.blk.kz shared shapes) now fingerprint cross-file instead of
 # same-file. The +7/+9 is the file-boundary relabel; the new size-parse
 # code is under the token floor. Re-pinned to measured.
-clusters=1136
-members=1024
+clusters=1179
+members=1066
 # 1039/915: the roll fired on the |? coverage commit ("coverage: |? no
 # longer suppresses panic arms, and refuses where no union exists") —
 # that commit touches src/ checkers, in-repo tests, and a concept frag;
@@ -105,3 +105,11 @@ members=1024
 # (+15 clusters / +14 members) is this commit's new host text —
 # grid.for.kz's transform body and grid.cursor.kz's mint helpers twin
 # the sweep/stored shapes they were split from. Re-pinned to measured.
+# Re-pinned 2026-10-21: the roll fired on the std/build:app icon
+# commit. Decomposed: zero delta from the staged koru_std file —
+# build.app.kz's edit is comment text, and the count is identical
+# (1179/1066) with it stashed. The +43 clusters / +42 members is
+# committed drift under rolls that missed: store.new.kz catch shells
+# (clusters #1/#4), trellis.kz + fmt/io.blk twin var-decls (#2/#3),
+# store.qtail/grid.walk/grid.for catch idioms (#5). Re-pinned to
+# measured; fold targets unchanged.

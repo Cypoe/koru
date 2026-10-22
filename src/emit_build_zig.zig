@@ -132,19 +132,32 @@ fn writePlistEscaped(w: anytype, s: []const u8) !void {
     };
 }
 
+/// CFBundleIconFile's value from a declared `icon:` path — the basename
+/// minus the .icns extension (the convention: file `AppIcon.icns` lands in
+/// Resources, the key says `AppIcon`). Both plist carriers call this so
+/// embedded and disk always agree.
+pub fn appIconFileName(icon_path: []const u8) []const u8 {
+    const base = std.fs.path.basename(icon_path);
+    if (std.mem.endsWith(u8, base, ".icns")) return base[0 .. base.len - ".icns".len];
+    return base;
+}
+
 /// The Info.plist bytes a `std/build:app` declaration compiles down to —
 /// one generator for both carriers so codesign (which cross-checks the
 /// embedded __TEXT,__info_plist against Contents/Info.plist when it signs
 /// a bundle) always sees one identity. `executable` is CFBundleExecutable;
 /// for an unbundled binary the key is inert, but when `koruc bundle` later
-/// packages the same binary it is already correct. Single-line XML: the
-/// same bytes land verbatim in a C string literal and on disk.
+/// packages the same binary it is already correct. `icon` is the basename
+/// the .icns lands under in Contents/Resources — CFBundleIconFile wants it
+/// minus the extension. Single-line XML: the same bytes land verbatim in a
+/// C string literal and on disk.
 pub fn appInfoPlistXml(
     allocator: std.mem.Allocator,
     name: []const u8,
     id: []const u8,
     version: ?[]const u8,
     executable: []const u8,
+    icon: ?[]const u8,
 ) ![]u8 {
     var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
     errdefer buf.deinit(allocator);
@@ -165,6 +178,11 @@ pub fn appInfoPlistXml(
     for (entries) |e| {
         try w.print("<key>{s}</key><string>", .{e.key});
         try writePlistEscaped(w, e.value);
+        try w.writeAll("</string>");
+    }
+    if (icon) |ic| {
+        try w.writeAll("<key>CFBundleIconFile</key><string>");
+        try writePlistEscaped(w, ic);
         try w.writeAll("</string>");
     }
     if (version) |v| {
@@ -188,8 +206,9 @@ pub fn appInfoPlistRequirement(
     name: []const u8,
     id: []const u8,
     version: ?[]const u8,
+    icon: ?[]const u8,
 ) !BuildRequirement {
-    const xml = try appInfoPlistXml(allocator, name, id, version, name);
+    const xml = try appInfoPlistXml(allocator, name, id, version, name, icon);
     defer allocator.free(xml);
 
     var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);

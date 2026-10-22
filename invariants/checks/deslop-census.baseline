@@ -173,5 +173,11 @@ members=950
 # the growth is this diff. The census names zero lines of new code at
 # this tier; the delta is maximal-member re-shaping inside the
 # documented requires-fixture-AST test cluster in compiler_requires.zig.
-clusters=845
+# Re-pinned 845/952 -> 846/952 on the std/build:app icon key: measured
+# own delta +1 cluster — HEAD-only src/ censuses at exactly 845/952
+# (stash-measure-restore). The new member is the icon field's
+# optional-free/key arms twinning the version idiom in
+# compiler_requires.zig — field handling follows the established
+# pattern field-for-field; no foldable clone surfaced.
+clusters=846
 members=952
