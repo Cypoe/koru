@@ -1610,6 +1610,14 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\    fprintf(stderr, "koru: %s\n", what);
         \\    abort();
         \\}
+        \\static long long __koru_intcast(long long v, long long lo, long long hi) {
+        \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
+        \\    return v;
+        \\}
+        \\static unsigned long long __koru_intcast_u(unsigned long long v, unsigned long long lo, unsigned long long hi) {
+        \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
+        \\    return v;
+        \\}
         \\
     );
 

@@ -42,3 +42,23 @@ Whether the partition machinery earns its cost before whole-program parity
 exists at all. Current sequencing: whole-program first — the first green
 cell needs zero partitioning — with the partition as the generalization that
 makes the oracle reach past the sequential fragment.
+
+## Evolve 2026-10-22 — the fragment's vocabulary, not its boundary, was the benchmark wall
+
+Measured on the race corpus: the barrier holding live benchmarks out of the
+C lane was not the fragment boundary (store views, watches, effect arms —
+the refused census names them) but one missing builtin row: `@as`/`@intCast`,
+the canonical counted-loop cast. Widening `lowerCInto` to the cast+arithmetic
+family — `@as`, `@intCast`, `@floatFromInt`, `@divTrunc`, `@rem`, `@mod` —
+moved 004/005 to whole-program parity immediately (`checksum 213186560` on
+both lanes; ccomp ~20× slower, identical answer). The coverage lever is
+expression vocabulary first, construct boundary second; the remaining wall
+(KORU161 store surfaces, `RefusedConstruct` effect arms, `.kcs` raw host
+lines) is the true fragment edge.
+
+The faithfulness constraint that shapes the table: Zig's `@intCast` traps
+out of range, so the lowering spells a checked helper (`__koru_intcast`)
+rather than a bare C cast — a silent truncation would make the verified
+binary less honest than the zig one it oracles. Residuals documented at the
+table: usize sources ≥2^63, bare `@intCast` coercions — divergences the
+race still surfaces as a verdict mismatch, not hidden wrongness.

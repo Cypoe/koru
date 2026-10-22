@@ -3563,13 +3563,23 @@ const ZigExprParser = struct {
     }
 };
 
+const BuiltinArgMatch = struct { inner: []const u8, end: usize };
+
 /// If `text` starting at `pos` is `@intCast( <expr> )`, returns the inner
 /// expression slice and the offset just past its closing paren — else null.
 /// Paren depth alone is right: the argument is one expression, so the first
 /// depth-0 `)` ends it.
-fn matchIntCastText(text: []const u8, pos: usize) ?struct { inner: []const u8, end: usize } {
-    if (!std.mem.startsWith(u8, text[pos..], "@intCast")) return null;
-    var p = pos + "@intCast".len;
+fn matchIntCastText(text: []const u8, pos: usize) ?BuiltinArgMatch {
+    return matchBuiltinArgText(text, pos, "@intCast");
+}
+
+/// If `text` starting at `pos` is `name( <expr> )` for the given `@`-builtin
+/// name, returns the inner expression slice and the offset just past its
+/// closing paren — else null. Paren depth alone is right: the argument is one
+/// expression, so the first depth-0 `)` ends it.
+fn matchBuiltinArgText(text: []const u8, pos: usize, name: []const u8) ?BuiltinArgMatch {
+    if (!std.mem.startsWith(u8, text[pos..], name)) return null;
+    var p = pos + name.len;
     if (p < text.len and exprIdentChar(text[p])) return null;
     while (p < text.len and std.ascii.isWhitespace(text[p])) p += 1;
     if (p >= text.len or text[p] != '(') return null;
@@ -3874,8 +3884,10 @@ test "intCast: @as with a non-intCast second argument is left alone" {
 //                         the access lowers to the preamble's strlen helper.
 //   `if (c) a else b`   — `(c ? a : b)` — the SAME shape jsInlineIf emits;
 //                         C's ternary is spelled identically.
-//   `@builtin(…)`       — refused: the sequential fragment has no builtin
-//                         surface; the caller names it through LowerDiag.
+//   `@builtin(…)`       — casts and arithmetic builtins lower through
+//                         lowerCBuiltin (`@as`/`@intCast`/`@floatFromInt`/
+//                         `@divTrunc`/`@rem`/`@mod`); the rest refuse by
+//                         name through LowerDiag.
 //   reserved words      — `.koru_expr` renames `x` → `x_` for C keywords.
 //
 // Deliberately NOT rewritten (each is a loud failure, never a silent wrong
@@ -4065,6 +4077,193 @@ fn cConcat(
     return r_end;
 }
 
+/// Bounds for `@as(T, @intCast(v))` — the checked-narrowing idiom. Zig's
+/// @intCast traps out of range; a bare C cast would silently truncate where
+/// the zig lane traps, and the oracle would bless a wrong answer exactly
+/// where it is meant to catch one — so narrow targets spell the check via
+/// the preamble's `__koru_intcast` (signed domain) / `__koru_intcast_u`
+/// (unsigned domain: a negative signed source converts huge and trips the
+/// bound — the verdict @intCast gives — while a `usize` source below 2^63
+/// passes unchanged). Targets absent from the table take the plain cast:
+/// the i64 cell domain always fits an i64/isize spelling, and f64 is a
+/// coercion. Residual, documented like the `==`-on-strings gap: a `usize`
+/// source at or above 2^63 traps here where Zig accepts — the text-level
+/// pass carries no source signedness.
+const C_INTCAST_BOUNDS = [_]struct { t: []const u8, lo: []const u8, hi: []const u8, unsigned: bool }{
+    .{ .t = "i8", .lo = "-128", .hi = "127", .unsigned = false },
+    .{ .t = "i16", .lo = "-32768", .hi = "32767", .unsigned = false },
+    .{ .t = "i32", .lo = "-2147483648LL", .hi = "2147483647LL", .unsigned = false },
+    .{ .t = "u8", .lo = "0", .hi = "255", .unsigned = false },
+    .{ .t = "u16", .lo = "0", .hi = "65535", .unsigned = false },
+    .{ .t = "u32", .lo = "0", .hi = "4294967295LL", .unsigned = false },
+    .{ .t = "u64", .lo = "0", .hi = "9223372036854775807ULL", .unsigned = true },
+    .{ .t = "usize", .lo = "0", .hi = "9223372036854775807ULL", .unsigned = true },
+};
+
+/// The C arm's builtin table — `lowerBuiltin`'s sibling for the oracle lane.
+/// Handled: `@as` (plain cast; `T, @intCast(v)` checked; `T, @floatFromInt(v)`
+/// direct so no double rounding), bare `@intCast` (the use site's conversion
+/// carries it), `@floatFromInt`, and the arithmetic builtins whose Koru/C
+/// semantics differ or whose spelling does (`@divTrunc` is C `/`, `@rem` is
+/// C `%`, `@mod` is the euclidean `(a%b+b)%b` the js arm already emits,
+/// `@floatCast` is a plain cast). Every other name returns null — the caller
+/// refuses it through LowerDiag.
+fn lowerCBuiltin(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    var p = at + 1;
+    while (p < text.len and exprIdentChar(text[p])) p += 1;
+    const name = text[at + 1 .. p];
+    if (name.len == 0) return null;
+    if (p >= text.len or text[p] != '(') return null;
+    const args_start = p + 1;
+    var depth: usize = 1;
+    var j = args_start;
+    var split: ?usize = null;
+    while (j < text.len and depth > 0) : (j += 1) {
+        switch (text[j]) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => depth -= 1,
+            ',' => if (depth == 1 and split == null) {
+                split = j;
+            },
+            else => {},
+        }
+    }
+    if (depth != 0) return null;
+    const args_end = j - 1;
+    const first = std.mem.trim(u8, text[args_start .. split orelse args_end], " \t");
+    const second = if (split) |s| std.mem.trim(u8, text[s + 1 .. args_end], " \t") else "";
+    const eql = std.mem.eql;
+
+    if (eql(u8, name, "as")) {
+        const ctype = cTypeOf(first) orelse {
+            if (diag) |d| d.unknown_builtin = text[at..j];
+            return LowerError.UnsupportedBuiltin;
+        };
+        if (matchIntCastText(second, 0)) |ic| {
+            if (ic.end == second.len) {
+                for (C_INTCAST_BOUNDS) |b| {
+                    if (eql(u8, first, b.t)) {
+                        try out.appendSlice(allocator, "((");
+                        try out.appendSlice(allocator, ctype);
+                        try out.appendSlice(allocator, if (b.unsigned) ")(__koru_intcast_u((" else ")(__koru_intcast((");
+                        try lowerCInto(out, allocator, ic.inner, mode, diag);
+                        try out.appendSlice(allocator, "), ");
+                        try out.appendSlice(allocator, b.lo);
+                        try out.appendSlice(allocator, ", ");
+                        try out.appendSlice(allocator, b.hi);
+                        try out.appendSlice(allocator, ")))");
+                        return j;
+                    }
+                }
+                // i64-domain and float targets: the cast itself is faithful —
+                // an i64-domain source always fits (isize shares the domain),
+                // and @intCast inside a float coercion is upstream's error.
+                if (eql(u8, first, "i64") or eql(u8, first, "int") or
+                    eql(u8, first, "number") or eql(u8, first, "isize") or
+                    eql(u8, first, "f64") or eql(u8, first, "f32") or
+                    eql(u8, first, "float") or eql(u8, first, "bool"))
+                {
+                    try out.appendSlice(allocator, "((");
+                    try out.appendSlice(allocator, ctype);
+                    try out.appendSlice(allocator, ")(");
+                    try lowerCInto(out, allocator, ic.inner, mode, diag);
+                    try out.appendSlice(allocator, "))");
+                    return j;
+                }
+                if (diag) |d| d.unknown_builtin = text[at..j];
+                return LowerError.UnsupportedBuiltin;
+            }
+        }
+        if (matchBuiltinArgText(second, 0, "@floatFromInt")) |fc| {
+            if (fc.end == second.len) {
+                // `((T)(v))` directly — routing through `(double)` first would
+                // double-round an f32 target.
+                try out.appendSlice(allocator, "((");
+                try out.appendSlice(allocator, ctype);
+                try out.appendSlice(allocator, ")(");
+                try lowerCInto(out, allocator, fc.inner, mode, diag);
+                try out.appendSlice(allocator, "))");
+                return j;
+            }
+        }
+        try out.appendSlice(allocator, "((");
+        try out.appendSlice(allocator, ctype);
+        try out.appendSlice(allocator, ")(");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    // Bare `@intCast(v)` — the result type is contextual, and the C use site
+    // (index, assignment, argument) already converts. Emitted unadorned: an
+    // out-of-range value converts where zig traps, a divergence the race
+    // still surfaces — refusing would close the counted-loop/index corpus.
+    if (eql(u8, name, "intCast")) {
+        try out.append(allocator, '(');
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.append(allocator, ')');
+        return j;
+    }
+    if (eql(u8, name, "floatFromInt")) {
+        try out.appendSlice(allocator, "((double)(");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "intFromFloat")) {
+        // Truncation toward zero — the same rounding C's cast gives; an
+        // out-of-range float converts where zig's safety check catches it
+        // (race-surfaced, like bare @intCast above).
+        try out.appendSlice(allocator, "((long long)(");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "floatCast")) {
+        try out.appendSlice(allocator, "((double)(");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "divTrunc")) {
+        try out.appendSlice(allocator, "((");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, ") / (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "rem")) {
+        try out.appendSlice(allocator, "((");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, ") % (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    if (eql(u8, name, "mod")) {
+        // Euclidean — Zig's @mod is non-negative for a positive divisor, C's
+        // % keeps the dividend's sign. The js arm's formula, spelled the same.
+        try out.appendSlice(allocator, "((((");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, ") % (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, ")) + (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, ")) % (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
+    return null;
+}
+
 /// Render Koru expression text as C. See the block comment above for the
 /// rewrite set and the deliberate gaps — C is the oracle substrate, so the
 /// bias is verbatim-where-correct over cleverness.
@@ -4147,9 +4346,14 @@ fn lowerCInto(
                 }
             }
         }
-        // `@`-builtins have no C surface in the first fragment — refuse by
-        // name through LowerDiag rather than paste zig builtins into C.
+        // `@`-builtins: the fragment's surface is casts and the arithmetic
+        // builtins below (lowerCBuiltin); everything else refuses by name
+        // through LowerDiag rather than paste zig builtins into C.
         if (c == '@' and i + 1 < text.len and exprIdentChar(text[i + 1])) {
+            if (try lowerCBuiltin(out, allocator, text, i, mode, diag)) |after| {
+                i = after;
+                continue;
+            }
             var e = i + 1;
             while (e < text.len and exprIdentChar(text[e])) e += 1;
             if (diag) |d| d.unknown_builtin = text[i..e];
@@ -4221,6 +4425,26 @@ test "lowerKoruExpr c: concat, len, booleans, inline if" {
 test "lowerKoruExpr c: @builtin refuses by name" {
     const alloc = std.testing.allocator;
     var diag: LowerDiag = .{};
-    try std.testing.expectError(LowerError.UnsupportedBuiltin, lowerKoruExpr(alloc, "@intCast(x)", .c, .koru_expr, &diag));
-    try std.testing.expectEqualStrings("@intCast", diag.unknown_builtin);
+    try std.testing.expectError(LowerError.UnsupportedBuiltin, lowerKoruExpr(alloc, "@bitCast(x)", .c, .koru_expr, &diag));
+    try std.testing.expectEqualStrings("@bitCast", diag.unknown_builtin);
+}
+
+test "lowerKoruExpr c: @as and @intCast lower to casts and checks" {
+    const alloc = std.testing.allocator;
+    var diag: LowerDiag = .{};
+    const checked = try lowerKoruExpr(alloc, "@as(i32, @intCast(i))", .c, .koru_expr, &diag);
+    defer alloc.free(checked);
+    try std.testing.expectEqualStrings("((int32_t)(__koru_intcast((i), -2147483648LL, 2147483647LL)))", checked);
+    const idx = try lowerKoruExpr(alloc, "@as(usize, @intCast(n))", .c, .koru_expr, &diag);
+    defer alloc.free(idx);
+    try std.testing.expectEqualStrings("((uintptr_t)(__koru_intcast_u((n), 0, 9223372036854775807ULL)))", idx);
+    const wide = try lowerKoruExpr(alloc, "@as(i64, @intCast(i))", .c, .koru_expr, &diag);
+    defer alloc.free(wide);
+    try std.testing.expectEqualStrings("((long long)(i))", wide);
+    const bare = try lowerKoruExpr(alloc, "buf[@intCast(i)] = v", .c, .koru_expr, &diag);
+    defer alloc.free(bare);
+    try std.testing.expectEqualStrings("buf[(i)] = v", bare);
+    const m = try lowerKoruExpr(alloc, "@mod(a, @as(i64, @intCast(i)))", .c, .koru_expr, &diag);
+    defer alloc.free(m);
+    try std.testing.expectEqualStrings("((((a) % (((long long)(i)))) + (((long long)(i)))) % (((long long)(i))))", m);
 }
