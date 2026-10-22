@@ -18,6 +18,7 @@ const validate_abstract_impl = @import("validate_abstract_impl");
 const TapCollector = @import("tap_collector").TapCollector;
 const CompilerRequiresCollector = @import("compiler_requires").CompilerRequiresCollector;
 const emit_build_zig = @import("emit_build_zig");
+const app_bundle = @import("app_bundle");
 const PackageRequirementsCollector = @import("package_requires").PackageRequirementsCollector;
 const emit_package_files = @import("emit_package_files");
 const ModuleResolver = @import("module_resolver").ModuleResolver;
@@ -4928,6 +4929,7 @@ const usage_footer =
     \\  koruc init                  # Initialize project in current directory
     \\  koruc run hello.kz          # Compile and run hello.kz
     \\  koruc build hello.kz        # Compile hello.kz to an executable
+    \\  koruc bundle app.kz         # Compile and package as a .app bundle
     \\  koruc hello.kz              # Compile hello.kz to .zig
     \\  koruc -o output.zig app.kz  # Compile to output.zig
     \\  koruc --check app.kz        # Check without emitting
@@ -4943,6 +4945,7 @@ const usage = usage_header ++
     \\  init                 Initialize a new Koru project in the current directory
     \\  build <input.kz>     Compile <input.kz> to an executable
     \\  run <input.kz>       Compile <input.kz> and run it
+    \\  bundle <input.kz>    Compile and package as a macOS .app (needs std/build:app)
     \\  zen                  Display the Zen of Koru
     \\  i, install           Install npm packages from ~std.package:requires.npm
 ++ usage_footer;
@@ -7389,6 +7392,7 @@ pub fn main() !void {
 
     // Check for build or run command
     var run_after_build = false;
+    var bundle_after_build = false;
     var build_executable = true;
     var build_library = false;
     var arg_offset: usize = 1;
@@ -7399,6 +7403,13 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, args[1], "run")) {
         build_executable = true;
         run_after_build = true;
+        arg_offset = 2;
+    } else if (std.mem.eql(u8, args[1], "bundle")) {
+        // Compile like `build`, then package the output as a macOS .app from
+        // its std/build:app declaration. -o names the .app path (must end in
+        // .app); without it the bundle is `<name>.app` beside the build.
+        build_executable = true;
+        bundle_after_build = true;
         arg_offset = 2;
     } else if (std.mem.eql(u8, args[1], "lib")) {
         // A LIBRARY, not a program. The difference is not the output format —
@@ -8790,6 +8801,26 @@ pub fn main() !void {
     const build_requirements_raw = requires_collector.getBuildRequirements();
     const app_decl = requires_collector.getAppDecl();
 
+    // `koru bundle` has no identity fallback: the .app is the declaration made
+    // filesystem-real, so a missing std/build:app refuses rather than minting
+    // placeholder metadata.
+    if (bundle_after_build) {
+        if (@import("builtin").os.tag != .macos) {
+            try printStderr(allocator, "error: koru bundle produces a macOS .app — this host cannot make one\n", .{});
+            return;
+        }
+        if (app_decl == null) {
+            try printStderr(allocator, "error: koru bundle needs an app identity — declare `std/build:app {{ name: \"…\", id: \"com.you.app\" }}` at top level\n", .{});
+            return;
+        }
+        if (exe_output_name) |p| {
+            if (!std.mem.endsWith(u8, p, ".app")) {
+                try printStderr(allocator, "error: bundle output must end in .app (got '{s}')\n", .{p});
+                return;
+            }
+        }
+    }
+
     // Use koru_home from resolver (computed from executable path)
     const koru_lib_path = resolver.koru_home;
 
@@ -9244,8 +9275,12 @@ pub fn main() !void {
 
     // If build_executable is true, compile backend and run full pipeline
     if (build_executable) {
-        // Determine output executable name
-        const exe_name = if (exe_output_name) |name|
+        // Determine output executable name. Under `bundle`, -o names the .app
+        // — the built binary is packaging input, so it gets a scratch name and
+        // is deleted once it is inside Contents/MacOS.
+        const exe_name = if (bundle_after_build)
+            ".koru_bundle_tmp"
+        else if (exe_output_name) |name|
             name
         else
             "a.out";
@@ -9528,6 +9563,29 @@ pub fn main() !void {
                     std.process.exit(1);
                 },
             }
+        }
+
+        // `koru bundle` — the build ran; assemble the .app beside the output.
+        // app_decl is non-null here: the refusal above already fired otherwise.
+        if (bundle_after_build and !is_js_target and !deep_check) {
+            const app_path = app_bundle.assembleMacApp(
+                allocator,
+                output_dir_for_build,
+                exe_name,
+                app_decl.?,
+                exe_output_name,
+            ) catch |err| switch (err) {
+                // assembleMacApp already printed the refusal — exit cleanly.
+                error.InvalidBundlePath, error.CodesignFailed => std.process.exit(1),
+                else => return err,
+            };
+            defer allocator.free(app_path);
+            // The scratch binary is inside the bundle now — remove the staging copy.
+            const scratch_path = try std.fs.path.join(allocator, &.{ output_dir_for_build, exe_name });
+            defer allocator.free(scratch_path);
+            std.fs.cwd().deleteFile(scratch_path) catch {};
+            try printStdout(allocator, "✓ Bundled: {s}\n", .{app_path});
+            try printStdout(allocator, "  open \"{s}\"\n", .{app_path});
         }
     }
 

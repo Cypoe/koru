@@ -280,6 +280,15 @@ pub fn build(b: *std.Build) void {
     });
     emit_build_zig_module.addImport("log", log_module);
 
+    // .app packaging for `koru bundle`
+    const app_bundle_module = b.createModule(.{
+        .root_source_file = b.path("src/app_bundle.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    app_bundle_module.addImport("emit_build_zig", emit_build_zig_module);
+    app_bundle_module.addImport("compiler_requires", compiler_requires_module);
+
     // Package file generation library for package.json, Cargo.toml, etc.
     const emit_package_files_module = b.createModule(.{
         .root_source_file = b.path("src/emit_package_files.zig"),
@@ -546,6 +555,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("compiler_requires", compiler_requires_module);
     exe.root_module.addImport("package_requires", package_requires_module);
     exe.root_module.addImport("emit_build_zig", emit_build_zig_module);
+    exe.root_module.addImport("app_bundle", app_bundle_module);
     exe.root_module.addImport("emit_package_files", emit_package_files_module);
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("module_resolver", module_resolver_module);

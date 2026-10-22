@@ -46,5 +46,25 @@ consumer.
   `[NSBundle mainBundle]`.
 
 What would correct this belief: if input-record bindings learn to serialize their
-bound values (making the Source capture unnecessary), or if `.app` packaging moves
-the plist into a bundle dir and the embedded section becomes the secondary path.
+bound values (making the Source capture unnecessary).
+
+## Evolve — the declaration gained a second consumer (2026-10-22, koru bundle)
+
+`koru bundle <file.k>` assembles `Name.app/Contents/{Info.plist, MacOS/<name>,
+PkgInfo, Resources/}` and adhoc-signs it. Two rulings fell out:
+
+- **One generator, both carriers.** `emit_build_zig.appInfoPlistXml` produces the
+  plist once; `appInfoPlistRequirement` embeds it in `__TEXT,__info_plist` and the
+  bundler writes the same bytes to `Contents/Info.plist`. This is not cosmetic —
+  `codesign` cross-checks the embedded section against the disk plist when it
+  signs a bundle and refuses on mismatch. The "packaging makes the embedded
+  section secondary" outcome this frag predicted is backwards: the embedded
+  plist stays primary and the disk plist is generated to agree with it.
+- **`CFBundleExecutable` is compile-time data.** Because the binary carries the
+  plist before any bundle exists, the bundled executable's name (`MacOS/<name>`)
+  is decided by the declaration, not by packaging flags — `-o` only renames the
+  `.app` directory itself.
+
+The bundled app closes the split-oracle gap the unbundled binary could not: an
+`open`-launched `.app` arrives frontmost under its real name in System Events and
+the full AX tree (unbundled binaries expose no windows to AX at all).

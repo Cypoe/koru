@@ -117,19 +117,65 @@ fn appendRequirementWrapper(
     append(buffer, pos, "(__koru_b, __koru_exe, __koru_target, __koru_optimize);\n\n");
 }
 
-/// Escape one plist string value for its two host syntaxes: XML entities
-/// (`&` `<` `>` `"`) so the value can't break the dict shape, and C `\` so a
-/// backslash in a name can't splice escapes. Control bytes can't spell a C
-/// string portably — they collapse to spaces.
+/// Escape one plist string value for XML: `&` `<` `>` `"` become entities so
+/// the value can't break the dict shape, and control bytes collapse to spaces
+/// (a control byte in a name can't spell a C string portably downstream). C
+/// escaping is NOT this function's job — the requirement's own per-byte pass
+/// handles it.
 fn writePlistEscaped(w: anytype, s: []const u8) !void {
     for (s) |c| switch (c) {
-        '\\' => try w.writeAll("\\\\"),
         '&' => try w.writeAll("&amp;"),
         '<' => try w.writeAll("&lt;"),
         '>' => try w.writeAll("&gt;"),
         '"' => try w.writeAll("&quot;"),
         else => if (c < 0x20) try w.writeByte(' ') else try w.writeByte(c),
     };
+}
+
+/// The Info.plist bytes a `std/build:app` declaration compiles down to —
+/// one generator for both carriers so codesign (which cross-checks the
+/// embedded __TEXT,__info_plist against Contents/Info.plist when it signs
+/// a bundle) always sees one identity. `executable` is CFBundleExecutable;
+/// for an unbundled binary the key is inert, but when `koruc bundle` later
+/// packages the same binary it is already correct. Single-line XML: the
+/// same bytes land verbatim in a C string literal and on disk.
+pub fn appInfoPlistXml(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    id: []const u8,
+    version: ?[]const u8,
+    executable: []const u8,
+) ![]u8 {
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
+    try w.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" ++
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">" ++
+        "<plist version=\"1.0\"><dict>");
+    const Entry = struct { key: []const u8, value: []const u8 };
+    const entries = [_]Entry{
+        .{ .key = "CFBundleIdentifier", .value = id },
+        .{ .key = "CFBundleName", .value = name },
+        .{ .key = "CFBundleDisplayName", .value = name },
+        .{ .key = "CFBundleExecutable", .value = executable },
+        .{ .key = "CFBundlePackageType", .value = "APPL" },
+        .{ .key = "NSPrincipalClass", .value = "NSApplication" },
+        .{ .key = "LSMinimumSystemVersion", .value = "10.13" },
+    };
+    for (entries) |e| {
+        try w.print("<key>{s}</key><string>", .{e.key});
+        try writePlistEscaped(w, e.value);
+        try w.writeAll("</string>");
+    }
+    if (version) |v| {
+        inline for (.{ "CFBundleShortVersionString", "CFBundleVersion" }) |key| {
+            try w.print("<key>{s}</key><string>", .{key});
+            try writePlistEscaped(w, v);
+            try w.writeAll("</string>");
+        }
+    }
+    try w.writeAll("</dict></plist>");
+    return buf.toOwnedSlice(allocator);
 }
 
 /// Synthesize the build requirement for `std/build:app { name:, id:, version: }`:
@@ -143,49 +189,31 @@ pub fn appInfoPlistRequirement(
     id: []const u8,
     version: ?[]const u8,
 ) !BuildRequirement {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 2048);
+    const xml = try appInfoPlistXml(allocator, name, id, version, name);
+    defer allocator.free(xml);
+
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 4096);
     errdefer buf.deinit(allocator);
     const w = buf.writer(allocator);
 
-    // Each `\\` line below lands in generated Zig as a raw multiline literal —
-    // the `\"` it carries arrives in the .c file as a C escape, untouched.
+    // The C literal carries the plist escaped only for C (" and \); the XML
+    // is already entity-escaped by appInfoPlistXml, and single-line XML means
+    // no \n escapes are needed in the literal.
     try w.writeAll(
         \\            if (target.result.os.tag == .macos) {
         \\                const __plist_c = b.addWriteFiles().add("koru_info_plist.c",
         \\                    \\__attribute__((used, section("__TEXT,__info_plist")))
-        \\                    \\const char __koru_info_plist[] =
-        \\                    \\    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-        \\                    \\    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
-        \\                    \\    "<plist version=\"1.0\">"
-        \\                    \\    "<dict>"
-        \\
+        \\                    \\const char __koru_info_plist[] = "
     );
-
-    const Entry = struct { key: []const u8, value: []const u8 };
-    const entries = [_]Entry{
-        .{ .key = "CFBundleIdentifier", .value = id },
-        .{ .key = "CFBundleName", .value = name },
-        .{ .key = "CFBundleDisplayName", .value = name },
-        .{ .key = "CFBundlePackageType", .value = "APPL" },
-        .{ .key = "NSPrincipalClass", .value = "NSApplication" },
-        .{ .key = "LSMinimumSystemVersion", .value = "10.13" },
-    };
-    for (entries) |e| {
-        try w.print("                    \\\\    \"<key>{s}</key><string>", .{e.key});
-        try writePlistEscaped(w, e.value);
-        try w.writeAll("</string>\"\n");
-    }
-    if (version) |v| {
-        inline for (.{ "CFBundleShortVersionString", "CFBundleVersion" }) |key| {
-            try w.print("                    \\\\    \"<key>{s}</key><string>", .{key});
-            try writePlistEscaped(w, v);
-            try w.writeAll("</string>\"\n");
+    for (xml) |c| {
+        switch (c) {
+            '"' => try w.writeAll("\\\""),
+            '\\' => try w.writeAll("\\\\"),
+            else => try w.writeByte(c),
         }
     }
-
     try w.writeAll(
-        \\                    \\    "</dict></plist>"
-        \\                    \\;
+        \\";
         \\                );
         \\                exe.addCSourceFile(.{ .file = __plist_c });
         \\            }
