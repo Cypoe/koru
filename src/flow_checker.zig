@@ -1759,6 +1759,28 @@ pub const FlowChecker = struct {
                 .label_jump => |*lj| try self.checkUnboundReferenceArgs(null, lj.args, cont.location, scope.items, bound),
                 else => {},
             }
+            if (cont.condition) |cond| try self.checkNameTokenScan(cond, cont.location, scope.items, bound);
+            switch (node) {
+                .expression => |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound),
+                .branch_constructor => |*bc| {
+                    if (bc.plain_value) |pv| try self.checkNameTokenScan(pv, cont.location, scope.items, bound);
+                    for (bc.fields) |field| {
+                        if (field.expression_str) |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound);
+                    }
+                },
+                .assignment => |*asgn| {
+                    for (asgn.fields) |field| {
+                        if (field.expression_str) |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound);
+                    }
+                },
+                .conditional => |*cond| try self.checkNameTokenScan(cond.condition, cont.location, scope.items, bound),
+                .switch_result => |*sw| try self.checkNameTokenScan(sw.expression, cont.location, scope.items, bound),
+                .foreach => |*fe| try self.checkNameTokenScan(fe.iterable, cont.location, scope.items, bound),
+                .conditional_block => |*cb| {
+                    if (cb.condition) |c| try self.checkNameTokenScan(c, cont.location, scope.items, bound);
+                },
+                else => {},
+            }
             sites.clearRetainingCapacity();
             try self.collectNodeSites(node, &sites);
             for (sites.items) |site| try scope.append(self.allocator, site.name);
@@ -1785,66 +1807,132 @@ pub const FlowChecker = struct {
         }
         for (args) |arg| {
             if (arg.source_value != null or arg.expression_value != null) continue;
-            const v = arg.value;
-            var in_string = false;
-            var quote: u8 = 0;
-            var i: usize = 0;
-            while (i < v.len) {
-                const ch = v[i];
-                if (in_string) {
-                    if (ch == '\\') {
-                        i += 1;
-                    } else if (ch == quote) {
-                        in_string = false;
+            try self.checkNameTokenScan(arg.value, location, scope, bound);
+        }
+    }
+
+    /// Scan one expression text for references: string literals are skipped
+    /// whole, `.`-led member names and `@`-led builtins are not references.
+    /// KORU108 fires on a name bound SOMEWHERE in the flow but not in scope
+    /// here; KORU181 fires on an unspaced `-` that joined two bound names
+    /// into one undeclared kebab identifier.
+    fn checkNameTokenScan(self: *FlowChecker, v: []const u8, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite)) anyerror!void {
+        var in_string = false;
+        var quote: u8 = 0;
+        var i: usize = 0;
+        while (i < v.len) {
+            const ch = v[i];
+            if (in_string) {
+                if (ch == '\\') {
+                    i += 1;
+                } else if (ch == quote) {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+            if (ch == '"' or ch == '\'') {
+                in_string = true;
+                quote = ch;
+                i += 1;
+                continue;
+            }
+            const is_start = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+            if (!is_start) {
+                i += 1;
+                continue;
+            }
+            var end = i + 1;
+            while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
+            const name = v[i..end];
+            const is_ref = name[0] != '_' and !(i > 0 and v[i - 1] == '@') and !ast.precededByMemberDot(v, i);
+            if (is_ref) {
+                if (bound.get(name)) |site| {
+                    var in_scope = false;
+                    for (scope) |s| {
+                        if (std.mem.eql(u8, s, name)) {
+                            in_scope = true;
+                            break;
+                        }
                     }
-                    i += 1;
-                    continue;
-                }
-                if (ch == '"' or ch == '\'') {
-                    in_string = true;
-                    quote = ch;
-                    i += 1;
-                    continue;
-                }
-                const is_start = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
-                if (!is_start) {
-                    i += 1;
-                    continue;
-                }
-                var end = i + 1;
-                while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
-                const name = v[i..end];
-                const is_ref = name[0] != '_' and !(i > 0 and v[i - 1] == '@') and !ast.precededByMemberDot(v, i);
-                if (is_ref) {
-                    if (bound.get(name)) |site| {
-                        var in_scope = false;
-                        for (scope) |s| {
-                            if (std.mem.eql(u8, s, name)) {
-                                in_scope = true;
+                    if (!in_scope) {
+                        const bindtext = if (site.glyph == ':')
+                            try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
+                        else
+                            try std.fmt.allocPrint(self.allocator, "{c} {s} {s}", .{ site.glyph, site.branch, site.name });
+                        defer self.allocator.free(bindtext);
+                        try self.reporter.addErrorWithHint(
+                            .KORU108,
+                            location.line,
+                            location.column,
+                            "'{s}' is not in scope here — it is bound by '{s}', and an arm's bindings end with that arm",
+                            .{ name, bindtext },
+                            "move this step into the arm body",
+                            .{},
+                        );
+                        return;
+                    }
+                } else if (std.mem.indexOfScalar(u8, name, '-') != null) {
+                    // `-` is a name glyph, so `a-b` is one identifier, not
+                    // subtraction. When the whole name binds nothing but
+                    // every `-`-segment resolves, the author almost surely
+                    // meant `a - b`. `{ a-b: v }` field-name positions (and
+                    // `a-b:` named args) are declarations, not references.
+                    var k = end;
+                    while (k < v.len and (v[k] == ' ' or v[k] == '\t')) k += 1;
+                    const name_position = k < v.len and v[k] == ':';
+                    var in_scope = false;
+                    for (scope) |s| {
+                        if (std.mem.eql(u8, s, name)) {
+                            in_scope = true;
+                            break;
+                        }
+                    }
+                    if (!name_position and !in_scope) {
+                        var all_resolved = true;
+                        var segs = std.mem.splitScalar(u8, name, '-');
+                        while (segs.next()) |seg| {
+                            if (seg.len == 0) {
+                                all_resolved = false;
                                 break;
                             }
+                            if (!bound.contains(seg)) {
+                                var seg_in_scope = false;
+                                for (scope) |s| {
+                                    if (std.mem.eql(u8, s, seg)) {
+                                        seg_in_scope = true;
+                                        break;
+                                    }
+                                }
+                                if (!seg_in_scope) {
+                                    all_resolved = false;
+                                    break;
+                                }
+                            }
                         }
-                        if (!in_scope) {
-                            const bindtext = if (site.glyph == ':')
-                                try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
-                            else
-                                try std.fmt.allocPrint(self.allocator, "{c} {s} {s}", .{ site.glyph, site.branch, site.name });
-                            defer self.allocator.free(bindtext);
+                        if (all_resolved) {
+                            const spaced = try std.mem.join(self.allocator, " - ", blk: {
+                                var parts: std.ArrayList([]const u8) = .empty;
+                                var segs2 = std.mem.splitScalar(u8, name, '-');
+                                while (segs2.next()) |seg| try parts.append(self.allocator, seg);
+                                break :blk parts.items;
+                            });
+                            defer self.allocator.free(spaced);
                             try self.reporter.addErrorWithHint(
-                                .KORU108,
+                                .KORU181,
                                 location.line,
                                 location.column,
-                                "'{s}' is not in scope here — it is bound by '{s}', and an arm's bindings end with that arm",
-                                .{ name, bindtext },
-                                "move this step into the arm body",
-                                .{},
+                                "'{s}' reads as one name, not subtraction — `-` joins identifiers (kebab), and no '{s}' is declared",
+                                .{ name, name },
+                                "write '{s}' for subtraction",
+                                .{spaced},
                             );
                             return;
                         }
                     }
                 }
-                i = end;
             }
+            i = end;
         }
     }
 

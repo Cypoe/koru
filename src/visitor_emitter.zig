@@ -2279,6 +2279,7 @@ pub const VisitorEmitter = struct {
         var value_ctx = emitter.EmissionContext{
             .allocator = self.allocator,
             .main_module_name = self.main_module_name,
+            .impl_event_decl = event,
         };
         if (bc.is_bare_return) {
             // `-> T` bare return: `return <value>;`, no tag.

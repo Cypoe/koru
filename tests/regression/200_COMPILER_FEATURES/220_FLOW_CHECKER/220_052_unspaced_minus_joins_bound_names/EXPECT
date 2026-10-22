@@ -1,0 +1,4 @@
+FRONTEND_COMPILE_ERROR
+CONTAINS error[KORU181
+CONTAINS reads as one name, not subtraction
+CONTAINS write 'q - b' for subtraction

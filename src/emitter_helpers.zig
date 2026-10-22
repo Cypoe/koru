@@ -9067,6 +9067,27 @@ fn escapeBoundNames(ctx: *const EmissionContext, text: []const u8) ![]const u8 {
     var out = text;
     var names_buf: [128][]const u8 = undefined;
     var names_len: usize = 0;
+    // The impl tor's input fields destructure to mangled consts (`x_y`)
+    // without ever entering zig_scope_bindings — every handler ctx carries
+    // the decl, so source its field names here. `x-y` in an impl body
+    // reference otherwise passes through verbatim and Zig reads subtraction.
+    if (ctx.impl_event_decl) |impl_ev| {
+        for (impl_ev.input.fields) |field| {
+            if (!codegen_utils.hasKebab(field.name) and !codegen_utils.needsEscaping(field.name)) continue;
+            if (names_len == names_buf.len) break;
+            if (std.mem.indexOf(u8, out, field.name) == null) continue;
+            var dup = false;
+            for (names_buf[0..names_len]) |seen| {
+                if (std.mem.eql(u8, seen, field.name)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+            names_buf[names_len] = field.name;
+            names_len += 1;
+        }
+    }
     for (ctx.zig_scope_bindings.items) |name| {
         if (!codegen_utils.hasKebab(name) and !codegen_utils.needsEscaping(name)) continue;
         if (names_len == names_buf.len) break;
@@ -13769,8 +13790,22 @@ fn emitEventDeclForModuleFromType(
     try code_emitter.writeIndent();
     try code_emitter.write("_ = &__koru_event_input;\n");
 
-    // ImmediateImpl always has a value (BranchConstructor) - emit it directly
+    // ImmediateImpl always has a value (BranchConstructor) - emit it directly.
+    // Register the field names so escapeBoundNames rewrites kebab/keyword
+    // references (`x-y` → `x_y`); there is no EventDecl here for the ctx to
+    // carry, so the names go through zig_scope_bindings instead.
     {
+        const prev_scope_len = ctx.zig_scope_bindings.items.len;
+        defer while (ctx.zig_scope_bindings.items.len > prev_scope_len) {
+            const popped = ctx.zig_scope_bindings.pop() orelse break;
+            ctx.allocator.free(popped);
+        };
+        if (event_type.input_shape) |shape| {
+            for (shape.fields) |field| {
+                if (!codegen_utils.hasKebab(field.name) and !codegen_utils.needsEscaping(field.name)) continue;
+                try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, field.name));
+            }
+        }
         try code_emitter.writeIndent();
         try code_emitter.write("return ");
         try emitBranchConstructorWithEventType(code_emitter, ctx, &immediate_impl.value, event_type);
@@ -15264,6 +15299,13 @@ fn emitEventDeclForModule(
 
     // First check for impl items (immediate mock or flow body)
     if (findImplByPath(event_items, &event.path)) |found| {
+        // The impl body references input fields by their Koru names while the
+        // destructure above emits the Zig spelling (`x_y`). Carrying the decl
+        // on the ctx lets escapeBoundNames rewrite those references; without
+        // it `x-y` passes through verbatim and Zig reads subtraction.
+        const saved_impl_event_for_scope = ctx.impl_event_decl;
+        ctx.impl_event_decl = event;
+        defer ctx.impl_event_decl = saved_impl_event_for_scope;
         switch (found) {
             .immediate_impl => |ii| {
                 const bc = &ii.value;
