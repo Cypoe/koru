@@ -62,3 +62,26 @@ instrs per 16-group iteration — is the select-arithmetic `symbol` cascade,
 vectorize in this loop context; the arithmetic form is the only lane LLVM
 admits, and it costs what it costs. A per-iteration instruction count on
 the emitted asm remains the only verdict here.
+
+## 2026-10-22 — bound two-way ifs: the select lane LLVM always had
+
+The "arithmetic is the only admitted lane" verdict above is reversed. The
+distinguishing property was never select-arithmetic vs conditional — it is
+**merge arity**. `cond`'s early-return cascade and the else-if expression
+ladder both emit multi-predecessor merges, and SimplifyCFG only folds
+two-pred diamonds — so ladders stay CFG branches forever, and three of the
+four spellings failed for that reason. The admitted spelling: **bound
+two-way ifs** — each level `const r = if (c) x else acc` where `acc` is the
+previous bound const. Every level is a clean 2-pred diamond; SimplifyCFG
+folds each to a `select`, the chain becomes select-accumulating IR, and
+NEON lowers it to `bit`/`bsl` — instruction-identical in kind to clang's
+lowering of Goose's ternary cascade (~8 ops/symbol vs ~12).
+
+The pure-Koru spelling exists: `|> idv8(v: if (c) x else acc): r` — the
+identity tor binds the if-expression to a const step by step. `symbol`
+and `value` in the base64 kernel took this form; encode phase dropped
+171→116ms and the whole-process race went 1.10×→0.98×, with the checksum
+and bad=0 verify unchanged. The general recipe: **whenever a Koru produce
+needs a multi-way value dispatch that must vectorize, spell it as bound
+two-way ifs accumulating through else-arms — never as a cond ladder or an
+else-if expression chain.**
