@@ -44,3 +44,21 @@ emission pronounces. Cousin of `frag-the-assembly-grammar-decides-which-
 hardware-exists` — there the missing path was an asm spelling, here it is an
 ordinary emission shape: the hardware unit exists; the question is always
 whether the emit spells something the vectorizer admits.
+
+## 2026-10-22 — counted-for emission: honest, not faster
+
+Follow-up on the same loop, one level up: the `std/grid:walk` driver's
+`while (s.len >= n and d.len >= m)` reslice guard was suspected of blocking
+unrolling, since clang's equivalent runs 2x unrolled. Rewritten as a counted
+`for (0..@min(len/stride))` it emits identically — and LLVM still keeps 1x
+unroll, zero speed change. The keepable residue of the experiment: the
+counted trip is *real* (computable at entry, provably safe for the raw
+accesses), so the driver joined the for-class the emit-for-not-while gate
+prefers and its exemption row retired. But "guard shape is the unroll
+blocker" joins the falsified list: the residue that remains — ~15 vector
+instrs per 16-group iteration — is the select-arithmetic `symbol` cascade,
+~12 ops vs clang's ~8 on `bit`/`bsl` selects. Three select spellings
+(early-return, nested if-expression, arithmetic-only) all failed to
+vectorize in this loop context; the arithmetic form is the only lane LLVM
+admits, and it costs what it costs. A per-iteration instruction count on
+the emitted asm remains the only verdict here.

@@ -256,18 +256,17 @@
         } }) catch unreachable;
     }
 
-    // THE DRIVER: cursors reslice, the bound rides the loop head. `while
-    // (s.len >= 2 and d.len >= 3)` is the one proof the whole body leans on.
+    // THE DRIVER: cursors reslice, the bound rides the loop head. The trip
+    // count is min(len/stride) — a counted `for` LLVM can unroll/version.
     var drv = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
     for (cursors.items) |c| {
         drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "var {s}: []{s} = {s}__koru_grid_{s}.{s}[0..];\n", .{ c.name, c.ty, c.ns, c.grid, c.field }) catch unreachable) catch unreachable;
     }
-    drv.appendSlice(allocator, "while (") catch unreachable;
     for (cursors.items, 0..) |c, ci| {
-        if (ci > 0) drv.appendSlice(allocator, " and ") catch unreachable;
-        drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}.len >= ({s})", .{ c.name, c.stride }) catch unreachable) catch unreachable;
+        if (ci == 0) drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "var __koru_walktrips = {s}.len / ({s}); _ = &__koru_walktrips;\n", .{ c.name, c.stride }) catch unreachable) catch unreachable else
+            drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "__koru_walktrips = @min(__koru_walktrips, {s}.len / ({s}));\n", .{ c.name, c.stride }) catch unreachable) catch unreachable;
     }
-    drv.appendSlice(allocator, ") {\n    ") catch unreachable;
+    drv.appendSlice(allocator, "for (0..__koru_walktrips) |_| {\n    ") catch unreachable;
     drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}__grid_walkbody_L{d}_event.handler(.{{ {s} }});\n", .{ emit_ns, line, call_input }) catch unreachable) catch unreachable;
     for (cursors.items) |c| {
         drv.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s} = {s}[({s})..];\n", .{ c.name, c.name, c.stride }) catch unreachable) catch unreachable;

@@ -1,12 +1,14 @@
 #!/bin/sh
 # A walk emits a reslicing driver: two `var` cursors off the columns, a
-# `while (s.len >= (n) and d.len >= (m))` guard, the body event fired per
-# step, then `s = s[(n)..]` / `d = d[(m)..]` reslices and a tail call. NO
-# __koru_at anywhere on the walked columns — the borrow's contract carries.
+# counted `for (0..__koru_walktrips)` whose trip count is min(len/stride) —
+# the proof the body's raw s[k]/d[k] accesses lean on, in a form LLVM can
+# unroll — then `s = s[(n)..]` / `d = d[(m)..]` reslices and a tail call.
+# NO __koru_at anywhere on the walked columns — the borrow's contract carries.
 EMIT=$(ls output_emitted.zig 2>/dev/null || ls emitted.zig 2>/dev/null)
 grep -q "var s: \[\]u8 = main_module.__koru_grid_inp.b\[0..\];" "$EMIT" || { echo "src cursor missing"; exit 1; }
 grep -q "var d: \[\]u8 = main_module.__koru_grid_enc.c\[0..\];" "$EMIT" || { echo "dst cursor missing"; exit 1; }
-grep -q "while (s.len >= (2) and d.len >= (3))" "$EMIT" || { echo "window guard missing"; exit 1; }
+grep -q "__koru_walktrips = @min(__koru_walktrips, d.len / (3));" "$EMIT" || { echo "trip count missing"; exit 1; }
+grep -q "for (0..__koru_walktrips) |_| {" "$EMIT" || { echo "counted walk loop missing"; exit 1; }
 grep -q "s = s\[(2)..\];" "$EMIT" || { echo "src reslice missing"; exit 1; }
 grep -q "d = d\[(3)..\];" "$EMIT" || { echo "dst reslice missing"; exit 1; }
 grep -q "__grid_walktail_" "$EMIT" || { echo "tail call missing"; exit 1; }
