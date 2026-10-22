@@ -124,6 +124,8 @@ koru_std/grid.pool.kz	606
 koru_std/grid.read.kz	379
 koru_std/grid.stored.kz	235
 koru_std/grid.sweep.kz	305
+koru_std/grid.slice.kz	163
+koru_std/grid.walk.kz	322
 koru_std/http.kz	215
 koru_std/index.kz	7
 koru_std/indexes.k	15

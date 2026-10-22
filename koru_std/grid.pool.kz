@@ -32,6 +32,43 @@
 // facets — the extent is the alloc call's business and the layout is
 // column for now.
 
+const ast_pool = @import("ast");
+
+const pool_weld = struct {
+    // The module a flow's items live under — module_decl descent, because a
+    // transform inside an imported module must mint its units under the
+    // module's logical name, not the entry file's (115_045).
+    fn home(its: []const ast_pool.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
+        for (its) |pi| {
+            switch (pi) {
+                .flow => |f| {
+                    if (std.mem.eql(u8, f.module, want)) return enclosing;
+                },
+                .module_decl => |m| {
+                    if (home(m.items, want, m.logical_name)) |hit| return hit;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+    fn path(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast_pool.DottedPath {
+        const segs = alloc.alloc([]const u8, 1) catch unreachable;
+        segs[0] = alloc.dupe(u8, name) catch unreachable;
+        return ast_pool.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
+    }
+    // The program's items with module_decl layers flattened — a pool
+    // declared inside an imported module is a decl all the same, and the
+    // column scans below must see it.
+    fn flatItems(alloc: std.mem.Allocator, its: []const ast_pool.Item) []const ast_pool.Item {
+        var flat = std.ArrayList(ast_pool.Item).initCapacity(alloc, 64) catch unreachable;
+        var work = std.ArrayList(ast_pool.Item).initCapacity(alloc, 16) catch unreachable;
+        work.appendSlice(alloc, its) catch unreachable;
+        while (work.pop()) |wi| if (wi == .module_decl) work.appendSlice(alloc, wi.module_decl.items) catch unreachable else flat.append(alloc, wi) catch unreachable;
+        return flat.items;
+    }
+};
+
 ~[keyword|comptime|transform]pub tor pool {
     expr: Expression,
     source: Source,
@@ -271,11 +308,10 @@
     {
         var found = false;
         const head = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = struct {{", .{pool_name}) catch unreachable;
-        for (program.items) |pi| {
+        for (pool_weld.flatItems(allocator, program.items)) |pi| {
             const text = switch (pi) {
                 .host_line => |hl| hl.content,
                 .inline_code => |ic| ic.code,
-                .module_decl => continue, // a pool declared in a moduleDecl is matched below by name scan, unsupported this rung
                 else => continue,
             };
             const at = std.mem.indexOf(u8, text, head) orelse continue;
@@ -313,7 +349,7 @@
         // the declaration itself ran.
         if (!found) {
             const struct_literal = @import("struct_literal");
-            for (program.items) |pi| {
+            for (pool_weld.flatItems(allocator, program.items)) |pi| {
                 if (pi != .flow) continue;
                 const f = pi.flow;
                 const inv2 = f.inv();
@@ -345,32 +381,7 @@
         }
     }
 
-    const home_ns = blk_home: {
-        const Find = struct {
-            fn in(its: []const ast.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
-                for (its) |pi| {
-                    switch (pi) {
-                        .flow => |f| {
-                            if (std.mem.eql(u8, f.module, want)) return enclosing;
-                        },
-                        .module_decl => |m| {
-                            if (in(m.items, want, m.logical_name)) |hit| return hit;
-                        },
-                        else => {},
-                    }
-                }
-                return null;
-            }
-        };
-        break :blk_home Find.in(program.items, flow.module, null) orelse flow.module;
-    };
-    const mk = struct {
-        fn path(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
-    };
+    const home_ns = pool_weld.home(program.items, flow.module, null) orelse flow.module;
 
     // The mint carries the pool name: two lifecycles on one line share
     // flow.location, so line alone does not disambiguate.
@@ -382,7 +393,7 @@
     const dfields = allocator.alloc(ast.Field, 1) catch unreachable;
     dfields[0] = ast.Field{ .name = allocator.dupe(u8, nn) catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
     appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-        .path = mk.path(allocator, home_ns, driver_name),
+        .path = pool_weld.path(allocator, home_ns, driver_name),
         .input = ast.Shape{ .fields = dfields },
         .branches = &[_]ast.Branch{},
         .is_public = false,
@@ -424,7 +435,7 @@
         b.appendSlice(allocator, sz) catch unreachable;
     }
     appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-        .path = mk.path(allocator, home_ns, driver_name),
+        .path = pool_weld.path(allocator, home_ns, driver_name),
         .body = ast.Source{ .text = b.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
         .annotations = &[_][]const u8{},
         .target = allocator.dupe(u8, if (alloc_is_js) "js" else "zig") catch unreachable,
@@ -438,7 +449,7 @@
     const bound_lowered = grid_read.lower(allocator, bound_text, refs.items);
     const call_args = allocator.alloc(ast.Arg, 1) catch unreachable;
     call_args[0] = ast.Arg{ .name = allocator.dupe(u8, nn) catch unreachable, .value = std.fmt.allocPrint(allocator, "@as(i64, @intCast({s}))", .{bound_lowered}) catch unreachable, .had_explicit_label = true };
-    const call = ast.Invocation{ .path = mk.path(allocator, home_ns, driver_name), .args = call_args };
+    const call = ast.Invocation{ .path = pool_weld.path(allocator, home_ns, driver_name), .args = call_args };
     return .{ .transformed = .{
         .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(call, flow.body.continuations, flow.location),
@@ -505,7 +516,7 @@
     var cols = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
     {
         const head = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = struct {{", .{pool_name}) catch unreachable;
-        for (program.items) |pi| {
+        for (pool_weld.flatItems(allocator, program.items)) |pi| {
             const text = switch (pi) {
                 .host_line => |hl| hl.content,
                 .inline_code => |ic| ic.code,
@@ -530,38 +541,13 @@
         }
     }
 
-    const home_ns = blk_home: {
-        const Find = struct {
-            fn in(its: []const ast.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
-                for (its) |pi| {
-                    switch (pi) {
-                        .flow => |f| {
-                            if (std.mem.eql(u8, f.module, want)) return enclosing;
-                        },
-                        .module_decl => |m| {
-                            if (in(m.items, want, m.logical_name)) |hit| return hit;
-                        },
-                        else => {},
-                    }
-                }
-                return null;
-            }
-        };
-        break :blk_home Find.in(program.items, flow.module, null) orelse flow.module;
-    };
-    const mk = struct {
-        fn path(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
-            const segs = alloc.alloc([]const u8, 1) catch unreachable;
-            segs[0] = alloc.dupe(u8, name) catch unreachable;
-            return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
-        }
-    };
+    const home_ns = pool_weld.home(program.items, flow.module, null) orelse flow.module;
 
     const flat = std.mem.replaceOwned(u8, allocator, pool_name, "-", "_") catch unreachable;
     const driver_name = std.fmt.allocPrint(allocator, "__grid_poolfree_{s}_L{d}", .{ flat, flow.location.line }) catch unreachable;
     var appended = std.ArrayList(ast.Item).initCapacity(allocator, 2) catch unreachable;
     appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
-        .path = mk.path(allocator, home_ns, driver_name),
+        .path = pool_weld.path(allocator, home_ns, driver_name),
         .input = ast.Shape{ .fields = &[_]ast.Field{} },
         .branches = &[_]ast.Branch{},
         .is_public = false,
@@ -583,7 +569,7 @@
     const sz = std.fmt.allocPrint(allocator, "{s}__KoruGridT_{s}.__koru_size = 0;\nreturn;", .{ gref.ns, pool_name }) catch unreachable;
     b.appendSlice(allocator, sz) catch unreachable;
     appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
-        .path = mk.path(allocator, home_ns, driver_name),
+        .path = pool_weld.path(allocator, home_ns, driver_name),
         .body = ast.Source{ .text = b.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
         .annotations = &[_][]const u8{},
         .target = allocator.dupe(u8, if (free_is_js) "js" else "zig") catch unreachable,
@@ -591,7 +577,7 @@
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;
 
-    const call = ast.Invocation{ .path = mk.path(allocator, home_ns, driver_name), .args = &[_]ast.Arg{} };
+    const call = ast.Invocation{ .path = pool_weld.path(allocator, home_ns, driver_name), .args = &[_]ast.Arg{} };
     return .{ .transformed = .{
         .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(call, flow.body.continuations, flow.location),

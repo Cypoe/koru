@@ -1,1 +1,4 @@
 total 2
+copied 6
+walked 2
+pool 7

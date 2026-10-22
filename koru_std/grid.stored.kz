@@ -57,8 +57,16 @@
     var body = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
     var inputs = std.ArrayList(ast.Field).initCapacity(allocator, 4) catch unreachable;
     var args = std.ArrayList(ast.Arg).initCapacity(allocator, 4) catch unreachable;
+    var slices = std.ArrayList(grid_slice.SliceRef).initCapacity(allocator, 4) catch unreachable;
+    grid_slice.collect(allocator, program, &slices);
+    slices.appendSlice(allocator, grid_slice.registered()) catch unreachable;
     for (pairs, 0..) |pr, n| {
         const raw_target = std.mem.trim(u8, pr.name, " ");
+        // A BORROWED-SLICE write — `s[i]: v` where `s` names a declared
+        // `std/grid:slice` (the borrow already declined the floor).
+        if (grid_slice.appendWrite(allocator, raw_target, slices.items, names.items, n, pr.value, &inputs, &args, &body)) continue;
+        const xn = std.fmt.allocPrint(allocator, "__koru_gwx{d}", .{n}) catch unreachable;
+        const vn = std.fmt.allocPrint(allocator, "__koru_gwv{d}", .{n}) catch unreachable;
         const t = grid_read.parseTarget(raw_target, names.items) orelse {
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: '{s}' does not address a grid cell - the target is `<grid>[<index>].<field>`, and a store row is written with std/store:stored instead", .{pr.name}) };
         };
@@ -66,15 +74,11 @@
             return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:stored: grid '{s}' has no column '{s}'", .{ t.grid, t.field }) };
         };
 
-        const xn = std.fmt.allocPrint(allocator, "__koru_gwx{d}", .{n}) catch unreachable;
         const yn = std.fmt.allocPrint(allocator, "__koru_gwy{d}", .{n}) catch unreachable;
-        const vn = std.fmt.allocPrint(allocator, "__koru_gwv{d}", .{n}) catch unreachable;
 
-        // The target is lowered by RE-SPELLING it with the parameter names in
-        // the index and handing it to the same `lower` every read goes through.
-        // An lvalue and an rvalue are the same text here, so there is still
-        // only one lowering — the alternative was a second copy of it that
-        // agreed by coincidence, which is the defect this file keeps finding.
+        // The target is lowered by RE-SPELLING it with the parameter names and
+        // handing it to the same `lower` every read goes through — an lvalue
+        // and an rvalue are the same text, so there is still one lowering.
         const respelled = if (t.y != null)
             std.fmt.allocPrint(allocator, "{s}[{s}, {s}].{s}", .{ t.grid, xn, yn, t.field }) catch unreachable
         else
@@ -93,14 +97,11 @@
         const line = std.fmt.allocPrint(allocator, "{s} = {s};\n", .{ lvalue, vn }) catch unreachable;
         body.appendSlice(allocator, line) catch unreachable;
 
-        // AN INDEX ARRIVES AS WHATEVER THE PROGRAM COMPUTED. A `for` binding is
-        // `usize`, a regex named group is `usize`, a cell read is `i64`, a
-        // literal is `comptime_int` — and Zig coerces none of those into an
-        // `i64` struct field. The input is typed `i64` (a grid index is a
-        // number, and the trap is written against a signed one so a negative
-        // index is caught rather than wrapped into the far end of the grid), so
-        // the SITE widens, through the grid's own `__koru_wide` — the same
-        // widening the read path uses, not a second spelling of it.
+        // AN INDEX ARRIVES AS WHATEVER THE PROGRAM COMPUTED — a `for` binding
+        // is `usize`, a cell read is `i64`, a literal is `comptime_int` — so
+        // the input is typed `i64` (the trap is written against a signed index
+        // so a negative one is caught, not wrapped into the far end), and the
+        // SITE widens through the grid's own `__koru_wide`.
         const widen = struct {
             fn at(alloc: std.mem.Allocator, ns: []const u8, grid: []const u8, text: []const u8) []const u8 {
                 return std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_wide({s})", .{ ns, grid, text }) catch unreachable;
@@ -113,8 +114,7 @@
             args.append(allocator, ast.Arg{ .name = yn, .value = widen.at(allocator, (grid_read.find(names.items, t.grid) orelse unreachable).ns, t.grid, grid_read.lower(allocator, ytext, names.items)) }) catch unreachable;
         }
         // `0[<target>]` — an index-typed field: the write CERTIFIES through
-        // the target's own __koru_at (in-range lands, out-of-range traps
-        // here), and no read of the target through this cell pays it again.
+        // the target's own __koru_at, so no read through this cell repays it.
         const idx_t = grid_idx.idxTarget(names.items, t.grid, t.field);
         const vty = if (idx_t) |it| grid_idx.paramType(allocator, names.items, t.grid, it) else col_ty;
         inputs.append(allocator, ast.Field{ .name = vn, .type = allocator.dupe(u8, vty) catch unreachable }) catch unreachable;

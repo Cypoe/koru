@@ -1,0 +1,7 @@
+name: model-corrected
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `correction` — declare that name. Auto-registered by a
+  commit that reached for the sharper word (eb29ebf8).

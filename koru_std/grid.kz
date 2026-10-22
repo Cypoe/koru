@@ -37,12 +37,10 @@
 // that case — the loop constructs the index from `0..size`, so validating it
 // would be validating a fact established one line above. That is the same
 // floor-then-prove-away arc the store's handle check follows.
-// NOT REACTIVE, deliberately, and the seam is left open. Nothing about a grid
-// forbids watches or interceptors — reactivity in Koru is spliced at comptime
-// and costs nothing when nobody listens. But every reactive surface has to
-// answer what it FIRES — a whole-grid clear firing four thousand times is a
-// question no workload has asked yet. It gets designed when one does.
+// NOT REACTIVE, deliberately — reactivity in Koru is spliced at comptime and
+// costs nothing when nobody listens.
 ~part read
+~part slice
 ~part readwalk
 ~part new
 ~part stored
@@ -50,4 +48,5 @@
 ~part sweep
 ~part cursor
 ~part for
+~part walk
 ~part pool
