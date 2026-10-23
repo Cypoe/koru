@@ -77,6 +77,24 @@ as registry-checked, not host strings) for where this sits in the larger type
 story. Pins: 020_060 (payload positive), 510_105 (payload reject), 510_104
 (return reject).
 
+---
+
+**Evolved 2026-10-22 (parse-int widening).** The ruling's own corollary took a
+while to reach `std/string`: a pure-read op must not demand ownership. `parse-int`
+was declared `s: *String<view|instance>` — the owning wrapper — to do nothing but
+read `.data`. That made argv (`[:0]u8`, already borrowed text) need a
+`from-page` alloc + `free` round-trip just to parse a number. `parse-int` now
+takes `s: string<*>` — the same shape `split` and `from-page` already used —
+and argv slices feed it directly. Owned `*String` callers project with `h.data`
+explicitly; the checker's `*String<view!>` → `string<std.string:view!>`
+coercion is a type relation only — the emitter does NOT auto-unwrap host-struct
+fields, so `.data` at the call site is the honest spelling, not a wart to hide
+in codegen. Pin: 240_023 (argv→parse-int direct, plus the `.data` path);
+migration: every `*String` caller updated (610_008, 610_014, 336_004, 690_190,
+810_101, two benchmark mains, osprey wordfreq). Sibling pure-reads still on
+`*String<view|instance>` — `len`, `contains`, `index-of`, `substring` — are the
+same wart awaiting the same one-line widening when someone next trips on them.
+
 
 ---
 

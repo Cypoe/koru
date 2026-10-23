@@ -5,7 +5,7 @@ import std/string
 import std/io
 
 std/string:from-page(text: "42")
-| ok s |> std/string:parse-int(s)
+| ok s |> std/string:parse-int(s: s.data)
     | ok n  |> std/io:print.ln("{{ n:d }}") |> std/string:free(s)
     | err e |> std/io:print.ln("{{ e:s }}") |> std/string:free(s)
 | err _ |> _

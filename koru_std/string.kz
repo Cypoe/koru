@@ -111,13 +111,13 @@ pub const String = struct {
 // borrow-obligation surface; `split` (many parts) waits on the store.
 // ============================================
 
-// Parse the string's text as a base-10 integer.
-~pub tor parse-int { s: *String<view|instance> }
+// Parse the text as a base-10 integer — a read takes `string<*>`, not ownership.
+~pub tor parse-int { s: string<*> }
 | ok i64
 | err string
 
 ~proc parse-int|zig {
-    const n = std.fmt.parseInt(i64, s.data, 10) catch {
+    const n = std.fmt.parseInt(i64, s, 10) catch {
         return .{ .err = "not an integer" };
     };
     return .{ .ok = n };
