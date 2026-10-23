@@ -62,3 +62,30 @@ rather than a bare C cast — a silent truncation would make the verified
 binary less honest than the zig one it oracles. Residuals documented at the
 table: usize sources ≥2^63, bare `@intCast` coercions — divergences the
 race still surfaces as a verdict mismatch, not hidden wrongness.
+
+## Evolve 2026-10-23 — a verbatim row that lies is worse than a refusal
+
+The fragment's vow is "refuse what it cannot spell faithfully" — the cast
+rung kept it by checking `@intCast`. The `==`/`!=` pair broke it differently:
+it emitted *verbatim*, compiled clean under ccomp, and answered pointer
+equality where Koru means value equality — a wrong verdict wearing a green
+emit. Coverage-by-compilation is not coverage-by-verdict; an oracle that
+silently diverges is worse than one that refuses, because the refusal is
+audible.
+
+The fix was possible only because the binding registry (`int_bindings`,
+misnamed — it carries every minted cell's C type) already resolved string
+cells to `const char *`: `__koru_streq` now emits whenever an operand types
+as a string (a `"` literal or a registered binding), and unproven pairs keep
+the verbatim residual rather than guess — the same discipline the wrap ops
+apply to width. The residual class is member-read-vs-member-read and call
+results: narrower than the old all-verbatim gap, never zero at the text
+level.
+
+Found in the same pass, on the *other* lane: the zig emitter's string-eq
+block hard-labeled `blk:`, which collided with any enclosing labeled block
+(arrow bodies, result binds) — string `==` inside an inlined body refused
+natively while the C lane it oracles handled the case fine. Now gensym'd
+`__koru_eq{d}` per emitted block. Lesson folded in: label collisions are a
+class — any generated Zig label that isn't unique-per-emission is a latent
+collision; `__koru_str` stays fixed because it can never nest inside itself.

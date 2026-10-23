@@ -1596,6 +1596,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\static void __koru_stdout_write(const char *s) { fputs(s, stdout); }
         \\static void __koru_stderr_write(const char *s) { fputs(s, stderr); }
         \\static long long __koru_len(const char *s) { return (long long)strlen(s); }
+        \\static int __koru_streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
         \\static char *__koru_str_i64(long long v) {
         \\    char buf[32];
         \\    snprintf(buf, sizeof buf, "%lld", v);

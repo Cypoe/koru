@@ -3018,6 +3018,12 @@ const ZigExprParser = struct {
     allocator: std.mem.Allocator,
     text: []const u8,
     pos: usize,
+    /// Gensym counter for the emitted `__koru_eq{d}` block labels — Zig
+    /// refuses a label nested inside another of the same name, so a plain
+    /// `blk:` collided with every enclosing labeled block (arrow bodies,
+    /// call-result binds) and a fixed name would collide with itself when
+    /// an already-rewritten operand embeds inside a later `==` step.
+    eq_i: usize = 0,
 
     fn skipWs(self: *ZigExprParser) void {
         while (self.pos < self.text.len and std.ascii.isWhitespace(self.text[self.pos])) self.pos += 1;
@@ -3121,9 +3127,10 @@ const ZigExprParser = struct {
                 // non-optional operands this folds back to a plain mem.eql.
                 // Presence bits compare first: null==null is true,
                 // null==value is false without evaluating the payload.
-                const call = std.fmt.allocPrint(self.allocator, "{s}(blk: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); }})", .{
-                    if (negated) "!" else "", left.text, right.text,
+                const call = std.fmt.allocPrint(self.allocator, "{s}(__koru_eq{d}: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :__koru_eq{d} (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); }})", .{
+                    if (negated) "!" else "", self.eq_i, left.text, right.text, self.eq_i,
                 }) catch return ZigExprError.OutOfMemory;
+                self.eq_i += 1;
                 left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
             } else if (!eqOperandNeedsTypeContext(left.text) and !eqOperandNeedsTypeContext(right.text)) {
                 // No literal on either side — `h1 == h2`, `a.b == c.d`,
@@ -3135,9 +3142,10 @@ const ZigExprParser = struct {
                 // and never analyzes the mem.eql arm. Literals are skipped
                 // because `const r = .audio` / `= null` / `= 0` would need
                 // the type context the bare `==` already supplies.
-                const call = std.fmt.allocPrint(self.allocator, "{s}(blk: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: {{ const __koru_ty = @typeInfo(__koru_lp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) {{ const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; }} break :__koru_str false; }}; const __koru_rs = __koru_str: {{ const __koru_ty = @typeInfo(__koru_rp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) {{ const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; }} break :__koru_str false; }}; if (__koru_ls and __koru_rs) {{ const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); }} else break :blk __koru_l == __koru_r; }})", .{
-                    if (negated) "!" else "", left.text, right.text,
+                const call = std.fmt.allocPrint(self.allocator, "{s}(__koru_eq{d}: {{ const __koru_l = {s}; const __koru_r = {s}; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: {{ const __koru_ty = @typeInfo(__koru_lp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) {{ const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; }} break :__koru_str false; }}; const __koru_rs = __koru_str: {{ const __koru_ty = @typeInfo(__koru_rp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) {{ const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; }} break :__koru_str false; }}; if (__koru_ls and __koru_rs) {{ const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :__koru_eq{d} (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); }} else break :__koru_eq{d} __koru_l == __koru_r; }})", .{
+                    if (negated) "!" else "", self.eq_i, left.text, right.text, self.eq_i, self.eq_i,
                 }) catch return ZigExprError.OutOfMemory;
+                self.eq_i += 1;
                 left = .{ .text = call, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
             } else {
                 left = try self.combine(left, right);
@@ -3696,32 +3704,32 @@ fn rewriteZigExprInner(allocator: std.mem.Allocator, text: []const u8) ?[]const 
 // null==value false without touching the payload), comptime @typeInfo
 // dispatch unwraps optionals only when they are optionals. For non-optional
 // operands the emitted code comptime-folds back to a plain mem.eql.
-fn optEqBlock(comptime l: []const u8, comptime r: []const u8) []const u8 {
-    return "(blk: { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); })";
+fn optEqBlock(comptime lbl: []const u8, comptime l: []const u8, comptime r: []const u8) []const u8 {
+    return "(" ++ lbl ++ ": { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_ln = if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l == null else false; const __koru_rn = if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r == null else false; break :" ++ lbl ++ " (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (@typeInfo(@TypeOf(__koru_l)) == .optional) __koru_l.? else __koru_l, if (@typeInfo(@TypeOf(__koru_r)) == .optional) __koru_r.? else __koru_r)); })";
 }
 
 test "string equality: literal RHS in a guard rewrites to optional-aware mem.eql" {
     const out = (try rewriteZigExpr(std.testing.allocator, "cmd == \"start\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings(optEqBlock("cmd", "\"start\""), out);
+    try std.testing.expectEqualStrings(optEqBlock("__koru_eq0", "cmd", "\"start\""), out);
 }
 
 test "string equality: literal LHS and != negates" {
     const out = (try rewriteZigExpr(std.testing.allocator, "\"stop\" != cmd")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("!" ++ comptime optEqBlock("\"stop\"", "cmd"), out);
+    try std.testing.expectEqualStrings("!" ++ comptime optEqBlock("__koru_eq0", "\"stop\"", "cmd"), out);
 }
 
 test "string equality: compound guard rewrites only the string comparison" {
     const out = (try rewriteZigExpr(std.testing.allocator, "name == \"lars\" and age > 40")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings(comptime optEqBlock("name", "\"lars\"") ++ " and age > 40", out);
+    try std.testing.expectEqualStrings(comptime optEqBlock("__koru_eq0", "name", "\"lars\"") ++ " and age > 40", out);
 }
 
 test "string equality: field access operand" {
     const out = (try rewriteZigExpr(std.testing.allocator, "req.path == \"/health\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings(optEqBlock("req.path", "\"/health\""), out);
+    try std.testing.expectEqualStrings(optEqBlock("__koru_eq0", "req.path", "\"/health\""), out);
 }
 
 test "string equality: numeric comparisons are untouched (null)" {
@@ -3758,7 +3766,7 @@ test "remainder: only this operator's operands move (precedence)" {
 test "remainder: a condition carrying both rewrites lowers both" {
     const out = (try rewriteZigExpr(std.testing.allocator, "n % 2 == 0 and cmd == \"go\"")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@rem(n, 2) == 0 and " ++ comptime optEqBlock("cmd", "\"go\""), out);
+    try std.testing.expectEqualStrings("@rem(n, 2) == 0 and " ++ comptime optEqBlock("__koru_eq0", "cmd", "\"go\""), out);
 }
 
 test "remainder: a % inside a string literal does not fire" {
@@ -3798,27 +3806,27 @@ test "string equality: unreadable text returns null, never a guess" {
 test "string equality: rewrites inside builtin-call arguments" {
     const out = (try rewriteZigExpr(std.testing.allocator, "@intFromBool(s == \"x\")")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("@intFromBool(" ++ comptime optEqBlock("s", "\"x\"") ++ ")", out);
+    try std.testing.expectEqualStrings("@intFromBool(" ++ comptime optEqBlock("__koru_eq0", "s", "\"x\"") ++ ")", out);
 }
 
 // The no-literal dispatch shape: both payload types are interrogated at
 // comptime — u8 strings take the presence-aware mem.eql arm, everything
 // else folds to a plain `==`. Literal operands are skipped because they
 // need the result-type context a bare `==` supplies.
-fn optEqDispatchBlock(comptime l: []const u8, comptime r: []const u8) []const u8 {
-    return "(blk: { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: { const __koru_ty = @typeInfo(__koru_lp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) { const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; } break :__koru_str false; }; const __koru_rs = __koru_str: { const __koru_ty = @typeInfo(__koru_rp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) { const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; } break :__koru_str false; }; if (__koru_ls and __koru_rs) { const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :blk (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); } else break :blk __koru_l == __koru_r; })";
+fn optEqDispatchBlock(comptime lbl: []const u8, comptime l: []const u8, comptime r: []const u8) []const u8 {
+    return "(" ++ lbl ++ ": { const __koru_l = " ++ l ++ "; const __koru_r = " ++ r ++ "; const __koru_lo = @typeInfo(@TypeOf(__koru_l)) == .optional; const __koru_ro = @typeInfo(@TypeOf(__koru_r)) == .optional; const __koru_lp = if (__koru_lo) @typeInfo(@TypeOf(__koru_l)).optional.child else @TypeOf(__koru_l); const __koru_rp = if (__koru_ro) @typeInfo(@TypeOf(__koru_r)).optional.child else @TypeOf(__koru_r); const __koru_ls = __koru_str: { const __koru_ty = @typeInfo(__koru_lp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) { const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; } break :__koru_str false; }; const __koru_rs = __koru_str: { const __koru_ty = @typeInfo(__koru_rp); if (__koru_ty == .array) break :__koru_str __koru_ty.array.child == u8; if (__koru_ty == .pointer) { const __koru_ptr = __koru_ty.pointer; if (__koru_ptr.size == .slice and __koru_ptr.child == u8) break :__koru_str true; break :__koru_str __koru_ptr.size == .one and @typeInfo(__koru_ptr.child) == .array and @typeInfo(__koru_ptr.child).array.child == u8; } break :__koru_str false; }; if (__koru_ls and __koru_rs) { const __koru_ln = if (__koru_lo) __koru_l == null else false; const __koru_rn = if (__koru_ro) __koru_r == null else false; break :" ++ lbl ++ " (__koru_ln == __koru_rn) and (__koru_ln or @import(\"std\").mem.eql(u8, if (__koru_lo) __koru_l.? else __koru_l, if (__koru_ro) __koru_r.? else __koru_r)); } else break :" ++ lbl ++ " __koru_l == __koru_r; })";
 }
 
 test "string equality: identifier == identifier lowers to the type-dispatch block" {
     const out = (try rewriteZigExpr(std.testing.allocator, "left == right")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings(comptime optEqDispatchBlock("left", "right"), out);
+    try std.testing.expectEqualStrings(comptime optEqDispatchBlock("__koru_eq0", "left", "right"), out);
 }
 
 test "string equality: identifier != identifier negates the dispatch" {
     const out = (try rewriteZigExpr(std.testing.allocator, "a.b != c.d")).?;
     defer std.testing.allocator.free(out);
-    try std.testing.expectEqualStrings("!" ++ comptime optEqDispatchBlock("a.b", "c.d"), out);
+    try std.testing.expectEqualStrings("!" ++ comptime optEqDispatchBlock("__koru_eq0", "a.b", "c.d"), out);
 }
 
 test "string equality: literal-carrying comparisons stay verbatim" {
@@ -3882,6 +3890,13 @@ test "intCast: @as with a non-intCast second argument is left alone" {
 //   `x.len`             — `__koru_len(x)`: there is no member trick on C, the
 //                         prelude getter the js lane uses has no analogue, so
 //                         the access lowers to the preamble's strlen helper.
+//   `a == b`/`a != b`   — strings: `__koru_streq(a, b)` / `!__koru_streq`.
+//                         Koru's is value equality; C's on `char *` is pointer
+//                         equality — the one verbatim pair that could answer
+//                         WRONG while compiling clean. The rewrite fires when
+//                         an operand types as a string: a `"` literal, or a
+//                         minted binding the registry resolves to
+//                         `const char *`. Numeric pairs take the verbatim op.
 //   `if (c) a else b`   — `(c ? a : b)` — the SAME shape jsInlineIf emits;
 //                         C's ternary is spelled identically.
 //   `@builtin(…)`       — casts and arithmetic builtins lower through
@@ -3893,10 +3908,10 @@ test "intCast: @as with a non-intCast second argument is left alone" {
 //
 // Deliberately NOT rewritten (each is a loud failure, never a silent wrong
 // answer):
-//   - `==` on strings. Koru's is value equality; C's on `char *` is pointer
-//     equality. The honest lowering is `__koru_streq` but choosing it needs
-//     operand types this pass doesn't carry — left verbatim, the gap is
-//     pinned in docs/koru-c-lane-test-plan.md.
+//   - `==`/`!=` where NEITHER operand types as a string — a member-read vs
+//     member-read pair, a call result, or an unminted name can still be a
+//     `char *` this pass cannot see; left verbatim it pointer-compares, the
+//     residual of the old all-verbatim gap, strictly narrower. Never guessed.
 //   - `.{ }` branch constructors and `[_]T{ }` arrays — no C spelling; the
 //     verbatim text fails in ccomp, loudly.
 //   - `+` string promotion (`"" + n`) — there is no coercion in C; a bare
@@ -4073,6 +4088,59 @@ fn cConcat(
     try out.appendSlice(allocator, ", ");
     var r_start = at + 2;
     while (r_start < r_end and std.ascii.isWhitespace(text[r_start])) r_start += 1;
+    try lowerCInto(out, allocator, text[r_start..r_end], mode, diag);
+    try out.append(allocator, ')');
+    return r_end;
+}
+
+/// Operand-side test for the `==`/`!=` string lowering: a `"` literal, or a
+/// bare identifier the binding registry resolves to `const char *`. Anything
+/// else — a call result, a member read, a group, an unminted name — is not
+/// provably a string at this pass, and the caller leaves the op verbatim
+/// rather than guess a pointer-compare onto a string pair or a streq onto an
+/// int pair.
+fn operandIsCStr(operand: []const u8, diag: ?*LowerDiag) bool {
+    const t = std.mem.trim(u8, operand, " \t");
+    if (t.len == 0) return false;
+    if (t[0] == '"') return true;
+    for (t) |ch| {
+        if (!exprIdentChar(ch)) return false;
+    }
+    const d = diag orelse return false;
+    const resolve = d.resolve_int_ctype orelse return false;
+    const ct = resolve(d.int_width_ctx, t) orelse return false;
+    return std.mem.eql(u8, ct, "const char *");
+}
+
+/// `a == b`/`a != b` → `__koru_streq(a, b)` / `!__koru_streq(a, b)` when an
+/// operand types as a string. Same capture discipline as cConcat: both
+/// operands validate before `out` shrinks, so a shape it cannot read — or a
+/// pair where nothing proves a string — falls through verbatim.
+fn cStrEq(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    is_ne: bool,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!?usize {
+    const l_start = trailingOperandStart(out) orelse return null;
+    var l_end = out.items.len;
+    while (l_end > 0 and std.ascii.isWhitespace(out.items[l_end - 1])) l_end -= 1;
+    const r_end = scanOperandEnd(text, at + 2) orelse return null;
+    var r_start = at + 2;
+    while (r_start < r_end and std.ascii.isWhitespace(text[r_start])) r_start += 1;
+    if (!operandIsCStr(out.items[l_start..l_end], diag) and
+        !operandIsCStr(text[r_start..r_end], diag)) return null;
+
+    const lhs = try allocator.dupe(u8, out.items[l_start..l_end]);
+    defer allocator.free(lhs);
+    out.shrinkRetainingCapacity(l_start);
+    if (is_ne) try out.append(allocator, '!');
+    try out.appendSlice(allocator, "__koru_streq(");
+    try out.appendSlice(allocator, lhs);
+    try out.appendSlice(allocator, ", ");
     try lowerCInto(out, allocator, text[r_start..r_end], mode, diag);
     try out.append(allocator, ')');
     return r_end;
@@ -4313,6 +4381,21 @@ fn lowerCInto(
                 continue;
             }
         }
+        // `==`/`!=` — Koru modes only (host text's is genuine C). When an
+        // operand types as a string, cStrEq emits the streq call; otherwise
+        // the pair is verbatim — numeric equality IS C equality.
+        if (mode != .host_text and c == '=' and i + 1 < text.len and text[i + 1] == '=') {
+            if (try cStrEq(out, allocator, text, i, false, mode, diag)) |after| {
+                i = after;
+                continue;
+            }
+        }
+        if (mode != .host_text and c == '!' and i + 1 < text.len and text[i + 1] == '=') {
+            if (try cStrEq(out, allocator, text, i, true, mode, diag)) |after| {
+                i = after;
+                continue;
+            }
+        }
         // Zig WRAPPING operators `*%` `+%` `-%`. Wrapping is defined at the
         // operand's DECLARED int width (i32 `*%` wraps at 2^32) — cWrapOp
         // resolves that width from the caller's binding registry (the
@@ -4435,6 +4518,44 @@ test "lowerKoruExpr c: @builtin refuses by name" {
     var diag: LowerDiag = .{};
     try std.testing.expectError(LowerError.UnsupportedBuiltin, lowerKoruExpr(alloc, "@bitCast(x)", .c, .koru_expr, &diag));
     try std.testing.expectEqualStrings("@bitCast", diag.unknown_builtin);
+}
+
+fn testResolveCtype(ctx: ?*anyopaque, name: []const u8) ?[]const u8 {
+    _ = ctx;
+    if (std.mem.eql(u8, name, "s") or std.mem.eql(u8, name, "t")) return "const char *";
+    if (std.mem.eql(u8, name, "n")) return "long long";
+    return null;
+}
+
+test "lowerKoruExpr c: string ==/!= lower to __koru_streq" {
+    const alloc = std.testing.allocator;
+    var diag: LowerDiag = .{ .resolve_int_ctype = testResolveCtype };
+    const lit = try lowerKoruExpr(alloc, "s == \"x\"", .c, .koru_expr, &diag);
+    defer alloc.free(lit);
+    try std.testing.expectEqualStrings("__koru_streq(s, \"x\")", lit);
+    const both = try lowerKoruExpr(alloc, "s == t", .c, .koru_expr, &diag);
+    defer alloc.free(both);
+    try std.testing.expectEqualStrings("__koru_streq(s, t)", both);
+    const ne = try lowerKoruExpr(alloc, "s != t", .c, .koru_expr, &diag);
+    defer alloc.free(ne);
+    try std.testing.expectEqualStrings("!__koru_streq(s, t)", ne);
+    const lit_ne = try lowerKoruExpr(alloc, "\"a\" != t", .c, .koru_expr, &diag);
+    defer alloc.free(lit_ne);
+    try std.testing.expectEqualStrings("!__koru_streq(\"a\", t)", lit_ne);
+    // Int cells and unresolved pairs keep the verbatim op — no guessing.
+    const num = try lowerKoruExpr(alloc, "n == 3", .c, .koru_expr, &diag);
+    defer alloc.free(num);
+    try std.testing.expectEqualStrings("n == 3", num);
+    const mem = try lowerKoruExpr(alloc, "a.b == c.d", .c, .koru_expr, &diag);
+    defer alloc.free(mem);
+    try std.testing.expectEqualStrings("a.b == c.d", mem);
+    const unres = try lowerKoruExpr(alloc, "x != y", .c, .koru_expr, &diag);
+    defer alloc.free(unres);
+    try std.testing.expectEqualStrings("x != y", unres);
+    // Host text's ==/!= is already C — untouched.
+    const host = try lowerKoruExpr(alloc, "p == q && r != s", .c, .host_text, &diag);
+    defer alloc.free(host);
+    try std.testing.expectEqualStrings("p == q && r != s", host);
 }
 
 test "lowerKoruExpr c: @as and @intCast lower to casts and checks" {

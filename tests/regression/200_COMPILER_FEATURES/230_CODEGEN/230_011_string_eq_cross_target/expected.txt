@@ -1,0 +1,6 @@
+eq_same=1
+eq_diff=0
+ne_diff=1
+ne_same=0
+eq_lit_hit=1
+eq_lit_miss=0
