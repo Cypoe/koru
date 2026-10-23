@@ -1,0 +1,29 @@
+// std/io — C implementation facet.
+//
+// Events are declared across the io module (merged at import). This file
+// holds the `|c` proc bodies: host-C text runs verbatim after the
+// emitFieldBindings prologue. Same facet contract as args.kc.
+
+// The `allocated!` obligation's disposer: `content` arrives `const char *`
+// (the phantom strips to the string cell — it marks the debt, not the
+// shape); the cast back to `void *` is the discharge itself.
+~proc free|c {
+    free((void *)content);
+}
+
+// fgets into the module-static buffer — same contract as readln|zig:
+// the returned slice is valid until the next call, and the trailing
+// newline is stripped before `| line` binds it.
+~proc readln|c {
+    if (fgets(__koru_readln_buf, (int)sizeof __koru_readln_buf, stdin) == NULL) {
+        if (ferror(stdin)) {
+            return (struct std_io_readln_res){ .tag = std_io_readln_tag_failed, .failed = "read failed" };
+        }
+        return (struct std_io_readln_res){ .tag = std_io_readln_tag_eof };
+    }
+    size_t __koru_n = strlen(__koru_readln_buf);
+    if (__koru_n > 0 && __koru_readln_buf[__koru_n - 1] == '\n') {
+        __koru_readln_buf[__koru_n - 1] = '\0';
+    }
+    return (struct std_io_readln_res){ .tag = std_io_readln_tag_line, .line = __koru_readln_buf };
+}

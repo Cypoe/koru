@@ -1,0 +1,4 @@
+count: 3
+a1: hello
+a9: <none>
+line: stdin-line-42

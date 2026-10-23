@@ -259,7 +259,8 @@ pub fn scanDecimalIndex(text: []const u8, pos: *usize) ?usize {
 /// an emitted `long long` param would stop agreeing.
 pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     const t = std.mem.trim(u8, koru_type, " \t");
-    if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8")) return "const char *";
+    if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8") or
+        std.mem.eql(u8, t, "[:0]u8")) return "const char *";
     // Declared-width ints carry their width into C — `i32` is `int32_t`,
     // not the generic cell — so `*%` `+%` `-%` can wrap at the width the
     // declaration promised. `i64`/`int`/`number` stay `long long`: the

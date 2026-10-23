@@ -536,6 +536,13 @@ const Emitter = struct {
             if (std.ascii.isDigit(tag[0])) return null;
             return std.fmt.allocPrint(self.allocator, "{s}struct {s} *", .{ kw, tag }) catch null;
         }
+        // `T<...>` — a phantom-qualified scalar: the obligation marks the
+        // value, not the runtime shape (`string<!allocated>` IS a
+        // `const char *`). The base name resolves the same way;
+        // `List_i64<list!>` strips to `List_i64` and still finds no C type.
+        if (std.mem.indexOfScalar(u8, t, '<')) |lt| {
+            return self.cTypeOfResolved(std.mem.trim(u8, t[0..lt], " \t"));
+        }
         return null;
     }
 
@@ -1676,6 +1683,9 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\static void __koru_stderr_write_f64(double v) { fprintf(stderr, "%g", v); }
         \\static void __koru_stdout_write_f64_prec(double v, int prec) { printf("%.*f", prec, v); }
         \\static void __koru_stderr_write_f64_prec(double v, int prec) { fprintf(stderr, "%.*f", prec, v); }
+        \\static int __koru_argc;
+        \\static char **__koru_argv;
+        \\static char __koru_readln_buf[8192];
         \\static _Noreturn void __koru_unreachable(const char *what) {
         \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
         \\    fprintf(stderr, "koru: %s\n", what);
@@ -1727,7 +1737,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         flow_num += 1;
     }
 
-    try em.write("int main(void) {\n");
+    try em.write("int main(int argc, char **argv) {\n");
+    try em.write("    __koru_argc = argc;\n    __koru_argv = argv;\n");
     for (0..flow_num) |i| {
         try em.writeFmt("    koru_flow_{d}();\n", .{i});
     }

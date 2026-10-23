@@ -161,3 +161,37 @@ net-zero inside the file rather than grown. And `230_003`'s `@sin(0.5)`
 now emits but reaches ccomp verbatim — math builtins are the next
 operand-surface row, gated on `-lm` joining the pinned compile recipe
 (that is a recipe ruling, not a lowering row).
+
+## Evolve 2026-10-23 — `|c` proc bodies live in `.kc` facets; argv/stdin join the preamble
+
+`NoCProcBody` was 236 first-diag rows but not one problem: most name
+program-local tors (`input:*`, `app:*` — the tests' own `|zig`-only impls)
+no stdlib facet can close. The stdlib subset is ~24 rows, and the honest
+split is mechanical-vs-runtime: `set:new`/`map:new`/`fleet:claim`/
+`compress:gzip`/`json:emit.free` each need a whole C runtime surface
+(hash tables, lease files); implementing `new` alone would only move the
+first refusal to `add`. Those stay refused.
+
+The mechanical four landed: `args:count`, `args:get`, `io:free`,
+`io:readln` — and they established the facet pattern rather than widening
+pinned files. `.kc` is already a recognized extension auto-merged by stem
+(file_types.zig), so `args.kc`/`io.kc` carry `~proc name|c { host-C }`
+bodies without touching the at-pin `.kz` roots. The bodies see
+`emitFieldBindings` locals and return `struct <ev>_res` ctors — same
+contract the `[template]` `|c` procs already used, now for runtime procs.
+
+Two preamble/runtime pieces joined: `main` is now
+`int main(int argc, char **argv)` feeding `__koru_argc`/`__koru_argv`
+statics (argv index 0 is the program name, matching `std.os.argv`), and
+`__koru_readln_buf[8192]` backs `readln`'s valid-until-next-call contract.
+Two type mappings joined: `[:0]u8` → `const char *` (a sentinel slice IS
+a C string — `argv[i]` literally), and `cTypeOfResolved` strips phantom
+`<...>` qualifiers — `string<!allocated>` is the string cell; the phantom
+marks the obligation, not the runtime shape. `List_i64<list!>` strips to
+`List_i64` and still finds no C type — the strip only re-homes phantoms.
+
+Measured: 3/3 first-diag rows moved past — `io:free` → `input:wrap`
+(program-local, correctly still refused), `args:count` → `node kind
+'assignment'` (the sequential-fragment wall, a different ruling).
+`230_015_args_readln_cross_target` proves count/get/readln byte-identical
+zig-vs-ccomp through the suite's own ARGS+STDIN feeding.

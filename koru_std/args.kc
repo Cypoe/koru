@@ -1,0 +1,22 @@
+// std/args — C implementation facet.
+//
+// Events are declared in the `args.k` companion (merged at import). This
+// file holds the `|c` proc bodies: the host-C text runs verbatim after the
+// emitFieldBindings prologue (`const <ct> <field> = __koru_in.<field>;`),
+// and argv lands in `__koru_argc`/`__koru_argv` — statics main() fills.
+// Index 0 is the program name, matching the Zig facet's std.os.argv shape.
+//
+// `all`/`rest` carry `[][:0]u8` slice returns — no C slice type exists in
+// the first fragment, so they stay unimplemented here and keep their
+// honest NoCProcBody refusal.
+
+~proc count|c {
+    return (uintptr_t)__koru_argc;
+}
+
+~proc get|c {
+    if (index >= (uintptr_t)__koru_argc) {
+        return (struct std_args_get_res){ .tag = std_args_get_tag_out_of_bounds };
+    }
+    return (struct std_args_get_res){ .tag = std_args_get_tag_arg, .arg = __koru_argv[index] };
+}
