@@ -1,0 +1,19 @@
+name: diagnostics
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when a refusal's text or hint changes what it teaches — a
+  diagnostic that named the operation now performs it, a message that
+  asserted now enumerates. The friction corpus (friction/, mined from
+  session journals) is the field instrument: teach-miss rate is how
+  often the follow-up to a refusal was a guess or a wrong model, and a
+  high-miss family is a message that doesn't teach.
+
+  Witnessed 2026-10-23: KORU021's chain-choke dead-claim (363 corpus
+  rows, 28 teach-misses) said "check the spelling against the stages it
+  should catch" — the hint named the operation without performing it.
+  It now renders the declared alphabet from the same stage_infos the
+  check iterates; 210_198's EXPECT pins the enumeration.
+route: surface
