@@ -89,3 +89,35 @@ natively while the C lane it oracles handled the case fine. Now gensym'd
 `__koru_eq{d}` per emitted block. Lesson folded in: label collisions are a
 class — any generated Zig label that isn't unique-per-emission is a latent
 collision; `__koru_str` stays fixed because it can never nest inside itself.
+
+## Evolve 2026-10-23 — `*X` rides as `struct X *`; opacity is the oracle's job
+
+The largest single `no C type` bucket (~261 first-diagnostic rows) was
+pointer cells — `*Bridge`, `*String`, `*List_i64`, `*Handle`, `*const
+ast.Flow`, `*std/bridge:Bridge<session>` — and it was vocabulary again, not
+boundary: an opaque handle needs no representation, only a name C can
+carry. `cTypeOfResolved` now answers in three shapes: `Tok *` when a proto
+terminal's scalar minted a C typedef (the alias arm also checks the scalar
+HAS a C type — an `i128` terminal's `*Tok` gets `struct Tok *`, not a
+typedef name that does not exist); `int64_t *` for a primitive pointee;
+and `struct <tag> *` — an incomplete type — for everything else. Incomplete
+is the point: declarations, parameters, fields, returns, bindings,
+assignment and `==`/`!=` all compile, while dereference dies inside ccomp.
+The oracle enforces opacity itself; no checker was added. Qualified and
+generic pointees mangle to the same `_`-joined tag the monomorphizer
+spells (`List<i64>` → `List_i64`), so `*std/bridge:Bridge<session>` and
+`*const ast.Flow` name consistent opaque identities.
+
+The discipline is the frag's own vow, applied at the type level: `**X`,
+`[*]X`, `*[4]X`, `*const` alone — a leading non-identifier char means the
+pointee isn't a name, so the resolver refuses rather than silently drop a
+level of indirection.
+
+Companion fix on the zig lane: the runtime variant-proc loop already gated
+foreign-language bodies out of `handler__<variant>` emission (`js`, `cs`,
+`gpu`, …) — `c` was simply absent because no runnable `|c` proc existed
+before. `|c` bodies are C host bytes; the list now carries the tag.
+Measured consequence: of the 261 rows, 152 moved past the pointer
+diagnostic — the next walls named are `NoCProcBody` (the `|c` proc
+surface) and the record/slice/optional families — later rungs, not new
+refusals.

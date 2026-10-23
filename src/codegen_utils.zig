@@ -1385,7 +1385,7 @@ pub const HostShape = struct {
     }
 };
 
-fn exprIdentChar(c: u8) bool {
+pub fn exprIdentChar(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
         (c >= '0' and c <= '9') or c == '_';
 }

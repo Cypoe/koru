@@ -4292,7 +4292,7 @@ pub const VisitorEmitter = struct {
                         // When a non-Zig backend is the default, "foreign" should mean
                         // "any variant whose body isn't valid in self.lang." Address in
                         // Move 3 once the JS emitter is real.
-                        const foreign_targets = [_][]const u8{ "gpu", "js", "cs", "python", "wasm", "glsl" };
+                        const foreign_targets = [_][]const u8{ "gpu", "js", "cs", "c", "python", "wasm", "glsl" };
                         var is_foreign = false;
                         for (foreign_targets) |ft| {
                             if (eql(u8, target, ft)) {

@@ -486,6 +486,56 @@ const Emitter = struct {
         const t = std.mem.trim(u8, koru_type, " \t");
         if (cTypeOf(t)) |ct| return ct;
         if (self.aliases.contains(t)) return t;
+        // `*X` — a pointer cell. A proto terminal's typedef already binds
+        // `X`, so `X *` points at the alias's own spelling; a primitive
+        // pointee spells its real C type (`*i64` → `int64_t *`); anything
+        // else mints `struct <tag> *` — an incomplete type: declarations,
+        // parameters, fields, returns, assignment and `==`/`!=` all compile,
+        // while any dereference dies inside ccomp — the oracle enforces
+        // opacity itself, no check needed here. Qualified and generic
+        // spellings (`*std/bridge:Bridge<session>`, `*ast.Flow`) mangle
+        // non-identifier runs to `_`, matching the monomorphizer's own
+        // `List<i64>` → `List_i64` shape. `**X`, `[*]X` stay refused.
+        if (t.len > 1 and t[0] == '*') {
+            var inner = std.mem.trim(u8, t[1..], " \t");
+            var pointee_const = false;
+            if (inner.len > "const".len and std.mem.startsWith(u8, inner, "const") and
+                (inner["const".len] == ' ' or inner["const".len] == '\t'))
+            {
+                pointee_const = true;
+                inner = std.mem.trim(u8, inner["const".len..], " \t");
+            }
+            // `**X`, `*(*X)`, `*[4]X` — a leading non-identifier char means
+            // the pointee is not a name; refuse rather than drop a level.
+            if (inner.len == 0 or !codegen_utils.exprIdentChar(inner[0])) return null;
+            const kw = if (pointee_const) "const " else "";
+            if (cTypeOf(inner)) |ct|
+                return std.fmt.allocPrint(self.allocator, "{s}{s} *", .{ kw, ct }) catch null;
+            // A proto terminal's `X` spells the typedef only when its scalar
+            // actually minted one (`i64` does, `i128` does not) — otherwise
+            // the same opaque `struct X *` arm applies.
+            if (self.aliases.get(inner)) |scalar| {
+                if (cTypeOf(scalar) != null)
+                    return std.fmt.allocPrint(self.allocator, "{s}{s} *", .{ kw, inner }) catch null;
+            }
+            const buf = self.allocator.alloc(u8, inner.len) catch return null;
+            var n: usize = 0;
+            var pending_sep = false;
+            for (inner) |ch| {
+                if (codegen_utils.exprIdentChar(ch)) {
+                    if (pending_sep) {
+                        buf[n] = '_';
+                        n += 1;
+                        pending_sep = false;
+                    }
+                    buf[n] = ch;
+                    n += 1;
+                } else pending_sep = true;
+            }
+            const tag = buf[0..n];
+            if (std.ascii.isDigit(tag[0])) return null;
+            return std.fmt.allocPrint(self.allocator, "{s}struct {s} *", .{ kw, tag }) catch null;
+        }
         return null;
     }
 
