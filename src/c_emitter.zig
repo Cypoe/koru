@@ -543,6 +543,14 @@ const Emitter = struct {
         if (std.mem.indexOfScalar(u8, t, '<')) |lt| {
             return self.cTypeOfResolved(std.mem.trim(u8, t[0..lt], " \t"));
         }
+        // `Expression`/`Source` — the compiler's own AST types reach input
+        // records on comptime-surface events as flow-through holes: the C
+        // lane never observes the value (any read is already a comptime
+        // boundary), so a nominal one-byte placeholder is the honest cell.
+        // `__koru_comptime_*` tags keep distinct holes from binding across
+        // each other and can never collide with a proto-typedef'd name.
+        if (std.mem.eql(u8, t, "Expression")) return "struct __koru_comptime_Expression";
+        if (std.mem.eql(u8, t, "Source")) return "struct __koru_comptime_Source";
         return null;
     }
 
@@ -1376,6 +1384,14 @@ const Emitter = struct {
     /// field default, else refuse — a missing argument is a shape error the
     /// C lane does not guess on.
     fn emitArgForField(self: *Emitter, inv: *const ast.Invocation, f: ast.Field, fi: usize) CEmitError!void {
+        // A comptime-hole field takes its hole, not the arg text — the
+        // source expression is comptime cargo the C lane never evaluates.
+        if (self.cTypeOfResolved(f.type)) |ct| {
+            if (std.mem.startsWith(u8, ct, "struct __koru_comptime_")) {
+                try self.write("{0}");
+                return;
+            }
+        }
         var positional: usize = 0;
         for (inv.args) |*a| {
             if (a.name.len == 0) {
@@ -1686,6 +1702,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\static int __koru_argc;
         \\static char **__koru_argv;
         \\static char __koru_readln_buf[8192];
+        \\struct __koru_comptime_Expression { char __koru_comptime; };
+        \\struct __koru_comptime_Source { char __koru_comptime; };
         \\static _Noreturn void __koru_unreachable(const char *what) {
         \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
         \\    fprintf(stderr, "koru: %s\n", what);

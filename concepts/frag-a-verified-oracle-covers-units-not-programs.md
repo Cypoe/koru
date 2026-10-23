@@ -217,3 +217,31 @@ the zig lane interrogates the type system while compiling, and C has no
 compile-time type query to lower it *to*. It correctly stays refused: a
 C-side runtime type registry is a ruling about what reflection means
 under the oracle, not a mechanical row.
+
+## Evolve 2026-10-23 — comptime cells are holes; the oracle certifies up TO the boundary
+
+`Expression`/`Source` — the compiler's own AST types — reach input
+records on comptime-surface events as fields the C lane can never
+observe. The faithful cell is a nominal one-byte placeholder
+(`struct __koru_comptime_*`), and the call-site arg emits `{0}` — the
+source expression is comptime cargo, not a C expression. Nominal tags
+keep distinct holes from binding across each other; the `__koru_`
+prefix can never collide with a proto-typedef'd name. `Source<HTML>` —
+`ast.Source` with a source-vocabulary tag — strips to the same cell
+through the phantom arm. 10/10 probed rows moved past to their real
+walls (parser `NoCProcBody`, `i128`, record returns).
+
+The framing this lands in: ccomp certifies everything UP TO the
+boundary — concurrency and raw host lines are not "the oracle fails
+here" but "verification ends here"; what crosses the boundary gets
+Alive2-class static analysis on the far side, not a semantic blessing.
+Every rung so far follows that shape: a wall is a *verified absence*
+(wildcard placeholder, opaque pointer, comptime hole) or an honest
+boundary sentence — never a silently-altered semantic.
+
+The zig implementation answers every representation question that
+survives: slices are `{ptr, len}` fat by definition; `!` effects are
+per-call-site splices into shared scope (fs.kz documents the inline —
+ambient bindings are plain locals, no env exists); `std/rings` is a
+sequential data structure misclassified by the concurrency name-match.
+What is left is machinery, not semantics.
