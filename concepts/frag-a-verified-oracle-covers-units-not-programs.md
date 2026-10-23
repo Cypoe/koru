@@ -195,3 +195,25 @@ Measured: 3/3 first-diag rows moved past — `io:free` → `input:wrap`
 'assignment'` (the sequential-fragment wall, a different ruling).
 `230_015_args_readln_cross_target` proves count/get/readln byte-identical
 zig-vs-ccomp through the suite's own ARGS+STDIN feeding.
+
+## Evolve 2026-10-23 — `u6` rides a `uint8_t`; `@@typeInfo` is a comptime surface, not a lowering row
+
+Two investigations closed one mechanical row. `@@as(u6, @intCast(i))` —
+the spelling the AoC corpus reaches via template splice — failed at
+KORU120 because `lowerCBuiltin`'s `as` arm asks `cTypeOf` for the target
+and `u6` had no cell. The honest carrier is `uint8_t`: a `u6` value only
+enters through `@intCast` (now spelled `__koru_intcast(v, 0, 63)`, the
+same trap zig's safety check fires) or literals the Koru frontend already
+bounds, so the byte cell never sees 64..255. Two rows — `cTypeOf` plus
+`C_INTCAST_BOUNDS` — and 9 AoC files moved past KORU120 to `!` effect
+arms, the resumable-semantics axis that stays parked.
+
+`@@typeInfo` resolves differently: the `@@` prefix is only how a
+template splices a builtin into emitted text — the filter feeds
+`lowerCBuiltin` the plain `@typeInfo`. Every `@@`-spelled builtin shares
+the lane's expression table; KORU120 is the render-time twin of KORU047,
+not a separate fragment. But `@typeInfo` itself is comptime reflection —
+the zig lane interrogates the type system while compiling, and C has no
+compile-time type query to lower it *to*. It correctly stays refused: a
+C-side runtime type registry is a ruling about what reflection means
+under the oracle, not a mechanical row.

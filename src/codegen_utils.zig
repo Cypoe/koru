@@ -275,6 +275,10 @@ pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, t, "u32")) return "uint32_t";
     if (std.mem.eql(u8, t, "u16")) return "uint16_t";
     if (std.mem.eql(u8, t, "u8")) return "uint8_t";
+    // `u6` — the next standard width carries it; values only enter through
+    // `@intCast` (range-checked in C_INTCAST_BOUNDS) or literals the Koru
+    // frontend already bounds, so the byte cell never sees 64..255.
+    if (std.mem.eql(u8, t, "u6")) return "uint8_t";
     if (std.mem.eql(u8, t, "usize")) return "uintptr_t";
     if (std.mem.eql(u8, t, "isize")) return "intptr_t";
     if (std.mem.eql(u8, t, "f64") or std.mem.eql(u8, t, "f32") or
@@ -4163,6 +4167,7 @@ const C_INTCAST_BOUNDS = [_]struct { t: []const u8, lo: []const u8, hi: []const 
     .{ .t = "i8", .lo = "-128", .hi = "127", .unsigned = false },
     .{ .t = "i16", .lo = "-32768", .hi = "32767", .unsigned = false },
     .{ .t = "i32", .lo = "-2147483648LL", .hi = "2147483647LL", .unsigned = false },
+    .{ .t = "u6", .lo = "0", .hi = "63", .unsigned = false },
     .{ .t = "u8", .lo = "0", .hi = "255", .unsigned = false },
     .{ .t = "u16", .lo = "0", .hi = "65535", .unsigned = false },
     .{ .t = "u32", .lo = "0", .hi = "4294967295LL", .unsigned = false },
