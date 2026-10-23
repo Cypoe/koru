@@ -1,12 +1,16 @@
 #!/usr/bin/env sh
 # 015_fleet_mail — the routed turn: held-by → mailbox post → owner drains and
 # executes. Arms:
-#   koru send     — post TURNS turn files (tmp+rename into .fleet/inbox)
-#   koru deliver  — drain: per mail, execute the turn + durable commit + delete
-#   zig baseline  — the same file lifecycle, no interpreter or turn execution
+#   koru send      — post TURNS turn files (tmp+rename into .fleet/inbox)
+#   koru deliver   — drain: per mail, execute the turn + durable commit + delete
+#   koru pipelined — 8 host producers claim-post TURNS mails into a capacity-16
+#                    channel ring; the pump drains them as custody-minted turns
+#                    (+1 warmup mail through the Koru send path seeds transit)
+#   zig baseline   — the same file lifecycle, no interpreter or turn execution
 #
-# Correctness gate: grain hits must equal TURNS (every routed turn committed
-# exactly once) and drain must report TURNS delivered.
+# Correctness gate: grain hits must equal 2*TURNS+1 (every routed turn
+# committed exactly once, both tiers) and file drain must report TURNS
+# delivered.
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -30,14 +34,15 @@ echo "== compile task.kz"
 
 echo "== run koru arms"
 out="$(cd "$work" && ./task_bin)"
-printf '%s\n' "$out" | grep -E 'send:|deliver|hits=|drained|held by|BUG'
+printf '%s\n' "$out" | grep -E 'send:|deliver|pipelined|hits=|drained|held by|BUG'
 
 echo "== correctness gate"
 mb_hits="$(printf '%s\n' "$out" | sed -n 's/^mb hits=\([0-9]*\).*/\1/p')"
 delivered="$(printf '%s\n' "$out" | sed -n 's/^delivered \([0-9]*\) mails.*/\1/p')"
-[ "$mb_hits" = "$TURNS" ] || { echo "mb hits=$mb_hits, want $TURNS"; exit 1; }
+want_hits=$((2 * TURNS + 1))
+[ "$mb_hits" = "$want_hits" ] || { echo "mb hits=$mb_hits, want $want_hits"; exit 1; }
 [ "$delivered" = "$TURNS" ] || { echo "delivered=$delivered, want $TURNS"; exit 1; }
-echo "checksum ok: mb=$mb_hits delivered=$delivered (want $TURNS each)"
+echo "checksum ok: mb=$mb_hits delivered=$delivered (want $want_hits / $TURNS)"
 
 echo "== zig baseline"
 zig run -OReleaseFast "$ROOT/baseline.zig"
