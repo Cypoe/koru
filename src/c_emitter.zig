@@ -88,6 +88,36 @@ fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     return codegen_utils.cTypeOf(koru_type);
 }
 
+/// Identifier-alphabet fold for invented C tags — non-identifier runs
+/// collapse to `_`, a digit or empty first char refuses. `Bridge<session>`,
+/// `std/bridge:B`, `const char *` all land on `_`-joined spellings, the same
+/// shape the monomorphizer's `List<i64>` → `List_i64` uses.
+fn mangleOpaqueName(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 {
+    const buf = allocator.alloc(u8, text.len) catch return null;
+    var n: usize = 0;
+    var pending_sep = false;
+    for (text) |ch| {
+        if (codegen_utils.exprIdentChar(ch)) {
+            if (n == 0 and std.ascii.isDigit(ch)) {
+                allocator.free(buf);
+                return null;
+            }
+            if (pending_sep) {
+                buf[n] = '_';
+                n += 1;
+                pending_sep = false;
+            }
+            buf[n] = ch;
+            n += 1;
+        } else pending_sep = n > 0;
+    }
+    if (n == 0) {
+        allocator.free(buf);
+        return null;
+    }
+    return buf[0..n];
+}
+
 // ---------------------------------------------------------------------------
 // Indexes
 // ---------------------------------------------------------------------------
@@ -430,6 +460,12 @@ const Emitter = struct {
     /// do not resolve, and an unresolved wrap op refuses.
     int_bindings: *std.StringHashMap([]const u8),
 
+    /// Minted slice-cell tag → element member C spelling — a `[]T` type
+    /// reaching declarations registers `struct __koru_slice_<tag>` here;
+    /// the pre-pass over reached events emits the definitions before any
+    /// `_in`/`_res` struct can name one.
+    slice_decls: *std.StringArrayHashMap([]const u8),
+
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
     res_counter: usize = 0,
@@ -518,23 +554,41 @@ const Emitter = struct {
                 if (cTypeOf(scalar) != null)
                     return std.fmt.allocPrint(self.allocator, "{s}{s} *", .{ kw, inner }) catch null;
             }
-            const buf = self.allocator.alloc(u8, inner.len) catch return null;
-            var n: usize = 0;
-            var pending_sep = false;
-            for (inner) |ch| {
-                if (codegen_utils.exprIdentChar(ch)) {
-                    if (pending_sep) {
-                        buf[n] = '_';
-                        n += 1;
-                        pending_sep = false;
-                    }
-                    buf[n] = ch;
-                    n += 1;
-                } else pending_sep = true;
-            }
-            const tag = buf[0..n];
-            if (std.ascii.isDigit(tag[0])) return null;
+            const tag = mangleOpaqueName(self.allocator, inner) orelse return null;
             return std.fmt.allocPrint(self.allocator, "{s}struct {s} *", .{ kw, tag }) catch null;
+        }
+        // `[]T`/`[]const T` — a fat slice cell: `struct __koru_slice_<tag>`
+        // carries `T *ptr` + `uintptr_t len`, the `{ptr, len}` pair the zig
+        // lane's slice is. Byte slices (`[]const u8`, `[]u8`, `[:0]u8`)
+        // returned from cTypeOf above — the string ruling keeps them thin.
+        // The element resolves the ordinary way (a named element mints the
+        // same incomplete `struct <tag>` `*X` uses), so the cell, `.len`
+        // and `xs[i]` compile, while an element use the oracle cannot see
+        // still dies inside ccomp. Resolution only REGISTERS the cell —
+        // the pre-pass over reached events emits the definition ahead of
+        // every struct that names it.
+        if (std.mem.startsWith(u8, t, "[]")) {
+            var elem = std.mem.trim(u8, t[2..], " \t");
+            var const_elem = false;
+            if (elem.len > "const".len and std.mem.startsWith(u8, elem, "const") and
+                (elem["const".len] == ' ' or elem["const".len] == '\t'))
+            {
+                const_elem = true;
+                elem = std.mem.trim(u8, elem["const".len..], " \t");
+            }
+            var elem_ct = self.cTypeOfResolved(elem);
+            if (elem_ct == null) {
+                const etag = mangleOpaqueName(self.allocator, elem) orelse return null;
+                elem_ct = std.fmt.allocPrint(self.allocator, "struct {s}", .{etag}) catch null;
+            }
+            const ct = elem_ct orelse return null;
+            const member = if (const_elem and !std.mem.startsWith(u8, ct, "const "))
+                std.fmt.allocPrint(self.allocator, "const {s}", .{ct}) catch return null
+            else
+                ct;
+            const tag = mangleOpaqueName(self.allocator, member) orelse return null;
+            self.slice_decls.put(tag, member) catch return null;
+            return std.fmt.allocPrint(self.allocator, "struct __koru_slice_{s}", .{tag}) catch null;
         }
         // `T<...>` — a phantom-qualified scalar: the obligation marks the
         // value, not the runtime shape (`string<!allocated>` IS a
@@ -1602,6 +1656,140 @@ fn validateNoZigInC(buf: *const std.ArrayList(u8)) CEmitError!void {
 
 /// Emit C for the given program. Returns a heap-allocated string owned by the
 /// caller's allocator.
+/// Bare-identifier operand bound to a fat slice cell, or not.
+fn isSliceBinding(int_bindings: *std.StringHashMap([]const u8), operand: []const u8) bool {
+    if (operand.len == 0) return false;
+    for (operand) |ch| {
+        if (!codegen_utils.exprIdentChar(ch)) return false;
+    }
+    const ct = int_bindings.get(operand) orelse return false;
+    return std.mem.startsWith(u8, ct, "struct __koru_slice_");
+}
+
+/// `name(` at `text[i]`, not preceded by an identifier char — the
+/// position just past the `(`.
+fn matchCallOpen(text: []const u8, i: usize, name: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, text[i..], name)) return null;
+    if (text[i + name.len] != '(') return null;
+    if (i > 0 and codegen_utils.exprIdentChar(text[i - 1])) return null;
+    return i + name.len + 1;
+}
+
+/// Matching `)` index for `text[open] == '('`, or null unbalanced.
+fn matchParenEnd(text: []const u8, open: usize) ?usize {
+    var depth: usize = 0;
+    var quote: ?u8 = null;
+    var j = open;
+    while (j < text.len) : (j += 1) {
+        const c = text[j];
+        if (quote) |q| {
+            if (c == q) quote = null;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+            continue;
+        }
+        if (c == '(') depth += 1;
+        if (c == ')') {
+            depth -= 1;
+            if (depth == 0) return j;
+        }
+    }
+    return null;
+}
+
+/// First `,` at paren depth 0 — the `__koru_idx` operand/index split.
+fn topLevelComma(text: []const u8) ?usize {
+    var depth: usize = 0;
+    for (text, 0..) |c, j| {
+        if (c == '(' or c == '[' or c == '{') depth += 1;
+        if (c == ')' or c == ']' or c == '}') depth -= 1;
+        if (c == ',' and depth == 0) return j;
+    }
+    return null;
+}
+
+/// `__koru_len(x)`/`__koru_idx(x, i)` spell a type question the lowerer
+/// cannot answer — `.len`/`[i]` are rewritten at transform time, before
+/// the binding registry exists (io placeholders, `{{ }}` text, `|c`
+/// bodies all reach it verbatim). This pass runs where the registry
+/// DOES exist: a bare-identifier operand bound to a fat cell emits its
+/// own member — `(x).len`, `(x).ptr[i]` — and everything else keeps the
+/// strlen getter / plain index. A member or call operand the registry
+/// cannot see stays on the thin default: a slice hiding behind
+/// `a.b[i]` is the same honest oracle refusal it was before slices.
+fn rewriteSliceAccessors(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    int_bindings: *std.StringHashMap([]const u8),
+) !void {
+    var i: usize = 0;
+    var quote: ?u8 = null;
+    while (i < text.len) {
+        const c = text[i];
+        if (quote) |q| {
+            try out.append(allocator, c);
+            if (c == '\\' and i + 1 < text.len) {
+                try out.append(allocator, text[i + 1]);
+                i += 2;
+                continue;
+            }
+            if (c == q) quote = null;
+            i += 1;
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            quote = c;
+            try out.append(allocator, c);
+            i += 1;
+            continue;
+        }
+        if (matchCallOpen(text, i, "__koru_len")) |body_start| {
+            const call_end = matchParenEnd(text, body_start - 1) orelse {
+                try out.append(allocator, c);
+                i += 1;
+                continue;
+            };
+            const operand = std.mem.trim(u8, text[body_start..call_end], " \t\n");
+            if (isSliceBinding(int_bindings, operand)) {
+                try out.append(allocator, '(');
+            } else {
+                try out.appendSlice(allocator, "__koru_len_str(");
+            }
+            try rewriteSliceAccessors(out, allocator, operand, int_bindings);
+            try out.appendSlice(allocator, if (isSliceBinding(int_bindings, operand)) ").len" else ")");
+            i = call_end + 1;
+            continue;
+        }
+        if (matchCallOpen(text, i, "__koru_idx")) |body_start| {
+            const call_end = matchParenEnd(text, body_start - 1) orelse {
+                try out.append(allocator, c);
+                i += 1;
+                continue;
+            };
+            const body = text[body_start..call_end];
+            const comma = topLevelComma(body) orelse {
+                try out.appendSlice(allocator, text[i .. call_end + 1]);
+                i = call_end + 1;
+                continue;
+            };
+            const operand = std.mem.trim(u8, body[0..comma], " \t\n");
+            const index = std.mem.trim(u8, body[comma + 1 ..], " \t\n");
+            try out.append(allocator, '(');
+            try rewriteSliceAccessors(out, allocator, operand, int_bindings);
+            try out.appendSlice(allocator, if (isSliceBinding(int_bindings, operand)) ").ptr[" else ")[");
+            try rewriteSliceAccessors(out, allocator, index, int_bindings);
+            try out.append(allocator, ']');
+            i = call_end + 1;
+            continue;
+        }
+        try out.append(allocator, c);
+        i += 1;
+    }
+}
+
 pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError![]const u8 {
     if (library) {
         std.debug.print("error[KORU047]: C lane: --library emission is outside the first fragment\n", .{});
@@ -1656,6 +1844,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     var int_bindings = std.StringHashMap([]const u8).init(allocator);
     defer int_bindings.deinit();
+    var slice_decls = std.StringArrayHashMap([]const u8).init(allocator);
+    defer slice_decls.deinit();
     var em = Emitter{
         .allocator = allocator,
         .buf = &buf,
@@ -1665,6 +1855,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         .impl_flows = &impl_flows,
         .aliases = &aliases,
         .int_bindings = &int_bindings,
+        .slice_decls = &slice_decls,
     };
 
     // Preamble — includes plus the runtime surface the lowering and the |c
@@ -1686,7 +1877,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\}
         \\static void __koru_stdout_write(const char *s) { fputs(s, stdout); }
         \\static void __koru_stderr_write(const char *s) { fputs(s, stderr); }
-        \\static long long __koru_len(const char *s) { return (long long)strlen(s); }
+        \\static long long __koru_len_str(const char *s) { return (long long)strlen(s); }
         \\static int __koru_streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
         \\static char *__koru_str_i64(long long v) {
         \\    char buf[32];
@@ -1723,6 +1914,21 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     try emitCHostLines(&em, program.items);
     try emitTopLevelInlineCode(&em, program.items);
     try emitFileScopeBodies(&em, program.items);
+
+    // Slice-cell pre-pass — resolving every declared type on the reached
+    // events registers each `struct __koru_slice_<tag>` it names, so the
+    // definitions emit before any `_in`/`_res` struct or prototype can
+    // spell one.
+    for (reached_events.items) |event| {
+        for (event.input.fields) |f| _ = em.cTypeOfResolved(f.type);
+        if (event.return_type) |rt| _ = em.cTypeOfResolved(rt);
+        for (event.branches) |*b| {
+            for (b.payload.fields) |f| _ = em.cTypeOfResolved(f.type);
+        }
+    }
+    for (slice_decls.keys(), slice_decls.values()) |tag, member| {
+        try em.writeFmt("struct __koru_slice_{s} {{ {s} *ptr; uintptr_t len; }};\n", .{ tag, member });
+    }
 
     for (reached_events.items) |event| {
         try em.emitEventDeclaration(event);
@@ -1762,6 +1968,11 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     }
     try em.write("    return 0;\n}\n");
 
-    try validateNoZigInC(&buf);
-    return buf.toOwnedSlice(allocator);
+    var rewritten: std.ArrayList(u8) = .empty;
+    errdefer rewritten.deinit(allocator);
+    try rewriteSliceAccessors(&rewritten, allocator, buf.items, &int_bindings);
+    buf.deinit(allocator);
+    buf = .empty;
+    try validateNoZigInC(&rewritten);
+    return rewritten.toOwnedSlice(allocator);
 }

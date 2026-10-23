@@ -3978,8 +3978,11 @@ fn trailingOperandStart(out: *const std.ArrayList(u8)) ?usize {
         if (depth != 0) return null;
         // The group may be a call's argument list — `f(x) ++ y` wants the
         // whole `f(x)`, and a nested `__koru_concat(...) ++ z` wants the
-        // whole call. Extend back over the callee identifier.
-        while (l > 0 and exprIdentChar(out.items[l - 1])) l -= 1;
+        // whole call. Extend back over the callee identifier AND its
+        // `.`-joined receiver — `a.f(x)`/`xs.ptr[i]` is one operand;
+        // stopping at `f(x)`/`ptr[i]` would splice the lowering onto the
+        // receiver (`a.__koru_concat(f(x), y)`) instead of around it.
+        while (l > 0 and (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == '.')) l -= 1;
     } else if (last == '"' or last == '\'') {
         // Closing quote at the tail — walk back to the matching opener,
         // skipping escaped quotes (odd backslash run = escaped).
@@ -4358,6 +4361,8 @@ fn lowerCInto(
 ) LowerError!void {
     var i: usize = 0;
     var quote: ?u8 = null;
+    var bracket_is_literal: [64]bool = undefined;
+    var bracket_depth: usize = 0;
     while (i < text.len) {
         const c = text[i];
         if (quote) |q| {
@@ -4466,8 +4471,11 @@ fn lowerCInto(
         }
         // `x.len` → `__koru_len(x)`. Koru's `.len` reads through a preamble
         // getter on the js lane; C has no member trick, so the access lowers
-        // to a call on the operand. koru modes only — host_text `.len` is
-        // already-C text (a struct field) and stays.
+        // to a marker call on the operand — the emitter's final pass
+        // resolves it by declared type: `(x).len` for a fat slice cell,
+        // `__koru_len_str(x)` (strlen) for everything else. koru modes
+        // only — host_text `.len` is already-C text (a struct field) and
+        // stays.
         if (mode != .host_text and c == '.' and
             i + 4 <= text.len and std.mem.eql(u8, text[i + 1 .. i + 4], "len") and
             (i + 4 >= text.len or !exprIdentChar(text[i + 4])))
@@ -4482,6 +4490,49 @@ fn lowerCInto(
                 try out.appendSlice(allocator, lhs);
                 try out.append(allocator, ')');
                 i += 4;
+                continue;
+            }
+        }
+        // `x[i]` → `__koru_idx(x, i)` — a marker call the emitter's final
+        // pass resolves by declared type: `(x).ptr[i]` for a fat slice
+        // cell, `(x)[i]` for everything else (strings, plain pointers).
+        // LITERAL position — no operand closer precedes — is a Koru list
+        // literal: left verbatim, the oracle refuses it by name.
+        // koru modes only; host_text `[` is genuine C indexing.
+        if (mode != .host_text and c == '[') {
+            var l = out.items.len;
+            while (l > 0 and std.ascii.isWhitespace(out.items[l - 1])) l -= 1;
+            const operand_closes = l > 0 and
+                (exprIdentChar(out.items[l - 1]) or out.items[l - 1] == ')' or
+                    out.items[l - 1] == ']' or out.items[l - 1] == '"' or
+                    out.items[l - 1] == '\'' or out.items[l - 1] == '.');
+            if (bracket_depth < bracket_is_literal.len) {
+                bracket_is_literal[bracket_depth] = !operand_closes;
+                bracket_depth += 1;
+                if (operand_closes) {
+                    const l_start = trailingOperandStart(out) orelse {
+                        try out.append(allocator, '[');
+                        i += 1;
+                        continue;
+                    };
+                    var l_end = out.items.len;
+                    while (l_end > 0 and std.ascii.isWhitespace(out.items[l_end - 1])) l_end -= 1;
+                    const operand = try allocator.dupe(u8, out.items[l_start..l_end]);
+                    defer allocator.free(operand);
+                    out.shrinkRetainingCapacity(l_start);
+                    try out.appendSlice(allocator, "__koru_idx(");
+                    try out.appendSlice(allocator, operand);
+                    try out.appendSlice(allocator, ", ");
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        if (c == ']' and bracket_depth > 0) {
+            bracket_depth -= 1;
+            if (!bracket_is_literal[bracket_depth]) {
+                try out.append(allocator, ')');
+                i += 1;
                 continue;
             }
         }
@@ -4517,6 +4568,31 @@ test "lowerKoruExpr c: concat, len, booleans, inline if" {
     const if_out = try lowerKoruExpr(alloc, "if (p and not q) a else b", .c, .koru_expr, &diag);
     defer alloc.free(if_out);
     try std.testing.expectEqualStrings("(p && ! q ? a  :  b)", if_out);
+}
+
+test "lowerKoruExpr c: indexing wraps __koru_idx, literal stays" {
+    const alloc = std.testing.allocator;
+    var diag: LowerDiag = .{};
+    // Operand-close `[` — the emitter's final pass resolves slice vs
+    // string; the lowerer only marks the index shape.
+    const idx = try lowerKoruExpr(alloc, "xs[i] + ys[0]", .c, .koru_expr, &diag);
+    defer alloc.free(idx);
+    try std.testing.expectEqualStrings("__koru_idx(xs, i) + __koru_idx(ys, 0)", idx);
+    // Member/call operands wrap whole — `r.items[i]`, `f()[j]`.
+    const mem = try lowerKoruExpr(alloc, "r.items[i]", .c, .koru_expr, &diag);
+    defer alloc.free(mem);
+    try std.testing.expectEqualStrings("__koru_idx(r.items, i)", mem);
+    const call = try lowerKoruExpr(alloc, "f()[j]", .c, .koru_expr, &diag);
+    defer alloc.free(call);
+    try std.testing.expectEqualStrings("__koru_idx(f(), j)", call);
+    // Literal-position `[` is a Koru list literal — verbatim.
+    const lit = try lowerKoruExpr(alloc, "[1, 2]", .c, .koru_expr, &diag);
+    defer alloc.free(lit);
+    try std.testing.expectEqualStrings("[1, 2]", lit);
+    // Host text `[` is genuine C indexing — untouched.
+    const host = try lowerKoruExpr(alloc, "buf[i]", .c, .host_text, &diag);
+    defer alloc.free(host);
+    try std.testing.expectEqualStrings("buf[i]", host);
 }
 
 test "lowerKoruExpr c: @builtin refuses by name" {
@@ -4578,7 +4654,7 @@ test "lowerKoruExpr c: @as and @intCast lower to casts and checks" {
     try std.testing.expectEqualStrings("((long long)(i))", wide);
     const bare = try lowerKoruExpr(alloc, "buf[@intCast(i)] = v", .c, .koru_expr, &diag);
     defer alloc.free(bare);
-    try std.testing.expectEqualStrings("buf[(i)] = v", bare);
+    try std.testing.expectEqualStrings("__koru_idx(buf, (i)) = v", bare);
     const m = try lowerKoruExpr(alloc, "@mod(a, @as(i64, @intCast(i)))", .c, .koru_expr, &diag);
     defer alloc.free(m);
     try std.testing.expectEqualStrings("((((a) % (((long long)(i)))) + (((long long)(i)))) % (((long long)(i))))", m);

@@ -245,3 +245,21 @@ per-call-site splices into shared scope (fs.kz documents the inline —
 ambient bindings are plain locals, no env exists); `std/rings` is a
 sequential data structure misclassified by the concurrency name-match.
 What is left is machinery, not semantics.
+
+Slices landed the same way (rung 7): `[]T`/`[]const T` for `T != u8`
+are nominal fat cells — `struct __koru_slice_<tag> { T *ptr;
+uintptr_t len; }`, tag derived from the member's C spelling — emitted
+before the event decls that name them, and `[]u8`/`string` stay thin by
+the established C-string precedent. `.len` and `[i]` lower to marker
+calls (`__koru_len`, `__koru_idx`) at transform time and are resolved
+by a final emitter pass where the binding registry exists: a slice
+operand emits `(x).len`/`(x).ptr[i]`, everything else keeps
+`__koru_len_str`/plain index. The `_Generic` alternative was measured
+and rejected — CompCert eagerly type-checks every association arm, so
+a dispatch macro cannot safely mix cell shapes. `std/args:all`/`rest`
+return the argv slice cell from `.kc` bodies; `240_020`/`240_021`/
+`020_026` now run green on the c lane. `140_019` moved past its type
+wall to an honest `NoCProcBody` (program-local proc). What still
+refuses: member/call-operand indexing the registry cannot see
+(`a.b[i]` — honest oracle refusal, same as before), Koru list literals
+(no type inference), `for` over slices (out of cell+accessor scope).
