@@ -1,8 +1,8 @@
 ---
 type: belief
 id: frag-a-scope-must-describe-its-own-vocabulary
-provenance: 430_064 — scope-vocabulary, the enumeration surface for a model driving the interpreter; evolved 430_058 — the manifest record minted at scope creation
-ts: 2026-08-16
+provenance: 430_064 — scope-vocabulary, the enumeration surface for a model driving the interpreter; evolved 430_058 — the manifest record minted at scope creation; evolved 2026-10-23 — the refusal surface: KORU021's chain-choke hint renders the declared alphabet
+ts: 2026-10-23
 ---
 
 # A scope must be able to describe its own vocabulary at runtime; the prompt and the enforcement are the same bytes (belief)
@@ -70,6 +70,24 @@ be armed or the turn stops `unhandled-branch`. The two renders (compiled
 interpreter cannot import runtime — a deliberate clone the deslop census may
 name; folding it would mean plumbing AST decls through BranchSpec for one
 spelling.
+
+---
+
+EVOLVED 2026-10-23 (the refusal surface joins the family): same-bytes applied
+to a REFUSAL, not a served surface. KORU021's dead-claim check iterates
+`stage_infos` to decide "no stage in this chain declares branch 'X'" — and
+then told the author to "check the spelling against the stages it should
+catch," a hint that names the operation without performing it. The two failure
+modes a dead claim can be — typo, or wrong model of the wire — are
+indistinguishable until the alphabet is on screen. The hint now renders the
+enumeration from the same `stage_infos` the check reads:
+`the chain declares obj.get(|found |not-found), arr.get(|found |out-of-range),
+as.string(|ok |wrong-type)`. Provenance was omni's commander: a `| ok` arm
+written against `std/bridge:run` under the belief that the wire returned ok —
+a model error the old hint could not have falsified. The named-arm KORU021
+already rendered `available: result, error, ...`; the chain path now matches
+it. Pin: 210_198's EXPECT gained a CONTAINS on the rendered alphabet — the
+enumeration is pinned, not just the refusal.
 
 Related: [[frag-two-parse-paths-feed-one-dispatch]] — the other half of "an
 interpreter fed by a language model gets garbage-in routinely; make the

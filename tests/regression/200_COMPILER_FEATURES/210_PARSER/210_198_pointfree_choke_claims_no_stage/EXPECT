@@ -1,3 +1,4 @@
 FRONTEND_COMPILE_ERROR
 CONTAINS no stage in this chain declares branch 'out-of-rang'
+CONTAINS the chain declares obj.get(|found |not-found), arr.get(|found |out-of-range), as.string(|ok |wrong-type)
 NOT_CONTAINS declares branch 'not-found'

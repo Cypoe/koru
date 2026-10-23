@@ -884,6 +884,32 @@ fn branchNamed(info: EventInfo, name: []const u8) ?ast.Branch {
     return null;
 }
 
+/// Enumerate every stage's declared branches for the KORU021 hint — a dead
+/// claim is either a typo or a wrong model of the wire, and the author can
+/// only tell which if the refusal prints the alphabet it checked against:
+/// `obj.get(|found |not-found), arr.get(|found |out-of-range)`.
+fn formatDeclaredBranches(allocator: std.mem.Allocator, stage_infos: []const EventInfo) ![]const u8 {
+    var buf = try std.ArrayList(u8).initCapacity(allocator, 32);
+    errdefer buf.deinit(allocator);
+    for (stage_infos, 0..) |info, i| {
+        if (i > 0) try buf.appendSlice(allocator, ", ");
+        try buf.appendSlice(allocator, try pathToString(allocator, info.path));
+        if (info.branches.len == 0) {
+            try buf.appendSlice(allocator, "(no branches)");
+            continue;
+        }
+        try buf.append(allocator, '(');
+        for (info.branches) |b| {
+            try buf.append(allocator, '|');
+            try buf.appendSlice(allocator, b.name);
+            try buf.append(allocator, ' ');
+        }
+        _ = buf.pop();
+        try buf.append(allocator, ')');
+    }
+    return try buf.toOwnedSlice(allocator);
+}
+
 fn eventLeafName(info: EventInfo) []const u8 {
     if (info.path.segments.len == 0) return "<event>";
     return info.path.segments[info.path.segments.len - 1];
@@ -1086,6 +1112,7 @@ fn tryDesugarChain(
     // check therefore lives at the CHAIN, which is the scope a choke claims
     // over: every claim must land on at least one stage.
     var dead_claim = false;
+    var declared_alphabet: ?[]const u8 = null;
     for (chokes.items, 0..) |choke, i| {
         if (claims_owned) break; // an ancestor already judged this choke set
         if (choke.kind != .terminal or choke.is_catchall or choke.branch.len == 0) continue;
@@ -1101,13 +1128,15 @@ fn tryDesugarChain(
             }
         }
         if (lands) continue;
+        if (declared_alphabet == null)
+            declared_alphabet = try formatDeclaredBranches(allocator, stage_infos.items);
         try reporter.addErrorAtLocationWithHint(
             .KORU021,
             choke.location,
             "no stage in this chain declares branch '{s}'",
             .{choke.branch},
-            "a point-free choke claims by name over the whole chain — check the spelling against the stages it should catch",
-            .{},
+            "a point-free choke claims by name over the whole chain — the chain declares {s}. Check the spelling against those; a name that isn't listed isn't a typo, it's a different model of what this call can return",
+            .{declared_alphabet.?},
         );
         dead_claim = true;
     }
