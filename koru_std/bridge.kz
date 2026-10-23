@@ -55,6 +55,11 @@ pub const Bridge = struct {
     session_arena: *std.heap.ArenaAllocator,
     /// Next auto-bind ordinal — names are `r1`, `r2`, … in run order.
     bound_count: u64,
+    /// Scopes mounted at runtime by `std/bridge:mount` (the `mount` part).
+    /// The lib handles ride beside them until `deinit` — a module the pool
+    /// still holds handles against cannot leave.
+    mounted_scopes: std.ArrayListUnmanaged(Runtime.ScopeRuntime),
+    mounted_libs: std.ArrayListUnmanaged(std.DynLib),
 
     pub fn init(allocator: std.mem.Allocator, session_id: []const u8, scope: []const u8, introspection: bool, world: []const u8) Bridge {
         const defined = allocator.create(DefinedFlows) catch @panic("std/bridge:create: OOM minting defined-flows table");
@@ -79,6 +84,8 @@ pub const Bridge = struct {
             .session_env = session_env,
             .session_arena = session_arena,
             .bound_count = 0,
+            .mounted_scopes = .{},
+            .mounted_libs = .{},
         };
     }
 
@@ -94,46 +101,8 @@ pub const Bridge = struct {
         return count;
     }
 
-    /// Invoke the real discharge tor for every handle still held, through the
-    /// session's scope.
-    ///
-    /// This used to print a line, set `discharged = true`, and call nothing: the
-    /// counter went to zero while every file stayed open. It now runs the same
-    /// loop the interpreter's end-of-run auto-discharge runs, because releasing a
-    /// resource is one act, not two implementations.
-    ///
-    /// A session that CANNOT release what it holds panics rather than returning
-    /// a number. It briefly returned the still-held count, which read as honest
-    /// and was not: nothing obliges a caller to look at a return value, so the
-    /// unread count is the same shape as the boolean it replaced — satisfied
-    /// bookkeeping over a live resource. It also cost more than it looked:
-    /// auto-discharge can only insert a disposer with NOTHING TO BIND
-    /// (`auto_discharge_inserter.zig:2742`), so a `-> u32` close disqualified
-    /// itself and every failure arm of every conversation had to hang up by hand.
-    pub fn dischargeAll(self: *Bridge) void {
-        const rt = @import("root").koru_std.koru_runtime;
-        const interp = @import("root").koru_std.koru_interpreter;
-
-        switch (rt.get_scope_event.handler(.{ .name = self.scope })) {
-            .scope => |s| interp.dischargeAllHandles(
-                "BRIDGE",
-                &self.pool,
-                s.discharges_spec_fn,
-                s.dispatcher,
-                self.allocator,
-            ),
-            .not_found => std.debug.panic(
-                "std/bridge:close: session '{s}' holds {d} handle(s) and its scope '{s}' is not registered, so nothing can release them",
-                .{ self.session_id, self.getHandleCount(), self.scope },
-            ),
-        }
-
-        const stranded = self.getHandleCount();
-        if (stranded != 0) std.debug.panic(
-            "std/bridge:close: session '{s}' still holds {d} handle(s) after hang-up — a discharge event failed (see the [BRIDGE] lines above)",
-            .{ self.session_id, stranded },
-        );
-    }
+    // dischargeAll — the hang-up sweep over the installed scope set —
+    // moved to the `mount` part, beside the module lifecycle it governs.
 
     pub fn deinit(self: *Bridge) void {
         self.allocator.free(self.session_id);
@@ -146,6 +115,12 @@ pub const Bridge = struct {
         self.allocator.destroy(self.session_env);
         self.session_arena.deinit();
         self.allocator.destroy(self.session_arena);
+        // `close` discharges everything the pool holds before this runs —
+        // a mounted module's code is only unloaded once no handle's
+        // discharge path still lives inside it.
+        for (self.mounted_libs.items) |*lib| lib.close();
+        self.mounted_libs.deinit(self.allocator);
+        self.mounted_scopes.deinit(self.allocator);
     }
 };
 
@@ -173,7 +148,7 @@ pub const Bridge = struct {
 ~pub tor close { br: *Bridge<!session> }
 
 ~proc close|zig {
-    br.dischargeAll(); custodyMark(br, "session-closed"); br.deinit(); koru_allocator().destroy(br);
+    dischargeAll(br); custodyMark(br, "session-closed"); br.deinit(); koru_allocator().destroy(br);
 }
 ~part world
 ~part custody
@@ -194,7 +169,8 @@ pub const Bridge = struct {
 ~part define
 ~part deflines
 ~part types
-~part grammar
-~part scopedispatch
+~part render
+~part mount
+~part wirerun
 ~part runsteps
 ~part note

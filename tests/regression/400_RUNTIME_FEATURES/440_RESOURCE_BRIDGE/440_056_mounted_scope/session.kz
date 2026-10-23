@@ -1,0 +1,79 @@
+// The resources a bridge session holds, the scope that names them, and
+// the module-build helper for 440_056. The scope is declared here rather
+// than in the entry file because a registered scope survives the module
+// boundary (115_036).
+//
+// `Note` is the resource the bound scope mints — the mounted module
+// mirrors this layout field-for-field and reads through the pointer the
+// pool hands back.
+
+~import std/runtime
+
+const std = @import("std");
+
+pub const Note = struct { text: []const u8 };
+
+~pub tor open { path: string } -> *Note<opened!>
+
+~proc open|zig {
+    const n = std.heap.page_allocator.create(Note) catch unreachable;
+    n.* = .{ .text = std.heap.page_allocator.dupe(u8, path) catch path };
+    return n;
+}
+
+~pub tor close { handle: *Note<!opened> }
+
+~proc close|zig {
+    std.heap.page_allocator.free(handle.text);
+    std.heap.page_allocator.destroy(handle);
+}
+
+~std/runtime:register(scope: "notes") {
+    open(10)
+    close(1)
+}
+
+// zig build the module — the test compiles its own capability, which is
+// also the honest artifact path: nothing outside the program had to know
+// the lib existed. Paths resolve through selfExeDirPath: the harness runs
+// the binary as "$test_dir/output" without cd, so neither `module/` nor
+// `compiler_env.json` sits at cwd. Returns the dylib's absolute path.
+~pub tor build-module {} -> string
+
+~proc build-module|zig {
+    const allocator = std.heap.page_allocator;
+    var exe_buf: [4096]u8 = undefined;
+    const exe_dir = std.fs.selfExeDirPath(&exe_buf) catch
+        return "build-module: no self-exe path";
+    const env_path = std.fs.path.join(allocator, &.{ exe_dir, "compiler_env.json" }) catch
+        return "build-module: oom";
+    const env_text = std.fs.cwd().readFileAlloc(allocator, env_path, 64 * 1024) catch
+        return "build-module: no compiler_env.json beside the binary";
+    const parsed = std.json.parseFromSlice(
+        struct { koru_home: []const u8 },
+        allocator, env_text, .{ .ignore_unknown_fields = true },
+    ) catch return "build-module: compiler_env.json did not parse";
+    defer parsed.deinit();
+    const root_arg = std.fmt.allocPrint(allocator, "-Dkoru_root={s}", .{parsed.value.koru_home}) catch
+        return "build-module: oom";
+    const mod_dir = std.fs.path.join(allocator, &.{ exe_dir, "module" }) catch
+        return "build-module: oom";
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "zig", "build", root_arg },
+        .cwd = mod_dir,
+        .max_output_bytes = 8 * 1024 * 1024,
+    }) catch |e|
+        return std.fmt.allocPrint(allocator, "build-module: spawn failed: {s}", .{@errorName(e)}) catch "spawn failed";
+    switch (result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                return std.fmt.allocPrint(allocator, "build-module: zig build failed ({d}): {s}",
+                    .{ code, result.stderr[0..@min(result.stderr.len, 2000)] }) catch "build failed";
+            }
+        },
+        else => return "build-module: zig build died abnormally",
+    }
+    return std.fs.path.join(allocator,
+        &.{ mod_dir, "zig-out", "lib", "libspike.dylib" }) catch "build-module: oom";
+}

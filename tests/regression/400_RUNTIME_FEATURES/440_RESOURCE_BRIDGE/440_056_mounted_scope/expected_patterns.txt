@@ -1,0 +1,15 @@
+^mounted scope: spike$
+^open ok \(holds 1, bound r1\)$
+^touch ok -> \{"branch":"","value":"touched:first-note"\}$
+^seal ok \(holds 2, bound r3\)$
+^unseal ok \(holds 1, bound r4\)$
+^reunseal refused: 'stamp' wants a live <sealed> to spend — 'h:Stamp:[0-9a-f]+' was already spent — an obligation discharges once\. Mint one through a verb whose signature ends '-> <sealed!>'$
+^pub tor touch \{ handle: \*Note<opened> \} — read a held note \(borrow, mounted\)$
+^pub tor seal \{ label: string \} — mint a sealed stamp \(mounted\)$
+^pub tor unseal \{ stamp: \*Stamp<!sealed> \} — discharge a sealed stamp \(mounted\)$
+^- `<sealed>` — minted by seal\(\.\.\.\) \| ok; spent by unseal\(stamp:\)$
+^seal2 ok \(holds 2, bound r5\)$
+^held before hang-up: 2$
+^\[BRIDGE\] Invoked 'unseal' for handle 'h:Stamp:[0-9a-f]+' \[spike:sealed\]$
+^\[BRIDGE\] Invoked 'close' for handle 'h:Note:[0-9a-f]+' \[app.session:opened\]$
+^hang-up: clean$

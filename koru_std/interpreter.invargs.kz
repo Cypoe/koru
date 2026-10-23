@@ -5,6 +5,8 @@
 // checkInvocationArgs judges each invocation's named fields against the
 // verb's declared input vocabulary, and each arm word against its declared
 // outcome vocabulary — the checks called by checkFlowArgs in the args part.
+// Owner resolution (bound scope, then the run's mounted set) lives in the
+// `mounted` part.
 
 fn checkInvocationArgs(
     cont: *const ast.Continuation,
@@ -23,65 +25,30 @@ fn checkInvocationArgs(
             .binding_name = cont.destructure[0].name,
         };
     }
+    const mounted = runMountedScopes();
     if (cont.node) |*n| {
         switch (n.*) {
             .invocation => |*inv| {
                 const event_name = if (inv.path.segments.len > 0) inv.path.segments[0] else "";
                 const is_defined = if (defined) |d| findDefinedFlow(d, event_name) != null else false;
                 if (!is_defined) {
-                    if (input_fn) |f| {
-                        if (f(event_name)) |spec| {
-                            for (inv.args) |arg| {
-                                var declared = false;
-                                for (spec) |field| {
-                                    if (std.mem.eql(u8, field.name, arg.name)) {
-                                        declared = true;
-                                        break;
-                                    }
-                                }
-                                if (!declared) {
-                                    return .{
-                                        .message = std.fmt.allocPrint(allocator, "unknown field '{s}' on '{s}'", .{ arg.name, event_name }) catch "unknown field",
-                                        .binding_name = arg.name,
-                                    };
+                    if (ownerInputSpec(input_fn, mounted, event_name)) |spec| {
+                        for (inv.args) |arg| {
+                            var declared = false;
+                            for (spec) |field| {
+                                if (std.mem.eql(u8, field.name, arg.name)) {
+                                    declared = true;
+                                    break;
                                 }
                             }
-                            // ARM VOCABULARY — an arm word the verb cannot
-                            // issue is dead by construction: it never fires,
-                            // and without this check it fails only downstream
-                            // (unbound name) or silently (name never read).
-                            // Judged while the outcome list is still in
-                            // context, so the refusal names the legal arms.
-                            // Empty = the anonymous `ok`, the only arm word
-                            // the verb knows. Catchalls (`|*`) always pass.
-                            if (branches_fn) |bf| {
-                                const outcomes = bf(event_name);
-                                for (cont.continuations) |*arm| {
-                                    if (arm.is_catchall or arm.kind != .terminal) continue;
-                                    var legal = outcomes.len == 0 and std.mem.eql(u8, arm.branch, "ok");
-                                    for (outcomes) |o| {
-                                        if (std.mem.eql(u8, o.name, arm.branch)) {
-                                            legal = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!legal) {
-                                        var names = std.ArrayList(u8){};
-                                        defer names.deinit(allocator);
-                                        if (outcomes.len == 0) {
-                                            names.appendSlice(allocator, "ok") catch {};
-                                        } else for (outcomes, 0..) |o, i| {
-                                            if (i > 0) names.appendSlice(allocator, " | ") catch {};
-                                            names.appendSlice(allocator, o.name) catch {};
-                                        }
-                                        return .{
-                                            .message = std.fmt.allocPrint(allocator, "'{s}' is not an outcome of '{s}' — it issues {s}; arm words are those names", .{ arm.branch, event_name, names.items }) catch "arm word matches no outcome",
-                                            .binding_name = arm.binding orelse arm.branch,
-                                        };
-                                    }
-                                }
+                            if (!declared) {
+                                return .{
+                                    .message = std.fmt.allocPrint(allocator, "unknown field '{s}' on '{s}'", .{ arg.name, event_name }) catch "unknown field",
+                                    .binding_name = arg.name,
+                                };
                             }
                         }
+                        if (checkArmWords(input_fn, branches_fn, mounted, event_name, cont, allocator)) |e| return e;
                     }
                 }
                 for (inv.args) |arg| {

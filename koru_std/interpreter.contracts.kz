@@ -22,18 +22,18 @@ pub const HostView = struct {
     allocator: std.mem.Allocator,
     error_detail: *?[]const u8,
     // The session's durable binding table — a host verb that persists a
-    // value (the bridge's `bind`) writes here; values in it are owned by
-    // the session allocator, not the run arena. null = no session.
+    // value (the bridge's `bind`) writes here. null = no session.
     session_env: ?*Environment = null,
+    // The session's mounted scopes — a vocabulary render must see them.
+    mounted: ?[]const @import("root").koru_std.koru_runtime.ScopeRuntime = null,
 };
 // Dispatch-detail/dispatch-pool channels moved to the `resdispatch` part —
 // the threadlocals a generated dispatcher reports and resolves through.
 
 // Host-provided verbs, consulted only when the scope's dispatcher returns
-// EventDenied: session-level capabilities (the bridge's `vocabulary`,
-// `grammar`) that are not part of the registered scope but still dispatch
-// through the normal path — parsed, armed, and refused like any call.
-// Returns error.EventDenied when the host does not claim the name.
+// EventDenied: session-level capabilities (vocabulary, grammar) not part of
+// the registered scope but still dispatched like any call — parsed, armed,
+// refused. Returns error.EventDenied when the host does not claim the name.
 pub const HostDispatchFn = *const fn(
     name: []const u8,
     inv: *const ast.Invocation,

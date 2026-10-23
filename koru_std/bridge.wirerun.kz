@@ -1,0 +1,89 @@
+// Koru Standard Library: the `wirerun` part of bridge — the wire's path
+// into the installed scope set: the per-item gate, the normalize that
+// canonicalizes what the gate admitted, and the dispatch that runs it.
+// Joined via `~part wirerun` in bridge.kz; merged into the bridge module
+// at load.
+//
+// All three stages judge a verb's fields by the OWNER's declared input
+// vocabulary — bound scope first, then every mounted scope's own table —
+// so a mounted verb is admitted and normalized by its own manifest, not
+// the bound scope's. The session lookup rides threadlocal because
+// parse_wire's `input_fn` is a bare fn pointer with no context slot;
+// set for the duration of each call only.
+threadlocal var __gate_bound_input: ?Runtime.InputLookupFn = null;
+threadlocal var __gate_mounted: []const Runtime.ScopeRuntime = &.{};
+
+fn scopeInputFn(br: *Bridge) ?Runtime.InputLookupFn {
+    return switch (Runtime.get_scope_event.handler(.{ .name = br.scope })) {
+        .scope => |s| s.input_fn,
+        .not_found => null,
+    };
+}
+
+fn sessionInputLookup(verb: []const u8) ?[]const Runtime.InputFieldSpec {
+    return Interp.ownerInputSpec(__gate_bound_input, __gate_mounted, verb);
+}
+
+fn withSessionGate(br: *Bridge) void {
+    __gate_bound_input = scopeInputFn(br);
+    __gate_mounted = br.mounted_scopes.items;
+}
+
+fn clearSessionGate() void {
+    __gate_bound_input = null;
+    __gate_mounted = &.{};
+}
+
+// The wire grammar check, shared by the single-item gate and the per-item
+// gate a sequenced turn runs on every slice: one predicate, two surfaces —
+// a one-item turn returns the refusal as the turn's verdict; a multi-item
+// turn reports it as a `step N/M parse-error` line and runs on. A grammar
+// that only held on the first item of a turn is the convention the wire
+// ruling retired — the unit of enforcement is the item. (440_021; kopium
+// bridge-mirror 2026-09-12-wire-gate-scope)
+fn wireGate(br: *Bridge, source: []const u8) ?GateRejection {
+    withSessionGate(br);
+    defer clearSessionGate();
+    return switch (Runtime.parse_wire_event.handler(.{
+        .source = source,
+        .input_fn = sessionInputLookup,
+        .host_input_fn = hostInputLookup,
+    })) {
+        .parsed => null,
+        .parse_error => |e| .{ .message = e.message, .line = e.line, .column = e.column, .not_invocation = e.not_invocation },
+    };
+}
+
+/// One wire item dispatched through the session: the runtime run with the
+/// bridge's pool, defined-flows table, and — when the model has introspection —
+/// the host verbs, plus the session binder so every link gets its `rN`.
+/// Typed positions were admitted by the gate; here they normalize to
+/// canonical quoted wire so eval sees one representation.
+fn dispatchThroughScope(br: *Bridge, src: []const u8, turn_env: ?*Interp.Environment) Runtime.run_event.Output {
+    // Page-backed like the rest of the wire layer — the normalized text
+    // must outlive the whole dispatch, and the arena dies at prepare().
+    // The session lookup reads mounted scopes too: a typed arg on a
+    // mounted verb normalizes by its own manifest.
+    withSessionGate(br);
+    const wire = Runtime.wireNormalize(std.heap.page_allocator, src, sessionInputLookup, hostInputLookup);
+    clearSessionGate();
+    // The session's mounted scopes ride the interpreter's channel for
+    // this run — a mounted verb then dispatches, validates, borrows, and
+    // discharges exactly like a bound one, against this same pool.
+    Interp.setRunMountedScopes(br.mounted_scopes.items);
+    defer Interp.clearRunMountedScopes();
+    return Runtime.run_event.handler(.{
+        .source = wire,
+        .scope = br.scope,
+        .handle_pool = &br.pool,
+        .auto_discharge = false,
+        .defined = br.defined,
+        .lenient = true,
+        .host_dispatch = if (br.introspection) @as(?Interp.HostDispatchFn, hostDispatch) else null,
+        .session_env = br.session_env,
+        .session_bind_fn = @as(?Interp.SessionBindFn, sessionBindAdapter),
+        .session_bind_env = br.session_env,
+        .session_bind_counter = &br.bound_count,
+        .turn_env = turn_env,
+    });
+}

@@ -1,0 +1,91 @@
+// Koru Standard Library: the `scopelines` part of runtime — the per-scope
+// line emitters behind `scope-vocabulary` and `scope-grammar`. Joined via
+// `~part scopelines` in runtime.kz; merged into the runtime module at load.
+//
+// One emitter per surface, shared by every caller that spells a scope's
+// verbs: the compiled-table walk below, the bridge's `vocabulary`/`grammar`
+// for mounted scopes, and any host that renders a ScopeRuntime. A `.dylib`
+// verb is spelled through the same bytes a register-block verb is.
+
+// The per-scope body of the vocabulary render, factored out so a runtime-
+// mounted scope (a `.dylib` the bridge installed) renders through the same
+// bytes — `std/bridge`'s vocabulary/grammar call this for every mounted
+// scope, so the mounted verbs are spelled exactly like compiled ones.
+pub fn appendScopeVocabularyLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, scope_info: ScopeRuntime) void {
+    const events_fn = scope_info.events_fn orelse return;
+    for (events_fn()) |event_name| {
+        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+        const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
+        wireSignatureLine(out, allocator, event_name, input);
+        // The outcome clause — the decl's own tail: `-> T<obl!>`
+        // for a bare return, `| name T` for declared branches,
+        // nothing for a void tor. The create/mint edge folds into
+        // the type text or names its branch.
+        const branches = if (scope_info.branches_fn) |bf| bf(event_name) else &[_]BranchSpec{};
+        wireDeclOutcome(out, allocator, branches);
+        // What the verb IS — declaration prose beside the outcome
+        // contract, first line only (prose joins multi-line).
+        if (scope_info.doc_fn) |df| {
+            const doc = df(event_name);
+            const first_line = if (std.mem.indexOfScalar(u8, doc, '\n')) |nl| doc[0..nl] else doc;
+            if (first_line.len > 0) {
+                out.appendSlice(allocator, " — ") catch unreachable;
+                out.appendSlice(allocator, first_line) catch unreachable;
+            }
+        }
+    }
+}
+
+// A mounted scope carries no manifest record — its obligation legend is
+// derived from the same spec tables the sweep and the possession checks
+// enforce, so the grammar's "minted by / spent by" lines hold for mounted
+// obligations exactly as they do for compiled ones.
+pub fn appendMountedObligationLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, scope_info: ScopeRuntime) void {
+    const events_fn = scope_info.events_fn orelse return;
+    const creates_fn = scope_info.creates_spec_fn orelse return;
+    const discharges_fn = scope_info.discharges_spec_fn orelse return;
+    var seen = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
+    for (events_fn()) |event_name| {
+        for (creates_fn(event_name)) |c| {
+            var dup = false;
+            for (seen.items) |s| {
+                if (std.mem.eql(u8, s, c.obligation_name)) { dup = true; break; }
+            }
+            if (dup) continue;
+            seen.append(allocator, c.obligation_name) catch unreachable;
+            if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+            out.appendSlice(allocator, "- `<") catch unreachable;
+            out.appendSlice(allocator, c.obligation_name) catch unreachable;
+            out.appendSlice(allocator, ">` — minted by ") catch unreachable;
+            var first = true;
+            for (events_fn()) |e2| {
+                for (creates_fn(e2)) |cc| {
+                    if (!std.mem.eql(u8, cc.obligation_name, c.obligation_name)) continue;
+                    if (!first) out.appendSlice(allocator, ", ") catch unreachable;
+                    first = false;
+                    out.appendSlice(allocator, e2) catch unreachable;
+                    out.appendSlice(allocator, "(...) | ") catch unreachable;
+                    out.appendSlice(allocator, cc.branch orelse "ok") catch unreachable;
+                }
+            }
+            first = true;
+            var wrote_spend = false;
+            for (events_fn()) |e2| {
+                for (discharges_fn(e2)) |d| {
+                    if (!std.mem.eql(u8, d.obligation_name, c.obligation_name)) continue;
+                    if (!wrote_spend) {
+                        out.appendSlice(allocator, "; spent by ") catch unreachable;
+                        wrote_spend = true;
+                    }
+                    if (!first) out.appendSlice(allocator, ", ") catch unreachable;
+                    first = false;
+                    out.appendSlice(allocator, e2) catch unreachable;
+                    out.append(allocator, '(') catch unreachable;
+                    out.appendSlice(allocator, d.arg_name) catch unreachable;
+                    out.appendSlice(allocator, ":)") catch unreachable;
+                }
+            }
+            if (!wrote_spend) out.appendSlice(allocator, "; no verb spends it") catch unreachable;
+        }
+    }
+}

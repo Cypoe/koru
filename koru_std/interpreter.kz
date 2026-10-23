@@ -451,6 +451,8 @@ pub const InterpreterContext = struct {
     session_bind_fn: ?SessionBindFn = null,
     session_bind_env: ?*Environment = null,
     session_bind_counter: ?*u64 = null,
+    // Scopes mounted at runtime (the bridge's `mount`) — the `mounted` part.
+    mounted: ?[]const @import("root").koru_std.koru_runtime.ScopeRuntime = null,
 };
 
 pub const InterpreterThreadState = struct {
@@ -544,6 +546,7 @@ pub fn findHostTilde(source: []const u8) ?HostTilde {
 ~part resdispatch
 ~part custody
 ~part invargs
+~part mounted
 ~part flowchecks
 ~part defflow
 ~part eval

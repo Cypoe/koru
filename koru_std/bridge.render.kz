@@ -1,0 +1,97 @@
+// Koru Standard Library: the `render` part of bridge — the session's two
+// rendered surfaces, `vocabulary` and `grammar`, shared by the tor
+// surfaces and the wire verbs. Joined via `~part render` in bridge.kz;
+// merged into the bridge module at load.
+//
+// Both renders compose the same layers: the bound scope's compiled text,
+// every mounted scope spelled by the same emitters, the granted host
+// verbs, and the session's own inventions — one string, so a prompt built
+// from this render and a turn judged by the wire gate are the same
+// declaration read twice.
+
+// The render both surfaces share — the `vocabulary` tor for host callers and
+// the `vocabulary()` wire verb agree byte-for-byte: compiled scope, the
+// mounted scopes, the granted host verbs (so the session's answer is
+// self-describing), then the session's own inventions, one line each:
+// `name(param: type<!phantom>, ...)`.
+// Mounted scopes render through the same line emitter the compiled scope
+// used — a `.dylib` verb is spelled exactly like a register-block verb.
+fn renderVocabulary(allocator: std.mem.Allocator, scope: []const u8, defined: ?*DefinedFlows, introspection: bool, session_env: ?*Environment, mounted: ?[]const Runtime.ScopeRuntime) ?[]const u8 {
+    const rt = @import("root").koru_std.koru_runtime;
+    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+
+    switch (rt.scope_vocabulary_event.handler(.{ .name = scope })) {
+        .ok => |v| out.appendSlice(allocator, v) catch unreachable,
+        .not_found => return null,
+    }
+
+    if (mounted) |ms| {
+        for (ms) |m| rt.appendScopeVocabularyLines(&out, allocator, m);
+    }
+
+    if (introspection) {
+        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+        out.appendSlice(allocator, introspection_verbs) catch unreachable;
+    }
+    appendDefinedLines(&out, allocator, defined);
+    appendBoundLines(&out, allocator, session_env);
+
+    return out.toOwnedSlice(allocator) catch unreachable;
+}
+
+fn renderGrammar(allocator: std.mem.Allocator, scope: []const u8, defined: ?*DefinedFlows, introspection: bool, mounted: ?[]const Runtime.ScopeRuntime) ?[]const u8 {
+    const rt = @import("root").koru_std.koru_runtime;
+    var out = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+
+    switch (rt.scope_grammar_event.handler(.{ .name = scope })) {
+        .ok => |g| out.appendSlice(allocator, g) catch unreachable,
+        .not_found => return null,
+    }
+
+    // Mounted scopes follow the bound scope's text: obligation legend first
+    // (derived from the same spec tables the sweep enforces — a module has
+    // no manifest record), then the verb lines spelled by the same emitter.
+    if (mounted) |ms| {
+        for (ms) |m| {
+            rt.appendMountedObligationLines(&out, allocator, m);
+            rt.appendScopeVocabularyLines(&out, allocator, m);
+        }
+    }
+
+    if (introspection) {
+        out.append(allocator, '\n') catch unreachable;
+        out.appendSlice(allocator, introspection_verbs) catch unreachable;
+    }
+    // The session's inventions, same as `vocabulary` renders them.
+    appendDefinedLines(&out, allocator, defined);
+    // Bound names are NOT grammar: this render heads the system message,
+    // which must stay byte-identical across calls for prefix caching — and
+    // the bindings table mutates (and reshuffles in hash order) every turn.
+    // The live table stays on `vocabulary()` and each report's `bound: rN`.
+    return out.toOwnedSlice(allocator) catch unreachable;
+}
+
+// Bound session values — the names a turn may reference. One line each:
+// `r3 {user_id, name}` — the binding and the fields it carries, so the
+// agent sees both that `r3` exists and what `r3.<field>` may name.
+fn appendBoundLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, session_env: ?*Environment) void {
+    const se = session_env orelse return;
+    var it = se.bindings.iterator();
+    while (it.next()) |entry| {
+        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
+        out.appendSlice(allocator, entry.key_ptr.*) catch unreachable;
+        const fields = entry.value_ptr.fields;
+        if (fields.len == 0) continue;
+        // `__type_ref` is the datum itself — list only the addressable fields.
+        var listed = false;
+        for (fields) |f| {
+            if (std.mem.eql(u8, f.name, "__type_ref")) continue;
+            if (!listed) {
+                out.appendSlice(allocator, " {") catch unreachable;
+                listed = true;
+            } else out.appendSlice(allocator, ", ") catch unreachable;
+            out.appendSlice(allocator, f.name) catch unreachable;
+        }
+        if (listed) out.append(allocator, '}') catch unreachable;
+    }
+}

@@ -109,6 +109,12 @@
 !**/vendored/**
 !**/vendor.lock
 
+# Keep mounted-scope module sources (440_056 and successors). A `module/` dir
+# is the checked-in .dylib source the test compiles and mounts at runtime —
+# the fixture, not emitted output. Scoped to `module/` for the same reason
+# `vendored/` is.
+!**/module/*.zig
+
 # Generated .app bundles (must come last — !*/ above would otherwise
 # un-ignore the directory and let git descend into it)
 *.app
