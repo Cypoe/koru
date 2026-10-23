@@ -15601,6 +15601,18 @@ pub fn outputExeName(allocator: std.mem.Allocator) []const u8 {
     return "a.out";
 }
 
+/// The zig binary every toolchain spawn must use: `KORU_ZIG` when set and
+/// non-empty, else PATH's `zig`. One resolver for koruc's own spawns
+/// (backend build, version probes) AND the backend's (build-exe, zig env,
+/// zig fetch) — the two processes must agree, or the zig-lib overlay
+/// byte-verified against one version gets applied to another's std.
+/// posix.getenv, not getEnvVarOwned: zero-alloc — an owned read leaks past
+/// the GPA's exit report on every KORU_ZIG compile.
+pub fn zigExe() []const u8 {
+    const v = std.posix.getenv("KORU_ZIG") orelse return "zig";
+    return if (v.len == 0) "zig" else v;
+}
+
 /// The --zig-lib-dir overlay: koru's optimized-but-byte-identical
 /// std/json/Stringify.zig for every @import("std") the emitted program makes.
 /// null → stock std; identical output, slower. Moved verbatim from the
@@ -15609,7 +15621,7 @@ pub fn outputExeName(allocator: std.mem.Allocator) []const u8 {
 pub fn ensureZigLibOverlay(allocator: std.mem.Allocator, koru_home: []const u8, out: []u8) ?[]const u8 {
     const env_res = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "zig", "env" },
+        .argv = &.{ zigExe(), "env" },
         .max_output_bytes = 64 * 1024,
     }) catch return null;
     defer allocator.free(env_res.stdout);

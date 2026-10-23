@@ -4623,7 +4623,7 @@ fn runBuiltinDeps(allocator: std.mem.Allocator, args: []const []const u8) !void 
     // Check Zig installation
     const zig_result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ "zig", "version" },
+        .argv = &[_][]const u8{ emitter_helpers.zigExe(), "version" },
     }) catch {
         std.debug.print("  zig \x1b[31m✗\x1b[0m not installed\n", .{});
         if (do_install) {
@@ -8313,7 +8313,7 @@ pub fn main() !void {
                         };
 
                         // Execute with zig run
-                        var exec_argv = [_][]const u8{ "zig", "run", tmp_path };
+                        var exec_argv = [_][]const u8{ emitter_helpers.zigExe(), "run", tmp_path };
                         const result = std.process.Child.run(.{
                             .allocator = allocator,
                             .argv = &exec_argv,
@@ -9162,7 +9162,7 @@ pub fn main() !void {
             // then patch the zon file with it.
             const probe_result = try std.process.Child.run(.{
                 .allocator = allocator,
-                .argv = &[_][]const u8{ "zig", "build", "--build-file", "build_backend.zig" },
+                .argv = &[_][]const u8{ emitter_helpers.zigExe(), "build", "--build-file", "build_backend.zig" },
                 .cwd = output_dir,
             });
             defer allocator.free(probe_result.stdout);
@@ -9348,7 +9348,7 @@ pub fn main() !void {
 
         // When running with cwd set to output_dir, build-file should be relative to that dir
         const zig_build_args = [_][]const u8{
-            "zig",
+            emitter_helpers.zigExe(),
             "build",
             "--build-file",
             "build_backend.zig", // Relative to cwd (output_dir_for_build)

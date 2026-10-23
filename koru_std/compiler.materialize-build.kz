@@ -48,7 +48,7 @@
     if (has_build_output) {
         // Use zig build with build_output.zig (includes user dependencies)
         var bo_argv: [9][]const u8 = undefined;
-        bo_argv[0] = "zig";
+        bo_argv[0] = emitter_helpers.zigExe();
         bo_argv[1] = "build";
         bo_argv[2] = "--build-file";
         bo_argv[3] = "build_output.zig";
@@ -155,7 +155,7 @@
         const needs_ast_module = std.mem.indexOf(u8, code, "__koru_ast.") != null;
         var exe_argv: [24][]const u8 = undefined;
         var exe_argc: usize = 0;
-        exe_argv[exe_argc] = "zig"; exe_argc += 1;
+        exe_argv[exe_argc] = emitter_helpers.zigExe(); exe_argc += 1;
         exe_argv[exe_argc] = "build-exe"; exe_argc += 1;
         // koru_allocator() backs onto std.heap.c_allocator (real libc
         // malloc/free) -- needs libc linked on this direct build-exe path too.
