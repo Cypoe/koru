@@ -121,6 +121,7 @@ pub const ErrorCode = enum(u16) {
     KORU124, // Transform invoked in continuation position via the whole-program escape — the real nested invocation is never rewritten (frontier: 210_024_source_scope_capture)
     KORU125, // `{% if %}` / `{% unless %}` condition outside the engine's grammar — an unparseable condition is never silently false
     KORU126, // `--lang=<tag>` names no emitter and no proc variant the program declares — a tag that selects nothing compiles nothing
+    KORU127, // A kernel scope admits exactly one `std/kernel:step` — a second step invocation would silently replace the earlier range (emitted by koru_std/kernel.kz)
 
     // Presence errors (optional effect arms — `if(arm)` / `when arm`)
     KORU130, // Value-resuming optional arm fired without a dominating presence test
