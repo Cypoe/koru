@@ -364,6 +364,14 @@ const codegen_utils_kernel = @import("codegen_utils");
             const detectStep = struct {
                 fn call(inv: *const ast.Invocation, out_range: *?[]const u8, out_inv: *?*const ast.Invocation, ss: *bool) void {
                     if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "step") and inv.path.module_qualifier != null and std.mem.eql(u8, inv.path.module_qualifier.?, "std.kernel")) {
+                        // A second step has no defined nesting semantics — before
+                        // the position fix it silently overwrote the range; refuse
+                        // loudly instead (a nested or chained duplicate would run
+                        // all step ops under whichever range landed last).
+                        if (ss.*) {
+                            std.debug.print("error[KORU127]: a kernel scope admits exactly one `std/kernel:step` — a second step invocation would silently replace the earlier range\n", .{});
+                            std.process.exit(1);
+                        }
                         // Extract range from the invocation's args (value field contains the raw expression)
                         for (inv.args) |arg| {
                             if (arg.value.len > 0) {
@@ -1646,18 +1654,26 @@ const codegen_utils_kernel = @import("codegen_utils");
                         body.append(alloc, ';') catch unreachable;
                     }
                     const op_src = kernelLowerOpBody(alloc, body.items, is_js);
-                    // REDUCE IS ASSOCIATIVE: `reduce` is a fold, not a state
-                    // mutation. That is its contract, and it is exactly what
-                    // allows reassociation — so the loop runs under an optimized
-                    // float mode and LLVM can vectorize it into partial sums.
-                    // `self`/`pairwise` keep the strict contract (see the
-                    // "no FP reassociation, no oracle change" note above): they
-                    // mutate state that must match an oracle bit-for-bit.
-                    const reduce_loop = if (is_js)
-                        std.fmt.allocPrint(alloc, "\nfor (let i = 0; i < {d}; i++) {{\n    {s}\n}}", .{ elem_count, op_src }) catch unreachable
-                    else
-                        std.fmt.allocPrint(alloc, "\n@setFloatMode(.optimized);\nfor (0..{d}) |i| {{\n    {s}\n}}\n@setFloatMode(.strict);", .{ elem_count, op_src }) catch unreachable;
-                    code.appendSlice(alloc, reduce_loop) catch unreachable;
+                    // A declare-only reduce (`kin[f64]` with no `<name> <op>=
+                    // <expr>` statements) has no per-element work — it exists
+                    // to declare the accumulator an earlier self/pairwise op
+                    // already folded into, so the exit can carry it. Emitting
+                    // the loop anyway produced `for { ; }` — a bare `;` is not
+                    // a Zig statement. Skip the loop when the body is empty.
+                    if (std.mem.trim(u8, op_src, " \t\n;").len > 0) {
+                        // REDUCE IS ASSOCIATIVE: `reduce` is a fold, not a state
+                        // mutation. That is its contract, and it is exactly what
+                        // allows reassociation — so the loop runs under an optimized
+                        // float mode and LLVM can vectorize it into partial sums.
+                        // `self`/`pairwise` keep the strict contract (see the
+                        // "no FP reassociation, no oracle change" note above): they
+                        // mutate state that must match an oracle bit-for-bit.
+                        const reduce_loop = if (is_js)
+                            std.fmt.allocPrint(alloc, "\nfor (let i = 0; i < {d}; i++) {{\n    {s}\n}}", .{ elem_count, op_src }) catch unreachable
+                        else
+                            std.fmt.allocPrint(alloc, "\n@setFloatMode(.optimized);\nfor (0..{d}) |i| {{\n    {s}\n}}\n@setFloatMode(.strict);", .{ elem_count, op_src }) catch unreachable;
+                        code.appendSlice(alloc, reduce_loop) catch unreachable;
+                    }
                 }
             }
 

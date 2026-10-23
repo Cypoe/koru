@@ -102,22 +102,29 @@ matches refuses (`f1a74bd1`); a *partial* match does not. So a control set
 verifies only the names that happened to be spelled right — check the
 `Running N tests` line against the number you asked for.
 
-## Emit `for`, never `while` — it is measurable performance
+## Emit `for`, not `while` — unless a measurement says otherwise
 
-**Any emitter that produces a counted Zig loop emits `for`, not `while`.** This
-is not style. `while (i < len) : (i += 1)` hands the optimizer a mutable
-induction variable and a loop-carried condition; `for (0..len) |i|` hands it a
-known trip count, and `for (xs, ys) |*x, y|` additionally proves non-aliasing and
-removes bounds checks. That is the difference between a vectorized loop and a
-scalar one.
+**Any emitter that produces a counted Zig loop emits `for`, not `while` — unless
+a measured exception is pinned at the emit site.** This is not style. `while
+(i < len) : (i += 1)` hands the optimizer a mutable induction variable and a
+loop-carried condition; `for (0..len) |i|` hands it a known trip count, and
+`for (xs, ys) |*x, y|` additionally proves non-aliasing and removes bounds
+checks. That is usually the difference between a vectorized loop and a scalar
+one — but it is a heuristic about compiler behaviour, not a law. Measured
+2026-10-23: the kernel pairwise triangular nest emitted ~5% faster as `while`
+on arm64/Zig 0.15.2 (checksum-identical), and no `for` respelling — canonical
+`0..(N-i-1)` trip count, const-rebinding — recovered it.
 
 Measured 2026-07-31: a trivial two-store program emits **19 `while` against 5
 `for`**, and `koru_std/store.kz` carries **34 `while` sites** — including the
 sweep loop, the hottest loop the language has.
 
-A `while` is correct only where the trip count genuinely is not known up front
-(a parser scan, a freelist walk). If you can name the end before you start, it
-is a `for`.
+A `while` is correct in two cases: the trip count genuinely is not known up
+front (a parser scan, a freelist walk), or a measured exception — a counted
+loop whose `while` shape benchmarked faster on the real emitted artifact,
+pinned in a comment at the emit site and declared in
+`invariants/checks/emitted-while.allow` so the ruling is revisited when the
+compiler landscape changes.
 
 ## Test comments
 
