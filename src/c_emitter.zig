@@ -715,8 +715,16 @@ const Emitter = struct {
     /// payload struct `struct <name>_<branch>_t` for a record payload.
     fn branchPayloadCType(self: *Emitter, event_name: []const u8, key: []const u8, b: *const ast.Branch) CEmitError!?[]const u8 {
         if (b.payload.is_wildcard) {
-            std.debug.print("error[KORU047]: C lane: {s} branch `| {s}` wildcard payload — outside the first fragment\n", .{ key, b.name });
-            return CEmitError.UnsupportedConstruct;
+            // `| x *` — the payload's shape is filled by the use site, not the
+            // decl; the zig union member is `struct {}` for the same reason.
+            // The C fragment mints a named one-byte placeholder: the decl
+            // compiles, while any real produce (`=> x v` fails the __type_ref
+            // check) or typed read refuses downstream instead of coercing.
+            return try std.fmt.allocPrint(
+                self.allocator,
+                "struct {s}_{s}_t",
+                .{ event_name, codegen_utils.cMemberName(self.allocator, b.name) },
+            );
         }
         const fs = b.payload.fields;
         if (fs.len == 0) return null;
@@ -759,12 +767,18 @@ const Emitter = struct {
         try self.write("};\n");
         for (event.branches) |*b| {
             const fs = b.payload.fields;
-            const is_rec = fs.len > 0 and !std.mem.eql(u8, fs[0].name, "__type_ref");
+            const is_rec = (fs.len > 0 and !std.mem.eql(u8, fs[0].name, "__type_ref")) or b.payload.is_wildcard;
             if (!is_rec) continue;
             try self.writeFmt("struct {s}_{s}_t {{\n", .{ name, codegen_utils.cMemberName(self.allocator, b.name) });
-            for (fs) |f| {
-                const ct = self.cTypeOfResolved(f.type).?;
-                try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
+            if (b.payload.is_wildcard) {
+                // C has no `struct {}` — one byte carries the shape hole the
+                // `| x *` decl leaves for the use site to fill.
+                try self.write("    char __koru_wildcard;\n");
+            } else {
+                for (fs) |f| {
+                    const ct = self.cTypeOfResolved(f.type).?;
+                    try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
+                }
             }
             try self.write("};\n");
         }
@@ -1099,6 +1113,10 @@ const Emitter = struct {
             }
             const fs = b.payload.fields;
             if (bc.plain_value) |pv| {
+                if (b.payload.is_wildcard) {
+                    std.debug.print("error[KORU047]: C lane: `=> {s}` produces a value a `| {s} *` wildcard cannot carry — the payload has no declared shape\n", .{ bc.branch_name, bc.branch_name });
+                    return CEmitError.UnsupportedConstruct;
+                }
                 if (fs.len != 1 or !std.mem.eql(u8, fs[0].name, "__type_ref")) {
                     std.debug.print("error[KORU047]: C lane: `=> {s}` scalar produce against a non-scalar payload\n", .{bc.branch_name});
                     return CEmitError.UnsupportedConstruct;

@@ -121,3 +121,24 @@ Measured consequence: of the 261 rows, 152 moved past the pointer
 diagnostic — the next walls named are `NoCProcBody` (the `|c` proc
 surface) and the record/slice/optional families — later rungs, not new
 refusals.
+
+## Evolve 2026-10-23 — `| x *` wildcard payloads mint a placeholder; the hole is honest
+
+The `| x *` decl — "bindable payload, shape unspecified" — was a first-fragment
+refusal on a member the zig lane already types honestly as `struct {}`: the
+wildcard is a hole the *use site* fills (every bare `| x *` in koru_std lives
+on a `[keyword]`/`[template]`/`[transform]` tor — `cond`, `json:parse`,
+`spawn`, `std.parser:match`'s `` | `*` * `` — whose union never materializes
+a real call). C99 has no empty struct, so the lane mints the same hole as a
+named one-byte placeholder, `struct <ev>_<br>_t { char __koru_wildcard; }`.
+The decl compiles; materialization refuses exactly where zig's does — a
+`=> x v` produce is a named KORU047 (zig: a raw `expected struct {},
+found i64` coercion error — same boundary, better sentence), and a bound
+placeholder dies inside ccomp on any typed use. No checker, no `void *`,
+no invented shape.
+
+Measured: all 8 first-diagnostic wildcard rows (the `std.parser` family)
+moved past — to `field expr has type Expression`, the comptime-AST input
+type that is the transform surface's real boundary. Effect-side `! each *`
+(`anytype` handler params) and `|*` catch-all consumers stay refused —
+separate axes, not this rung.
