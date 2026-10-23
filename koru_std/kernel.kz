@@ -307,7 +307,15 @@ const codegen_utils_kernel = @import("codegen_utils");
         }
     }.call;
 
-    // Collect kernel ops (pairwise, self) from the kernel subtree for fusion
+    // Where an op sits relative to `std/kernel:step` in the `|>` chain.
+    // The chain is sequential: ops before the step invocation run once over
+    // the pre-step state, ops under a `| step |>` branch run per step, ops
+    // chained past the step invocation run once over the post-step state.
+    // Measured bug 2026-10-23: without this tag every op flattened into the
+    // step loop — a reduce chained before step accumulated once per step
+    // (total=15 for masses [1,2] over 3 steps) instead of once (total=3).
+    const OpPosition = enum { pre, step, post };
+
     const KernelOp = struct {
         op_type: []const u8,
         body_text: []const u8,
@@ -318,6 +326,7 @@ const codegen_utils_kernel = @import("codegen_utils");
         // accumulator header has been split off). The loop emitter rewrites and
         // emits THIS, never the raw body_text (which still carries the header).
         reduce_statements: ?[]const u8 = null,
+        position: OpPosition = .pre,
     };
 
     // A named scalar produced by `std/kernel:reduce` (e.g. `total_mass += k.mass`
@@ -350,9 +359,10 @@ const codegen_utils_kernel = @import("codegen_utils");
             var ops = std.ArrayList(KernelOp).initCapacity(alloc, 4) catch unreachable;
             var step_range: ?[]const u8 = null;
             var step_inv: ?*const ast.Invocation = null;
+            var seen_step = false;
 
             const detectStep = struct {
-                fn call(inv: *const ast.Invocation, out_range: *?[]const u8, out_inv: *?*const ast.Invocation) void {
+                fn call(inv: *const ast.Invocation, out_range: *?[]const u8, out_inv: *?*const ast.Invocation, ss: *bool) void {
                     if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "step") and inv.path.module_qualifier != null and std.mem.eql(u8, inv.path.module_qualifier.?, "std.kernel")) {
                         // Extract range from the invocation's args (value field contains the raw expression)
                         for (inv.args) |arg| {
@@ -361,6 +371,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                             }
                         }
                         out_inv.* = inv;
+                        ss.* = true;
                     }
                 }
             }.call;
@@ -372,16 +383,18 @@ const codegen_utils_kernel = @import("codegen_utils");
                     ops_list: *std.ArrayList(KernelOp),
                     sr: *?[]const u8,
                     si: *?*const ast.Invocation,
+                    ss: *bool,
+                    inside_step: bool,
                 ) void {
                     for (continuations) |*cont| {
                         // Skip | step |> branches here - handle them separately to avoid double-counting
                         const is_step = std.mem.eql(u8, cont.branch, "step");
-                        
+
                         if (!is_step) {
                             if (cont.node) |*nd| {
                                 if (nd.* == .invocation) {
                                     const inv = &nd.invocation;
-                                    detectStep(inv, sr, si);
+                                    detectStep(inv, sr, si, ss);
                                     const is_pairwise = inv.path.segments.len == 1 and
                                         std.mem.eql(u8, inv.path.segments[0], "pairwise") and
                                         inv.path.module_qualifier != null and
@@ -407,6 +420,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                                                 .op_type = if (is_pairwise) "pairwise" else if (is_self) "self" else "reduce",
                                                 .body_text = bt,
                                                 .variant = inv.variant,
+                                                .position = if (inside_step) .step else if (ss.*) .post else .pre,
                                             }) catch unreachable;
                                         }
                                     }
@@ -414,7 +428,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                             }
                             // Recurse into nested continuations (for |> chaining)
                             if (cont.continuations.len > 0) {
-                                callInner(a, cont.continuations, ops_list, sr, si);
+                                callInner(a, cont.continuations, ops_list, sr, si, ss, inside_step);
                             }
                         } else {
                             // | step |> branch: check its node and recurse into its continuations
@@ -446,13 +460,14 @@ const codegen_utils_kernel = @import("codegen_utils");
                                                 .op_type = if (is_pairwise) "pairwise" else if (is_self) "self" else "reduce",
                                                 .body_text = bt,
                                                 .variant = inv.variant,
+                                                .position = .step,
                                             }) catch unreachable;
                                         }
                                     }
                                 }
                             }
                             if (cont.continuations.len > 0) {
-                                callInner(a, cont.continuations, ops_list, sr, si);
+                                callInner(a, cont.continuations, ops_list, sr, si, ss, true);
                             }
                         }
                     }
@@ -463,7 +478,7 @@ const codegen_utils_kernel = @import("codegen_utils");
             if (kernel_cont.node) |*step| {
                 if (step.* == .invocation) {
                     const inv = &step.invocation;
-                    detectStep(inv, &step_range, &step_inv);
+                    detectStep(inv, &step_range, &step_inv, &seen_step);
                     const is_pairwise = inv.path.segments.len == 1 and
                         std.mem.eql(u8, inv.path.segments[0], "pairwise") and
                         inv.path.module_qualifier != null and
@@ -489,6 +504,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                                 .op_type = if (is_pairwise) "pairwise" else if (is_self) "self" else "reduce",
                                 .body_text = bt,
                                 .variant = inv.variant,
+                                .position = .pre,
                             }) catch unreachable;
                         }
                     }
@@ -496,7 +512,7 @@ const codegen_utils_kernel = @import("codegen_utils");
             }
 
             // Then recurse into nested continuations (for chained ops)
-            collectFromContinuations(alloc, kernel_cont.continuations, &ops, &step_range, &step_inv);
+            collectFromContinuations(alloc, kernel_cont.continuations, &ops, &step_range, &step_inv, &seen_step, false);
             return KernelPlan{ .step_range = step_range, .step_invocation = step_inv, .ops = ops.toOwnedSlice(alloc) catch unreachable };
         }
     }.call;
@@ -765,12 +781,12 @@ const codegen_utils_kernel = @import("codegen_utils");
                 rop.reduce_statements = stmts.toOwnedSlice(alloc) catch unreachable;
             }
 
-            if (step_range) |range| {
+            const step_open: []const u8 = if (step_range) |range| blk: {
                 // `0..3` is a Zig range expression; JS has no such value, so the
                 // bounds are split and spelled as a counted `for`. A range that
                 // is not the literal `a..b` shape has no JS lowering, and saying
                 // so beats emitting a loop that silently never runs.
-                const step_open = if (is_js) blk: {
+                if (is_js) {
                     const dots = std.mem.indexOf(u8, range, "..") orelse {
                         std.debug.print("error[KORU122]: std/kernel:step on the JavaScript target needs a literal `a..b` range (got `{s}`)\n", .{range});
                         std.process.exit(1);
@@ -778,11 +794,35 @@ const codegen_utils_kernel = @import("codegen_utils");
                     const lo = std.mem.trim(u8, range[0..dots], " \t");
                     const hi = std.mem.trim(u8, range[dots + 2 ..], " \t");
                     break :blk std.fmt.allocPrint(alloc, "\nfor (let _step_i = {s}; _step_i < {s}; _step_i++) {{", .{ lo, hi }) catch unreachable;
-                } else std.fmt.allocPrint(alloc, "\nfor ({s}) |_step_i| {{\n    _ = &_step_i;", .{range}) catch unreachable;
-                code.appendSlice(alloc, step_open) catch unreachable;
+                }
+                break :blk std.fmt.allocPrint(alloc, "\nfor ({s}) |_step_i| {{\n    _ = &_step_i;", .{range}) catch unreachable;
+            } else "";
+
+            // Emission order is positional: ops chained BEFORE std/kernel:step
+            // run once over the pre-step state, ops under `| step |>` run per
+            // step, ops chained past it run once over the post-step state.
+            // Grouped BY CONSTRUCTION — a post op collected between two step
+            // branches still lands after the loop, and within a position class
+            // source order is preserved.
+            var order = std.ArrayList(usize).initCapacity(alloc, ops.len) catch unreachable;
+            for ([_]OpPosition{ .pre, .step, .post }) |pos| {
+                for (ops, 0..) |op, oi| {
+                    if (op.position == pos) order.append(alloc, oi) catch unreachable;
+                }
             }
 
-            for (ops, 0..) |op, op_idx| {
+            var step_opened = false;
+            for (order.items) |oi| {
+                const op = &ops[oi];
+                const op_idx = oi;
+                if (op.position == .step and !step_opened and step_range != null) {
+                    code.appendSlice(alloc, step_open) catch unreachable;
+                    step_opened = true;
+                }
+                if (op.position == .post and step_opened) {
+                    code.append(alloc, '}') catch unreachable;
+                    step_opened = false;
+                }
                 if (store_name.len > 0 and !std.mem.eql(u8, op.op_type, "self") and !std.mem.eql(u8, op.op_type, "pairwise")) {
                     std.debug.print("error[KORU122]: kernel op `{s}` has no store-backed lowering yet — a store kernel runs `self` and `pairwise` only this rung\n", .{op.op_type});
                     std.process.exit(1);
@@ -1621,7 +1661,7 @@ const codegen_utils_kernel = @import("codegen_utils");
                 }
             }
 
-            if (step_range != null) {
+            if (step_opened) {
                 code.append(alloc, '}') catch unreachable;
             }
 
