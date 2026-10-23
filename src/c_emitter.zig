@@ -1674,6 +1674,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\static void __koru_stderr_write_i64(long long v) { fprintf(stderr, "%lld", v); }
         \\static void __koru_stdout_write_f64(double v) { printf("%g", v); }
         \\static void __koru_stderr_write_f64(double v) { fprintf(stderr, "%g", v); }
+        \\static void __koru_stdout_write_f64_prec(double v, int prec) { printf("%.*f", prec, v); }
+        \\static void __koru_stderr_write_f64_prec(double v, int prec) { fprintf(stderr, "%.*f", prec, v); }
         \\static _Noreturn void __koru_unreachable(const char *what) {
         \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
         \\    fprintf(stderr, "koru: %s\n", what);

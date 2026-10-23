@@ -10,23 +10,19 @@
 // argument type mismatch — which is the fragment's honest gate: faithful
 // emission, typed refusal, never a silent reinterpretation.
 //
-// `:.N` precision is refused outright rather than dropped: emitting the
-// operand unpadded would change output bytes silently, and a refusal is the
-// only honest answer while the lane has no printf-family formatter.
+// `:.N` precision lowers to `%.*f` — the toFixed spelling (see the operand fn).
 
 // ============================================================================
 // C placeholder operand — the ioJsPlaceholderOperand twin.
 // ============================================================================
 /// Emit one `{{ … }}` placeholder's operand for `__printInterpolateC`, and
 /// route its TYPE through `write_suffix`: the spec after `:` is the author's
-/// own type declaration, so `:d` writes through `__koru_stdout_write_i64`
-/// (long long), `:f` through `__koru_stdout_write_f64` (double), and `:s`
-/// (or a missing spec — the frontend's missing-spec check errors first)
-/// stays on the `const char *` write. Return codes: 0 ok; 1 — a `:.N`
-/// precision tail, REFUSED (no C formatter yet); 2 — `:S` handle form,
-/// REFUSED (pointer machinery is outside the first fragment). Anything else
-/// falls back to the string write, where a wrong-typed operand fails loudly
-/// at the oracle's typecheck — the fragment's typed gate.
+/// own type declaration — `:d` → `_i64`, `:f` → `_f64`, `:s` (or a missing
+/// spec — the frontend's check errors first) → the `const char *` write; a
+/// `:.N` tail routes the operand to `*_f64_prec` as `f((v), N)` — `%.*f`.
+/// Return codes: 0 ok; 2 — `:S` handle form, REFUSED (pointer machinery is
+/// outside the first fragment). Anything else falls back to the string
+/// write, where a wrong-typed operand fails loudly at the oracle's typecheck.
 fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, raw: []const u8, write_suffix: *[]const u8) u8 {
     var ws_start: usize = 0;
     while (ws_start < raw.len and (raw[ws_start] == ' ' or raw[ws_start] == '\t')) : (ws_start += 1) {}
@@ -51,7 +47,14 @@ fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, 
             spec = spec[0..p2];
         }
     }
-    if (precision != null) return 1;
+    if (precision) |p| {
+        write_suffix.* = "_f64_prec";
+        buf.append(allocator, '(') catch unreachable;
+        buf.appendSlice(allocator, ioLowerCExpr(allocator, var_name)) catch unreachable;
+        buf.appendSlice(allocator, "), ") catch unreachable;
+        buf.appendSlice(allocator, p) catch unreachable;
+        return 0;
+    }
 
     if (std.mem.eql(u8, spec, "d")) {
         write_suffix.* = "_i64";
@@ -159,7 +162,7 @@ fn __printInterpolateC(
                 chunk.append(allocator, content[i]) catch unreachable;
                 i += 1;
             }
-            // {{ var:fmt }} → write((lowered)); :.N refuses (see header).
+            // {{ var:fmt }} → write((lowered)); `:.N` → `f((v), N)`.
             else if (i + 1 < content.len and content[i] == '{' and content[i + 1] == '{') {
                 var ws_start = i + 2;
                 while (ws_start < content.len and (content[ws_start] == ' ' or content[ws_start] == '\t')) : (ws_start += 1) {}
@@ -175,9 +178,6 @@ fn __printInterpolateC(
                     var operand = std.ArrayList(u8).initCapacity(allocator, 32) catch unreachable;
                     var write_suffix: []const u8 = "";
                     const op_rc = ioCPlaceholderOperand(&operand, allocator, content[ws_start..ws_end], &write_suffix);
-                    if (op_rc == 1) {
-                        return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print.ln|c: `:.N` precision has no C formatter yet — emitting the operand unpadded would change output bytes silently, so the lane refuses", .{});
-                    }
                     if (op_rc == 2) {
                         return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print.ln|c: `{{ :S }}` handle form is outside the first fragment — *String pointer machinery has no C lowering", .{});
                     }

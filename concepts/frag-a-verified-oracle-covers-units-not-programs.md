@@ -142,3 +142,22 @@ moved past — to `field expr has type Expression`, the comptime-AST input
 type that is the transform surface's real boundary. Effect-side `! each *`
 (`anytype` handler params) and `|*` catch-all consumers stay refused —
 separate axes, not this rung.
+
+## Evolve 2026-10-23 — `:.N` is `%.*f` — the toFixed spelling, not a new formatter
+
+`{{ v:d:.N }}` refused on the grounds that dropping precision would change
+output bytes — correct instinct, wrong conclusion: the lane already had
+printf in the preamble, and `%.*f` IS the toFixed semantics `:.N` documents
+(js emits `Number(v).toFixed(N)`; zig emits `{d:.N}`). The operand now
+routes to `__koru_*_write_f64_prec(v, N)`; a wrong-typed operand fails at
+the oracle's typecheck like every other placeholder. One honest caveat the
+measurement surfaced: `{d:.N}` on an INT operand zig-prints bare (`5`, not
+`5.000`) — zig ignores precision there while js honors it, so the lanes
+already disagreed before this lane picked the toFixed side.
+
+Two boundary notes: `io.cprec.kz` is line-pinned at 282 and `~part` decls
+live in the pinned root (KORU204 bars nested parts) — the change was made
+net-zero inside the file rather than grown. And `230_003`'s `@sin(0.5)`
+now emits but reaches ccomp verbatim — math builtins are the next
+operand-surface row, gated on `-lm` joining the pinned compile recipe
+(that is a recipe ruling, not a lowering row).
