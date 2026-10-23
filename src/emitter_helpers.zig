@@ -5685,9 +5685,9 @@ fn emitInlineCodeResolvingSplices(
             // the stack — a name that occurs as a token in ANY of them would
             // be shadowed by `const <binding>`, not just one in the immediate
             // producer's text.
-            const producer_shadow = containsToken(inline_code, binding) or blk: {
+            const producer_shadow = codegen_utils.containsToken(inline_code, binding) or blk: {
                 for (ctx.splice_frame_codes.items) |frame| {
-                    if (containsToken(frame, binding)) break :blk true;
+                    if (codegen_utils.containsToken(frame, binding)) break :blk true;
                 }
                 break :blk false;
             };
@@ -6777,8 +6777,8 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
         // A nested fn makes token rewriting unsound; a terminal-bearing event
         // whose proc never `return`s relies on the legacy glue's synthesized
         // tail. Both keep the call path.
-        if (containsToken(proc.body.text, "fn")) return null;
-        if (has_terminal_branch and !containsToken(proc.body.text, "return")) return null;
+        if (codegen_utils.containsToken(proc.body.text, "fn")) return null;
+        if (has_terminal_branch and !codegen_utils.containsToken(proc.body.text, "return")) return null;
 
         // Inline splicing lowers an effect arm only in DIRECT-CALL form
         // (`ready(...)` → splice, or evaluate-and-discard when unhandled). A body
@@ -6867,38 +6867,6 @@ fn identUsedAsNonCall(body: []const u8, name: []const u8) bool {
                 while (j < body.len and (body[j] == ' ' or body[j] == '\t' or body[j] == '\n' or body[j] == '\r')) j += 1;
                 if (j >= body.len or body[j] != '(') return true;
             }
-        }
-    }
-    return false;
-}
-
-/// Word-boundary token scan, quote- and comment-aware.
-fn containsToken(body: []const u8, token: []const u8) bool {
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (q != 0) {
-            if (c == '\\') {
-                i += 1;
-            } else if (c == q) {
-                q = 0;
-            }
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') i += 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, body[i..], token)) {
-            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-            const after = i + token.len;
-            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
-            if (before_ok and after_ok) return true;
         }
     }
     return false;

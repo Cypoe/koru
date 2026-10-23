@@ -295,39 +295,6 @@ const CODEGEN_INLINE_PREFIX = "__koru_inline_";
 var splice_frame_codes: [64][]const u8 = undefined;
 var splice_frame_depth: usize = 0;
 
-/// Identifier-boundary token scan — port of emitter_helpers.containsToken
-/// (private there): skips strings, chars, and line comments.
-fn containsTokenLocal(body: []const u8, token: []const u8) bool {
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (q != 0) {
-            if (c == '\\') {
-                i += 1;
-            } else if (c == q) {
-                q = 0;
-            }
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') i += 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, body[i..], token)) {
-            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-            const after = i + token.len;
-            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
-            if (before_ok and after_ok) return true;
-        }
-    }
-    return false;
-}
-
 /// Token-boundary replace of `from` with `to` — for renaming a spliced
 /// effect binding that would shadow a producer-scope local.
 fn replaceIdent(allocator: std.mem.Allocator, body: []const u8, from: []const u8, to: []const u8) ![]const u8 {
@@ -536,9 +503,9 @@ fn resolveInlineMarkers(
             // The binding lands inside every enclosing splice frame still on
             // the stack — a name that occurs as a token in ANY of them would
             // be shadowed, not just one in the immediate producer's text.
-            const producer_shadow = containsTokenLocal(code, binding) or blk: {
+            const producer_shadow = codegen_utils.containsToken(code, binding) or blk: {
                 for (splice_frame_codes[0..splice_frame_depth]) |frame| {
-                    if (containsTokenLocal(frame, binding)) break :blk true;
+                    if (codegen_utils.containsToken(frame, binding)) break :blk true;
                 }
                 break :blk false;
             };

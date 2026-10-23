@@ -2603,6 +2603,38 @@ fn isZigKeywordPosition(text: []const u8, mask: []const bool, start: usize, end:
     return std.mem.indexOfScalar(u8, follows, c) != null;
 }
 
+/// Word-boundary token scan, quote- and comment-aware.
+pub fn containsToken(body: []const u8, token: []const u8) bool {
+    var i: usize = 0;
+    var q: u8 = 0;
+    while (i < body.len) : (i += 1) {
+        const c = body[i];
+        if (q != 0) {
+            if (c == '\\') {
+                i += 1;
+            } else if (c == q) {
+                q = 0;
+            }
+            continue;
+        }
+        if (c == '"' or c == '\'') {
+            q = c;
+            continue;
+        }
+        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+            while (i < body.len and body[i] != '\n') i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, body[i..], token)) {
+            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
+            const after = i + token.len;
+            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
+            if (before_ok and after_ok) return true;
+        }
+    }
+    return false;
+}
+
 /// Replace word-boundary-matched identifier occurrences in text — but only
 /// where the occurrence is code (see zigCodeMask). Rewriting a name inside a
 /// string literal ships a corrupted program that still compiles (230_016).

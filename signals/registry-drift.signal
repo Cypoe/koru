@@ -1,0 +1,18 @@
+name: registry-drift
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when a diagnostic code is emitted but never declared in the
+  ErrorCode enum — the emit exists, the registry doesn't know it.
+  stdlib-side diagnostics are the usual suspect: koru_std prints
+  `error[KORUnnn]` as formatted text, bypassing the typed emit path,
+  so the enum discipline can only be enforced after the fact by the
+  registry-coherence watcher.
+
+  Witnessed 2026-10-23: 7b540681c made a second `std/kernel:step`
+  refuse with KORU127 via std.debug.print in kernel.kz but never
+  declared the code; the watcher's ORPHAN_EMIT caught it on the full
+  ceremony, and the drain was a one-line enum declaration.
+route: surface
