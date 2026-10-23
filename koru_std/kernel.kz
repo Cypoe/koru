@@ -852,15 +852,24 @@ const codegen_utils_kernel = @import("codegen_utils");
                                 .{ store_ref, store_ref, op_src }
                             ) catch unreachable
                         else
+                            // `while` not `for`: same measured exception as the
+                            // known-length site below — 0.63s vs 0.66s on
+                            // clbg_nbody, checksum-identical; the `for`
+                            // capture spelling loses the gain on this nest.
                             std.fmt.allocPrint(alloc,
                                 \\
-                                \\for (0..{s}.len) |i| {{
-                                \\    for (i + 1..{s}.len) |j| {{
+                                \\{{
+                                \\const __koru_n = {s}.len;
+                                \\var i: usize = 0;
+                                \\while (i < __koru_n) : (i += 1) {{
+                                \\    var j: usize = i + 1;
+                                \\    while (j < __koru_n) : (j += 1) {{
                                 \\        {s}
                                 \\    }}
                                 \\}}
+                                \\}}
                                 ,
-                                .{ store_ref, store_ref, op_src }
+                                .{ store_ref, op_src }
                             ) catch unreachable;
                         code.appendSlice(alloc, store_pair_loop) catch unreachable;
                         continue;
@@ -915,12 +924,21 @@ const codegen_utils_kernel = @import("codegen_utils");
                             .{ elem_count, elem_count, op_src }
                         ) catch unreachable
                     else
+                        // `while` not `for`: measured 2026-10-23 on clbg_nbody —
+                        // 0.63s vs 0.66s checksum-identical; the explicit-increment
+                        // form schedules better under LLVM on this nest shape.
+                        // Block-scoped so `i`/`j` don't shadow a following
+                        // `for |i|` capture or collide with a second pairwise.
                         std.fmt.allocPrint(alloc,
                             \\
-                            \\for (0..{d}) |i| {{
-                            \\    for (i + 1..{d}) |j| {{
+                            \\{{
+                            \\var i: usize = 0;
+                            \\while (i < {d}) : (i += 1) {{
+                            \\    var j: usize = i + 1;
+                            \\    while (j < {d}) : (j += 1) {{
                             \\        {s}
                             \\    }}
+                            \\}}
                             \\}}
                             ,
                             .{ elem_count, elem_count, op_src }
@@ -1965,339 +1983,6 @@ const codegen_utils_kernel = @import("codegen_utils");
 }
 
 // ============================================================================
-// KERNEL.PAIRWISE - Pairwise iteration over kernel data (TRANSFORM)
-// ============================================================================
-//
-// Iterates over all unique pairs (i, j) where i < j.
-// The kernel variable becomes "self" and .other refers to the paired element.
-//
-// Example:
-//   std/kernel:pairwise {
-//       bodies.vel -= d * mag * bodies.other.mass
-//       bodies.other.vel += d * mag * bodies.mass
-//   }
-//
-// Generated code:
-//   const __kernel_pair = struct {
-//       inline fn call(noalias b1: *@TypeOf(bodies.ptr[0]), noalias b2: *@TypeOf(bodies.ptr[0])) void {
-//           b1.vel -= d * mag * b2.mass;
-//           b2.vel += d * mag * b1.mass;
-//       }
-//   };
-//   for (0..bodies.len) |i| {
-//       for (i+1..bodies.len) |j| {
-//           __kernel_pair.call(&bodies.ptr[i], &bodies.ptr[j]);
-//       }
-//   }
-
-~[comptime|transform]pub tor pairwise {
-    expr: ?Expression,
-    source: Source,
-    invocation: *const Invocation,
-    item: *const std/compiler:Item,
-    program: *const std/compiler:Program,
-    allocator: std.mem.Allocator
-} -> SiteResult
-
-~proc pairwise|zig {
-    const ast = @import("ast");
-
-    // Get the flow from the item
-    const flow = if (item.* == .flow)
-        &item.flow
-    else
-        @panic("kernel.pairwise: expected flow item");
-
-    const SearchResult = struct {
-        binding_name: []const u8,
-        kernel_init_invocation: ?*const ast.Invocation,
-        sub_continuations: []const ast.Continuation,
-    };
-
-    const findInvocationRecursive = struct {
-        fn searchContinuations(
-            continuations: []const ast.Continuation,
-            target_inv: *const ast.Invocation,
-            owner_invocation: ?*const ast.Invocation,
-            parent_binding: ?[]const u8,
-            kernel_init_invocation: ?*const ast.Invocation,
-        ) ?SearchResult {
-            for (continuations) |*cont| {
-                var effective_binding = parent_binding;
-                var effective_kernel_init = kernel_init_invocation;
-                if (std.mem.eql(u8, cont.branch, "kernel")) {
-                    effective_binding = cont.binding orelse "k";
-                    if (owner_invocation) |inv| {
-                        effective_kernel_init = inv;
-                    }
-                }
-
-                // Check this continuation's node
-                if (cont.node) |*step| {
-                    if (step.* == .invocation) {
-                        // CRITICAL: Compare pointers to find the EXACT invocation
-                        if (&step.invocation == target_inv) {
-                            return SearchResult{
-                                .binding_name = effective_binding orelse "k",
-                                .kernel_init_invocation = effective_kernel_init,
-                                .sub_continuations = cont.continuations,
-                            };
-                        }
-                    }
-                }
-
-                const next_owner_invocation = if (cont.node) |*step| blk: {
-                    if (step.* == .invocation) {
-                        break :blk &step.invocation;
-                    }
-                    break :blk null;
-                } else null;
-
-                // Recurse into nested continuations
-                if (searchContinuations(cont.continuations, target_inv, next_owner_invocation, effective_binding, effective_kernel_init)) |result| {
-                    return result;
-                }
-            }
-            return null;
-        }
-
-        fn searchItems(
-            items: []const ast.Item,
-            target_inv: *const ast.Invocation,
-        ) ?SearchResult {
-            for (items) |*it| {
-                switch (it.*) {
-                    .flow => |*f| {
-                        if (searchContinuations(f.body.continuations, target_inv, f.inv(), null, null)) |result| {
-                            return result;
-                        }
-                    },
-                    .module_decl => |*mod| {
-                        if (searchItems(mod.items, target_inv)) |result| {
-                            return result;
-                        }
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-    }.searchItems;
-
-    // Same contract as the `self` twin below: a standalone `pairwise` only runs
-    // outside a `kernel:init` subtree, so a failed search is the user's mistake
-    // and not an internal one. Reported, not panicked.
-    const search_result = findInvocationRecursive(program.items, invocation) orelse {
-        std.debug.print(
-            "error[KORU170]: `std/kernel:pairwise` outside a `std/kernel:init` subtree — a kernel op needs a kernel view to operate on\n  --> {s}:{d}:{d}\n  hint: wrap it, e.g. `std/kernel:init(bodies) | kernel k |> std/kernel:pairwise {{ ... }}`\n",
-            .{ flow.location.file, flow.location.line, flow.location.column },
-        );
-        std.process.exit(1);
-    };
-
-    const binding_name = search_result.binding_name;
-    const kernel_init_invocation = search_result.kernel_init_invocation;
-
-    // Unique identifier for ptr to avoid collisions in generated Zig
-    var hash: u32 = 0;
-    for (flow.module) |c| hash = hash *% 31 +% c;
-    hash = hash *% 31 +% @as(u32, @intCast(flow.location.line));
-    hash = hash *% 31 +% @as(u32, @intCast(flow.location.column));
-    for (source.text) |c| hash = hash *% 31 +% c;
-    const ptr_name = std.fmt.allocPrint(allocator, "__koru_kernel_ptr_{d}", .{hash}) catch unreachable;
-
-    // ========================================================================
-    // STEP 2: Transform DSL body
-    // ========================================================================
-    // k.other.X -> ptr[j].X  (direct array access)
-    // k.X -> ptr[i].X        (direct array access)
-    //
-    // This produces a tight loop without function call overhead.
-
-    const binding_other = std.fmt.allocPrint(allocator, "{s}.other", .{binding_name}) catch unreachable;
-    const binding_other_len = binding_other.len;
-    const binding_len = binding_name.len;
-
-    // Direct array index references for tight loop
-    const self_ref = std.fmt.allocPrint(allocator, "{s}[i]", .{ptr_name}) catch unreachable;
-    const other_ref = std.fmt.allocPrint(allocator, "{s}[j]", .{ptr_name}) catch unreachable;
-
-    var body_code = std.ArrayList(u8).initCapacity(allocator, source.text.len * 2) catch unreachable;
-
-    var i: usize = 0;
-    while (i < source.text.len) {
-        if (i + binding_other_len <= source.text.len and std.mem.eql(u8, source.text[i..i+binding_other_len], binding_other)) {
-            body_code.appendSlice(allocator, other_ref) catch unreachable;
-            i += binding_other_len;
-        } else if (i + binding_len <= source.text.len and std.mem.eql(u8, source.text[i..i+binding_len], binding_name)) {
-            const at_end = (i + binding_len >= source.text.len);
-            const next_ok = at_end or (!std.ascii.isAlphanumeric(source.text[i + binding_len]) and source.text[i + binding_len] != '_');
-            const prev_ok = (i == 0) or (!std.ascii.isAlphanumeric(source.text[i - 1]) and source.text[i - 1] != '_');
-            if (next_ok and prev_ok) {
-                body_code.appendSlice(allocator, self_ref) catch unreachable;
-                i += binding_len;
-            } else {
-                body_code.append(allocator, source.text[i]) catch unreachable;
-                i += 1;
-            }
-        } else {
-            body_code.append(allocator, source.text[i]) catch unreachable;
-            i += 1;
-        }
-    }
-
-    const extractKernelInitSource = struct {
-        fn call(inv_opt: ?*const ast.Invocation) ?[]const u8 {
-            const inv = inv_opt orelse return null;
-            for (inv.args) |arg| {
-                if (arg.source_value) |src_val| {
-                    return src_val.text;
-                }
-            }
-            return null;
-        }
-    }.call;
-
-    const countInitElements = struct {
-        fn call(text: []const u8) ?usize {
-            var depth: i32 = 0;
-            var count: usize = 0;
-            var in_string: bool = false;
-            var escaped: bool = false;
-
-            for (text) |c| {
-                if (in_string) {
-                    if (escaped) {
-                        escaped = false;
-                        continue;
-                    }
-                    if (c == '\\') {
-                        escaped = true;
-                        continue;
-                    }
-                    if (c == '"') {
-                        in_string = false;
-                    }
-                    continue;
-                } else if (c == '"') {
-                    in_string = true;
-                    continue;
-                }
-
-                if (c == '{') {
-                    depth += 1;
-                } else if (c == '}') {
-                    if (depth == 1) {
-                        count += 1;
-                    }
-                    depth -= 1;
-                }
-            }
-
-            if (count > 0) return count;
-            return null;
-        }
-    }.call;
-
-    const init_source = extractKernelInitSource(kernel_init_invocation);
-    const known_len = if (init_source) |text| countInitElements(text) else null;
-
-    // Ensure body_code ends with semicolon
-    if (kernelBodyNeedsTerminator(body_code.items)) {
-        body_code.append(allocator, ';') catch unreachable;
-    }
-
-    // ========================================================================
-    // STEP 3: Emit tight N²/2 loop (direct array access)
-    //
-    // Body already transformed: k -> ptr[i], k.other -> ptr[j]
-    // No function call wrapper - just direct nested loops.
-    //
-    // The i < j iteration order guarantees ptr[i] != ptr[j], so LLVM
-    // can optimize without aliasing concerns.
-    //
-    // GPU translation: strip k.other writes, emit N² per-element loop.
-    // The symmetric writes become implicit when j is the outer element.
-    // ========================================================================
-
-    const code = if (known_len) |len|
-        std.fmt.allocPrint(allocator,
-            \\const {0s} = {1s}.ptr;
-            \\for (0..{2d}) |i| {{
-            \\    for (i + 1..{2d}) |j| {{
-            \\        {3s}
-            \\    }}
-            \\}}
-            ,
-            .{ ptr_name, binding_name, len, body_code.items }
-        ) catch unreachable
-    else
-        std.fmt.allocPrint(allocator,
-            \\const {0s} = {1s}.ptr;
-            \\for (0..{1s}.len) |i| {{
-            \\    for (i + 1..{1s}.len) |j| {{
-            \\        {2s}
-            \\    }}
-            \\}}
-            ,
-            .{ ptr_name, binding_name, body_code.items }
-        ) catch unreachable;
-
-    // Detect outer range: only true if an explicit (range) expression was provided,
-    // e.g. pairwise(0..N) { ... }.
-    const has_outer_range = expr != null;
-
-    if (!has_outer_range) {
-        // ====================================================================
-        // STANDARD CASE: replace pairwise with inline i/j loops only
-        // ====================================================================
-        const new_node = ast.Node{ .inline_code = code };
-        return .{ .replacement_node = .{ .node = new_node } };
-    }
-
-    // ========================================================================
-    // OUTER-RANGE CASE: pairwise(0..N) { ... } |> per_step(...)
-    //
-    // Build a ForeachNode for the outer loop.
-    // "step" branch body = [ pairwise i/j inline_code → sub_continuations ]
-    // This puts the per-step continuation (advance_positions etc.) INSIDE the
-    // outer loop, hoisting ptr extraction and fusing both operations together.
-    // ========================================================================
-    const pairwise_body_cont = ast.Continuation{
-        .branch = allocator.dupe(u8, "") catch unreachable,
-        .binding = null,
-        .condition = null,
-        .node = ast.Node{ .inline_code = code },
-        .continuations = search_result.sub_continuations,
-        .indent = 0,
-        .location = flow.location,
-    };
-
-    const each_body = allocator.alloc(ast.Continuation, 1) catch unreachable;
-    each_body[0] = pairwise_body_cont;
-
-    const scope_marks = allocator.alloc([]const u8, 1) catch unreachable;
-    scope_marks[0] = allocator.dupe(u8, "@scope") catch unreachable;
-
-    const branches = allocator.alloc(ast.NamedBranch, 1) catch unreachable;
-    branches[0] = ast.NamedBranch{
-        .name = allocator.dupe(u8, "step") catch unreachable,
-        .body = each_body,
-        .binding = allocator.dupe(u8, "_") catch unreachable,
-        .marks = scope_marks,
-    };
-
-    const foreach_node = ast.Node{ .foreach = .{
-        .iterable = allocator.dupe(u8, expr.?) catch unreachable,
-        .element_type = null,
-        .branches = branches,
-    }};
-
-    const empty_conts = allocator.alloc(ast.Continuation, 0) catch unreachable;
-    return .{ .replacement_node = .{ .node = foreach_node, .children = empty_conts } };
-}
-
-// ============================================================================
 // KERNEL.SELF - Per-element operation over kernel data (TRANSFORM)
 // ============================================================================
 //
@@ -2619,3 +2304,4 @@ const codegen_utils_kernel = @import("codegen_utils");
 ~part fpga
 ~part fpgatb
 ~part fpgaemit
+~part pairwise
