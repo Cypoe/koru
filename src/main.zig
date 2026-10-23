@@ -4292,17 +4292,38 @@ fn mangleHandlerName(allocator: std.mem.Allocator, handler_name: []const u8) ![]
     return result.toOwnedSlice(allocator);
 }
 
+/// Escape one name character into a Zig-identifier-safe sequence. `*` keeps
+/// the established `_star_` spelling; the rest cover the bracket tails a
+/// spellable declaration name may carry (`gemv.kernel[*]` — the
+/// parameter-marker — `close[!]`, `name[T:u32]`, `name[T:u32;N=5]`).
+fn escapeNameCharLen(c: u8) usize {
+    const esc = escapeNameChar(c) orelse return 0;
+    return esc.len - 1;
+}
+
+fn escapeNameChar(c: u8) ?[]const u8 {
+    return switch (c) {
+        '*' => "_star_",
+        '[' => "_lb_",
+        ']' => "_rb_",
+        ':' => "_colon_",
+        '!' => "_bang_",
+        ';' => "_semi_",
+        ',' => "_comma_",
+        '=' => "_eq_",
+        else => null,
+    };
+}
+
 fn joinPathSegments(allocator: std.mem.Allocator, segments: []const []const u8) ![]const u8 {
     if (segments.len == 0) return try allocator.dupe(u8, "unknown");
 
-    // Calculate total length, accounting for * -> _star_ expansion
+    // Calculate total length, accounting for escaped characters
     var total_len: usize = 0;
     for (segments, 0..) |seg, i| {
         if (i > 0) total_len += 1; // underscore separator
         for (seg) |c| {
-            if (c == '*') {
-                total_len += 5; // "_star_" minus the "*" = 5 extra chars
-            }
+            total_len += escapeNameCharLen(c);
         }
         total_len += seg.len;
     }
@@ -4317,9 +4338,9 @@ fn joinPathSegments(allocator: std.mem.Allocator, segments: []const []const u8) 
             pos += 1;
         }
         for (seg) |c| {
-            if (c == '*') {
-                @memcpy(result[pos..][0..6], "_star_");
-                pos += 6;
+            if (escapeNameChar(c)) |esc| {
+                @memcpy(result[pos..][0..esc.len], esc);
+                pos += esc.len;
             } else {
                 result[pos] = c;
                 pos += 1;

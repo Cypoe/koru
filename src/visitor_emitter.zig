@@ -199,17 +199,35 @@ fn stripPhantom(type_str: []const u8) []const u8 {
     return type_str;
 }
 
+/// Escape one name character into a Zig-identifier-safe sequence. `*` keeps
+/// the established `_star_` spelling; the rest cover the bracket tails a
+/// spellable declaration name may carry (`gemv.kernel[*]` — the
+/// parameter-marker — `close[!]`, `name[T:u32]`, `name[T:u32;N=5]`).
+fn mangledNameEscape(c: u8) ?[]const u8 {
+    return switch (c) {
+        '*' => "_star_",
+        '[' => "_lb_",
+        ']' => "_rb_",
+        ':' => "_colon_",
+        '!' => "_bang_",
+        ';' => "_semi_",
+        ',' => "_comma_",
+        '=' => "_eq_",
+        else => null,
+    };
+}
+
 /// Write a path segment with special chars mangled to valid Zig identifiers
 /// e.g., "log" -> "log", "*" -> "_star_", "foo.bar" -> "foo_bar"
 fn writeMangledSegment(code_emitter: *emitter.CodeEmitter, segment: []const u8) !void {
     var start: usize = 0;
     for (segment, 0..) |c, i| {
-        if (c == '*') {
-            // Write everything before the *
+        if (mangledNameEscape(c)) |esc| {
+            // Write everything before the escaped char
             if (i > start) {
                 try code_emitter.write(segment[start..i]);
             }
-            try code_emitter.write("_star_");
+            try code_emitter.write(esc);
             start = i + 1;
         } else if (c == '.') {
             // Replace dots with underscores for valid Zig identifiers
