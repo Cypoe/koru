@@ -997,12 +997,16 @@ pub const Parser = struct {
         return self.getLineLocation(self.current, 0);
     }
 
-    /// Get source location for a specific line and indent (column)
+    /// Get source location for a specific line and indent. `indent` is the
+    /// line's leading-space COUNT (0-based offset of the first non-space
+    /// char); `column` is 1-based, so the stored value is `indent + 1` — the
+    /// column of that first char. Callers with no column at all pass 0,
+    /// which lands the caret on column 1.
     fn getLineLocation(self: *Parser, line_idx: usize, indent: usize) errors.SourceLocation {
         return .{
             .file = self.reporter.file_name,
             .line = if (line_idx < self.lines.len) line_idx + 1 else self.lines.len,
-            .column = indent,
+            .column = indent + 1,
         };
     }
 
@@ -1021,7 +1025,7 @@ pub const Parser = struct {
         return .{
             .file = self.reporter.file_name,
             .line = line,
-            .column = lexer.getIndent(self.lines[start_line_index]),
+            .column = lexer.getIndent(self.lines[start_line_index]) + 1,
         };
     }
 
@@ -2051,7 +2055,7 @@ pub const Parser = struct {
             const line_base = @intFromPtr(line.ptr);
             const content_base = @intFromPtr(content.ptr);
             if (content_base >= line_base and content_base + content.len <= line_base + line.len) {
-                column = (content_base - line_base) + bad;
+                column = (content_base - line_base) + bad + 1; // 0-based offset → 1-based column
             }
         }
 
@@ -5059,7 +5063,10 @@ pub const Parser = struct {
                             // Check if there's a word after the space (branch name)
                             const after_pipe = lexer.trim(remaining[i + 1 ..]);
                             if (after_pipe.len > 0 and after_pipe[0] != '>' and after_pipe[0] != '?') {
-                                return self.fail(.PARSE001, self.current, @as(u16, @intCast(i)), "Branch continuation '|' must start on a new line with proper indentation", .{});
+                                // `i` indexes `remaining`, a subslice of `line` —
+                                // recover the `|`'s 1-based column by pointer offset.
+                                const pipe_column = (@intFromPtr(remaining.ptr) - @intFromPtr(line.ptr)) + i + 1;
+                                return self.fail(.PARSE001, self.current, @intCast(pipe_column), "Branch continuation '|' must start on a new line with proper indentation", .{});
                             }
                         }
                     }
@@ -7538,7 +7545,15 @@ pub const Parser = struct {
     /// both cases (it is also what the old shared stamp produced).
     fn chainLinkLocation(self: *Parser, base: errors.SourceLocation, link_lines: []const usize, link_idx: usize) errors.SourceLocation {
         if (link_idx >= link_lines.len) return base;
-        return self.getLineLocation(link_lines[link_idx], base.column);
+        // base.column is already a stored 1-based column — it is the head
+        // stamp's column this function is documented to keep, not an indent
+        // to re-derive through getLineLocation.
+        const line_idx = link_lines[link_idx];
+        return .{
+            .file = base.file,
+            .line = if (line_idx < self.lines.len) line_idx + 1 else self.lines.len,
+            .column = base.column,
+        };
     }
 
     /// A `-> produce` arm: bare-return branch_constructor continuation
@@ -9165,7 +9180,7 @@ pub const Parser = struct {
             return self.fail(
                 .PARSE001,
                 self.current,
-                indent,
+                indent + 1,
                 "Pipeline continuation '|>' requires a step. Nested flows (~) are not allowed here.",
                 .{},
             );

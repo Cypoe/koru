@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -45,7 +45,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -54,7 +54,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -63,7 +63,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 6,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -72,7 +72,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -81,7 +81,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 8,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -90,7 +90,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 9,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -99,7 +99,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 10,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -108,7 +108,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 11,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -117,7 +117,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 12,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -126,7 +126,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 13,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -135,7 +135,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 14,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -144,7 +144,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 15,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -153,7 +153,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 16,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -162,7 +162,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 18,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -171,7 +171,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 19,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -199,7 +199,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 21,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -212,7 +212,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 24,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -221,7 +221,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 26,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -230,7 +230,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 27,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -239,7 +239,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 28,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -265,7 +265,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                         "line": 30,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -290,7 +290,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_008_tap_nested_continuation/input.kz",
                 "line": 29,
-                "col": 0
+                "col": 1
             }
         }
     ]

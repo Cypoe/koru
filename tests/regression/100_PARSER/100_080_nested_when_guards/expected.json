@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -37,7 +37,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -65,7 +65,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -84,7 +84,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -112,7 +112,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 9,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -135,7 +135,7 @@
                     "location": {
                         "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                         "line": 11,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -161,7 +161,7 @@
                             "location": {
                                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                                 "line": 12,
-                                "col": 4
+                                "col": 5
                             },
                             "step":                             {
                                 "type": "invocation",
@@ -187,7 +187,7 @@
                             "location": {
                                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                                 "line": 13,
-                                "col": 4
+                                "col": 5
                             },
                             "step":                             {
                                 "type": "invocation",
@@ -214,7 +214,7 @@
             "location": {
                 "file": "tests/regression/100_PARSER/100_080_nested_when_guards/input.kz",
                 "line": 11,
-                "col": 0
+                "col": 1
             }
         }
     ]
