@@ -1,0 +1,678 @@
+// Koru Standard Library: std/cli — a command surface for programs.
+//
+//   import std/cli
+//
+//   std/cli:flag(verbose) {
+//       "type": "boolean",           // boolean | string | int | float
+//       "short": "v",
+//       "description": "chatter"
+//   }
+//
+//   std/cli:command(run) {
+//       "description": "run the thing",
+//       "alias": "r",
+//       "subcommands": ["check", "fire"]
+//   }
+//
+//   std/cli()
+//   | run { subcommand, file: string, verbose } |> handle(subcommand, file, verbose)
+//   | build |> build_all()
+//   | usage { message } |> complain(message)
+//   | help { text } |> std/io:print.ln(text)
+//
+// The declares are [comptime|norun] Source records — the compiler.kz
+// flag.declare/command.declare idiom, name as the positional arg, metadata
+// in the block body. `std/cli()` resolves to this module's `default` tor —
+// a [keyword|comptime|transform] that harvests the declares from the
+// program AST and the command arms from its own continuations, and emits
+// an argv parser + generated --help + dispatch. The std/json:parse emit
+// pattern end to end.
+//
+// THE DESTRUCTURE IS THE SCHEMA (the json:parse license): a field whose
+// name matches a declared flag (`verbose`) binds the parsed flag value;
+// the reserved name `subcommand` binds the first token after the command,
+// constrained against the declare's "subcommands" list when one exists;
+// every other field is a positional in written order, typed by its spec —
+// `file: string` hands a []const u8, `count: i64` parses the token,
+// `?string` admits a missing trailing argument, `[]string` binds the rest.
+// Bare fields bind strings. A command arm with no matching
+// `std/cli:command` declare still dispatches — declares carry prose
+// (help text, alias, subcommand validation), arms carry shape.
+//
+// `| usage { message, help }` and `| help { text }` are optional arms.
+// Absent: --help prints the generated text and exits 0; a usage fault
+// prints the message + generated text and exits 2. Bare invocation (no
+// command token) shows help and exits 0.
+//
+// Program name/version in the usage line are harvested from a
+// std/build:app declaration when one exists (identity lives there, not
+// here) and fall back to the entry-file stem.
+
+const std = @import("std");
+
+// ============================================================================
+// DECLARATIONS — norun Source records, harvested by the default transform.
+// Every field a declare accepts feeds help, dispatch, or a refusal.
+// ============================================================================
+
+~[comptime|norun]pub tor flag {
+    name: string,
+    source: Source,
+}
+
+~[comptime|norun]pub tor command {
+    name: string,
+    source: Source,
+}
+
+// ============================================================================
+// CLI.DEFAULT — the dispatch site transform
+// ============================================================================
+
+~[keyword|comptime|transform]pub tor default {
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+}
+| `*` *
+| ?usage { message: string, help: string }
+| ?help string
+
+// ----------------------------------------------------------------------------
+// CliH — compile-time helpers. Same part-file/container pattern as
+// json.parsehelpers' ParseH: a container so helpers can recurse and share
+// the context; re-imports what it needs (module-scope names do not reach
+// inside containers).
+// ----------------------------------------------------------------------------
+
+const CliH = struct {
+    const std2 = @import("std");
+    const ast2 = @import("ast");
+
+    const FlagTy = enum { boolean, string, int, float };
+    const Flag = struct { name: []const u8, short: ?u8, ty: FlagTy, desc: []const u8, required: bool };
+    const Cmd = struct { name: []const u8, desc: []const u8, alias: ?[]const u8, subs: []const []const u8 };
+
+    const Ctx = struct {
+        a: std2.mem.Allocator,
+        flags: std2.ArrayList(Flag) = .{},
+        cmds: std2.ArrayList(Cmd) = .{},
+        prog_name: ?[]const u8 = null,
+        prog_ver: ?[]const u8 = null,
+        fail: ?[]const u8 = null,
+    };
+
+    fn failf(ctx: *Ctx, comptime fmt: []const u8, args: anytype) void {
+        if (ctx.fail == null)
+            ctx.fail = std2.fmt.allocPrint(ctx.a, fmt, args) catch "std/cli refusal detail OOM";
+    }
+
+    fn w(ctx: *Ctx, buf: *std2.ArrayList(u8), comptime fmt: []const u8, args: anytype) void {
+        const s = std2.fmt.allocPrint(ctx.a, fmt, args) catch unreachable;
+        buf.appendSlice(ctx.a, s) catch unreachable;
+    }
+
+    // `"key": "value"` — the flag.declare JSON-scrape idiom.
+    fn jstr(ctx: *Ctx, src: []const u8, key: []const u8) ?[]const u8 {
+        const pat = std2.fmt.allocPrint(ctx.a, "\"{s}\"", .{key}) catch return null;
+        const at = std2.mem.indexOf(u8, src, pat) orelse return null;
+        var i = at + pat.len;
+        while (i < src.len and (src[i] == ':' or src[i] == ' ' or src[i] == '\t' or src[i] == '\n')) i += 1;
+        if (i >= src.len or src[i] != '"') return null;
+        i += 1;
+        const start = i;
+        while (i < src.len and src[i] != '"') : (i += 1) {}
+        return src[start..i];
+    }
+
+    // `key: "value"` — bare-key scrape for std/build:app's record dialect.
+    fn bareStr(ctx: *Ctx, src: []const u8, key: []const u8) ?[]const u8 {
+        const pat = std2.fmt.allocPrint(ctx.a, "{s}:", .{key}) catch return null;
+        const at = std2.mem.indexOf(u8, src, pat) orelse return null;
+        var i = at + pat.len;
+        while (i < src.len and (src[i] == ' ' or src[i] == '\t')) i += 1;
+        if (i >= src.len or src[i] != '"') return null;
+        i += 1;
+        const start = i;
+        while (i < src.len and src[i] != '"') : (i += 1) {}
+        return src[start..i];
+    }
+
+    // `"key": true` — bare JSON boolean.
+    fn jbool(ctx: *Ctx, src: []const u8, key: []const u8) bool {
+        const pat = std2.fmt.allocPrint(ctx.a, "\"{s}\"", .{key}) catch return false;
+        const at = std2.mem.indexOf(u8, src, pat) orelse return false;
+        var i = at + pat.len;
+        while (i < src.len and (src[i] == ':' or src[i] == ' ' or src[i] == '\t' or src[i] == '\n')) i += 1;
+        return i + 4 <= src.len and std2.mem.eql(u8, src[i .. i + 4], "true");
+    }
+
+    // `"key": ["a", "b"]` — a JSON string list.
+    fn jlist(ctx: *Ctx, src: []const u8, key: []const u8) []const []const u8 {
+        var out = std2.ArrayList([]const u8){};
+        const pat = std2.fmt.allocPrint(ctx.a, "\"{s}\"", .{key}) catch return out.items;
+        const at = std2.mem.indexOf(u8, src, pat) orelse return out.items;
+        const br = std2.mem.indexOfPos(u8, src, at + pat.len, "[") orelse return out.items;
+        const en = std2.mem.indexOfPos(u8, src, br, "]") orelse return out.items;
+        var i = br + 1;
+        while (i < en) {
+            if (src[i] == '"') {
+                const start = i + 1;
+                var j = start;
+                while (j < en and src[j] != '"') j += 1;
+                out.append(ctx.a, src[start..j]) catch unreachable;
+                i = j + 1;
+            } else i += 1;
+        }
+        return out.items;
+    }
+
+    // Escape `s` for embedding as the interior of a Zig "..." literal.
+    fn zesc(ctx: *Ctx, s: []const u8) []const u8 {
+        var b = std2.ArrayList(u8){};
+        for (s) |c| switch (c) {
+            '"' => b.appendSlice(ctx.a, "\\\"") catch unreachable,
+            '\\' => b.appendSlice(ctx.a, "\\\\") catch unreachable,
+            '\n' => b.appendSlice(ctx.a, "\\n") catch unreachable,
+            else => b.append(ctx.a, c) catch unreachable,
+        };
+        return b.items;
+    }
+
+    fn isCliQual(q: []const u8) bool {
+        return std2.mem.eql(u8, q, "std.cli") or std2.mem.eql(u8, q, "cli") or std2.mem.eql(u8, q, "std/cli");
+    }
+
+    fn isBuildQual(q: []const u8) bool {
+        return std2.mem.eql(u8, q, "std.build") or std2.mem.eql(u8, q, "build") or std2.mem.eql(u8, q, "std/build");
+    }
+
+    fn harvestItem(ctx: *Ctx, it: *const ast2.Item) void {
+        if (it.* != .flow) return;
+        const inv = it.flow.inv();
+        const q = inv.path.module_qualifier orelse return;
+        if (inv.path.segments.len != 1) return;
+        const verb = inv.path.segments[0];
+        if (isCliQual(q)) {
+            if (std2.mem.eql(u8, verb, "flag")) {
+                if (inv.args.len == 0) {
+                    failf(ctx, "std/cli:flag — the flag name is the positional argument: `std/cli:flag(verbose) {{ ... }}`", .{});
+                    return;
+                }
+                const name = inv.args[0].value;
+                var source: []const u8 = "";
+                for (inv.args) |arg| {
+                    if (std2.mem.eql(u8, arg.name, "source")) source = arg.value;
+                }
+                const tytxt = jstr(ctx, source, "type") orelse "boolean";
+                const ty: FlagTy = if (std2.mem.eql(u8, tytxt, "boolean")) .boolean else if (std2.mem.eql(u8, tytxt, "string")) .string else if (std2.mem.eql(u8, tytxt, "int")) .int else if (std2.mem.eql(u8, tytxt, "float")) .float else blk: {
+                    failf(ctx, "std/cli:flag({s}): unknown \"type\" \"{s}\" — boolean | string | int | float", .{ name, tytxt });
+                    break :blk .boolean;
+                };
+                const short_txt = jstr(ctx, source, "short");
+                if (short_txt) |st| {
+                    if (st.len != 1) failf(ctx, "std/cli:flag({s}): \"short\" is one character — \"{s}\" is not", .{ name, st });
+                }
+                const required = jbool(ctx, source, "required");
+                if (required and ty == .boolean)
+                    failf(ctx, "std/cli:flag({s}): \"required\" is meaningless on a boolean flag — presence IS the value; make it a string flag or drop the field", .{name});
+                ctx.flags.append(ctx.a, .{
+                    .name = name,
+                    .short = if (short_txt) |st| (if (st.len == 1) st[0] else null) else null,
+                    .ty = ty,
+                    .desc = jstr(ctx, source, "description") orelse "",
+                    .required = required,
+                }) catch unreachable;
+            } else if (std2.mem.eql(u8, verb, "command")) {
+                if (inv.args.len == 0) {
+                    failf(ctx, "std/cli:command — the command name is the positional argument: `std/cli:command(run) {{ ... }}`", .{});
+                    return;
+                }
+                const name = inv.args[0].value;
+                var source: []const u8 = "";
+                for (inv.args) |arg| {
+                    if (std2.mem.eql(u8, arg.name, "source")) source = arg.value;
+                }
+                ctx.cmds.append(ctx.a, .{
+                    .name = name,
+                    .desc = jstr(ctx, source, "description") orelse "",
+                    .alias = jstr(ctx, source, "alias"),
+                    .subs = jlist(ctx, source, "subcommands"),
+                }) catch unreachable;
+            }
+        } else if (isBuildQual(q) and std2.mem.eql(u8, verb, "app")) {
+            var source: []const u8 = "";
+            for (inv.args) |arg| {
+                if (std2.mem.eql(u8, arg.name, "source")) source = arg.value;
+            }
+            if (ctx.prog_name == null) ctx.prog_name = bareStr(ctx, source, "name");
+            if (ctx.prog_ver == null) ctx.prog_ver = bareStr(ctx, source, "version");
+        }
+    }
+
+    // Koru spec type -> emitted Zig type + conversion kind.
+    const PosKind = enum { str, int, float, boolean, opt, rest };
+    const Pos = struct { key: []const u8, zigty: []const u8, kind: PosKind, inner: []const u8 = "" };
+
+    fn posTy(ctx: *Ctx, spec: []const u8) ?Pos {
+        const t = std2.mem.trim(u8, spec, " ");
+        if (t.len == 0) return null;
+        if (t[0] == '?') {
+            const inner = posTy(ctx, t[1..]) orelse return null;
+            if (inner.kind == .opt or inner.kind == .rest) return null;
+            const zt = std2.fmt.allocPrint(ctx.a, "?{s}", .{inner.zigty}) catch unreachable;
+            return .{ .key = "", .zigty = zt, .kind = .opt, .inner = inner.zigty };
+        }
+        if (std2.mem.eql(u8, t, "[]string") or std2.mem.eql(u8, t, "[][]const u8"))
+            return .{ .key = "", .zigty = "[]const []const u8", .kind = .rest };
+        if (std2.mem.eql(u8, t, "string") or std2.mem.eql(u8, t, "[]const u8"))
+            return .{ .key = "", .zigty = "[]const u8", .kind = .str };
+        if (std2.mem.eql(u8, t, "bool"))
+            return .{ .key = "", .zigty = "bool", .kind = .boolean };
+        const ints = [_][]const u8{ "i64", "i32", "i16", "i8", "u64", "u32", "u16", "u8", "usize", "isize" };
+        for (ints) |it| {
+            if (std2.mem.eql(u8, t, it)) return .{ .key = "", .zigty = it, .kind = .int };
+        }
+        const floats = [_][]const u8{ "f64", "f32", "f16" };
+        for (floats) |it| {
+            if (std2.mem.eql(u8, t, it)) return .{ .key = "", .zigty = it, .kind = .float };
+        }
+        if (std2.mem.eql(u8, t, "int")) return .{ .key = "", .zigty = "i64", .kind = .int };
+        if (std2.mem.eql(u8, t, "float")) return .{ .key = "", .zigty = "f64", .kind = .float };
+        return null;
+    }
+
+    fn flagZigTy(f: Flag) []const u8 {
+        return switch (f.ty) {
+            .boolean => "bool",
+            .string => "[]const u8",
+            .int => "i64",
+            .float => "f64",
+        };
+    }
+};
+
+~[transform]proc default|zig {
+    const ast = @import("ast");
+
+    if (item.* != .flow) @panic("std/cli: default transform — containing item is not a flow (walker dispatch contract broken)");
+    const flow = &item.flow;
+    const conts = flow.body.continuations;
+
+    // The dispatch replaces its whole flow — a `std/cli()` nested mid-chain
+    // would clobber the enclosing chain. Same wall channel:default draws.
+    if (invocation != flow.inv()) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): the dispatch is a top-level item — it replaces its whole flow and cannot nest mid-chain", .{}) };
+    }
+
+    // ---- harvest declares -------------------------------------------------
+    var ctx = CliH.Ctx{ .a = allocator };
+    for (program.items) |*it| {
+        CliH.harvestItem(&ctx, it);
+        if (it.* == .module_decl) {
+            for (it.module_decl.items) |*mit| CliH.harvestItem(&ctx, mit);
+        }
+    }
+    if (ctx.fail) |f| return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "{s}", .{f}) };
+
+    const prog = ctx.prog_name orelse blk: {
+        const base = std.fs.path.basename(flow.location.file);
+        const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse base.len;
+        break :blk base[0..dot];
+    };
+
+    // ---- classify the arms ------------------------------------------------
+    const Arm = struct {
+        const FKind = enum { sub, flag, pos };
+        // One resolved destructure entry: payload key, emitted Zig type, and
+        // which synthesized value feeds it — in destructure order.
+        const Field = struct { key: []const u8, ty: []const u8, kind: FKind, pos_i: usize = 0 };
+        idx: usize,
+        name: []const u8,
+        spec: ?*const CliH.Cmd,
+        wants_sub: bool,
+        pos: []const CliH.Pos,
+        fields: []const Field,
+    };
+    var arms = std.ArrayList(Arm){};
+    var usage_idx: ?usize = null;
+    var help_idx: ?usize = null;
+    for (conts, 0..) |*c, i| {
+        const b = std.mem.trim(u8, c.branch, " ");
+        if (b.len == 0) continue; // `|>` chain tail — passes through
+        if (c.is_catchall)
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): `|*` catchall doesn't parse on the dispatch — name each command arm", .{}) };
+        if (c.kind == .effect)
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): `! {s}` — command arms are terminal `|` arms; the dispatch is a one-shot parse, not a consumer join", .{b}) };
+        if (std.mem.eql(u8, b, "usage")) {
+            usage_idx = i;
+            continue;
+        }
+        if (std.mem.eql(u8, b, "help")) {
+            help_idx = i;
+            continue;
+        }
+        var spec: ?*const CliH.Cmd = null;
+        for (ctx.cmds.items) |*cs| {
+            if (std.mem.eql(u8, cs.name, b)) spec = cs;
+        }
+        var wants_sub = false;
+        var pos = std.ArrayList(CliH.Pos){};
+        var fields = std.ArrayList(Arm.Field){};
+        for (c.destructure) |f| {
+            if (f.annotations.len > 0)
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): destructure annotation on `{s}` — cli arms implement no field annotations; the name and the type spec are the whole grammar", .{f.name}) };
+            // The destructure here is the arm's argument grammar — the tor
+            // owns its meaning, not the projection rules. `x: T` reaches us as
+            // a rename (path = T); the spec resolves against the cli
+            // vocabulary: `subcommand`, a declared flag, or a type.
+            const fspec = f.type_text orelse (if (std.mem.eql(u8, f.path, f.name)) null else f.path);
+            const word = fspec orelse f.name;
+            if (std.mem.eql(u8, word, "subcommand")) {
+                wants_sub = true;
+                fields.append(allocator, .{ .key = "subcommand", .ty = "[]const u8", .kind = .sub }) catch unreachable;
+                continue;
+            }
+            var fi: ?usize = null;
+            for (ctx.flags.items, 0..) |fl, k| {
+                if (std.mem.eql(u8, fl.name, word)) fi = k;
+            }
+            if (fi) |k| {
+                fields.append(allocator, .{ .key = ctx.flags.items[k].name, .ty = CliH.flagZigTy(ctx.flags.items[k]), .kind = .flag }) catch unreachable;
+                continue;
+            }
+            if (fspec != null and std.mem.eql(u8, f.name, "subcommand"))
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): `subcommand` is the reserved subcommand binding — a positional can't reuse the name; write `{{ subcommand }}`", .{}) };
+            const spec_txt = fspec orelse "string";
+            const p = CliH.posTy(&ctx, spec_txt) orelse {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): `{s}` is neither a declared flag/subcommand nor a positional type — string | bool | the ints | the floats | ?T | []string", .{ spec_txt }) };
+            };
+            var pp = p;
+            pp.key = f.name;
+            pos.append(allocator, pp) catch unreachable;
+            fields.append(allocator, .{ .key = f.name, .ty = pp.zigty, .kind = .pos, .pos_i = pos.items.len - 1 }) catch unreachable;
+        }
+        arms.append(allocator, .{
+            .idx = i,
+            .name = b,
+            .spec = spec,
+            .wants_sub = wants_sub,
+            .pos = pos.items,
+            .fields = fields.items,
+        }) catch unreachable;
+    }
+    if (arms.items.len == 0)
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU183, flow.location, flow.module, "std/cli(): the dispatch needs at least one `| <command>` arm — `std/cli() | run {{ ... }} |> ...`", .{}) };
+
+    // ---- generated help text ----------------------------------------------
+    var help = std.ArrayList(u8){};
+    {
+        var cmd_field = std.ArrayList(u8){};
+        // widest command usage for column alignment
+        var widest: usize = 0;
+        for (arms.items) |a| {
+            var u = std.ArrayList(u8){};
+            u.appendSlice(allocator, a.name) catch unreachable;
+            if (a.spec) |sp| {
+                if (sp.alias) |al| CliH.w(&ctx, &u, " ({s})", .{al});
+            }
+            if (a.wants_sub) u.appendSlice(allocator, " <subcommand>") catch unreachable;
+            for (a.pos) |p| {
+                switch (p.kind) {
+                    .opt => CliH.w(&ctx, &u, " [<{s}>]", .{p.key}),
+                    .rest => CliH.w(&ctx, &u, " [<{s}>...]", .{p.key}),
+                    else => CliH.w(&ctx, &u, " <{s}>", .{p.key}),
+                }
+            }
+            if (u.items.len > widest) widest = u.items.len;
+            cmd_field.appendSlice(allocator, u.items) catch unreachable;
+            cmd_field.append(allocator, 0) catch unreachable;
+        }
+        CliH.w(&ctx, &help, "{s}", .{prog});
+        if (ctx.prog_ver) |v| CliH.w(&ctx, &help, " {s}", .{v});
+        CliH.w(&ctx, &help, "\nusage: {s} <command> [args]\n\ncommands:\n", .{prog});
+        var at: usize = 0;
+        for (arms.items) |a| {
+            const end = std.mem.indexOfScalarPos(u8, cmd_field.items, at, 0) orelse break;
+            const u = cmd_field.items[at..end];
+            at = end + 1;
+            CliH.w(&ctx, &help, "  {s}", .{u});
+            var pad: usize = if (u.len < widest) widest - u.len else 0;
+            while (pad > 0) : (pad -= 1) help.append(allocator, ' ') catch unreachable;
+            if (a.spec) |sp| {
+                if (sp.desc.len > 0) CliH.w(&ctx, &help, "  {s}", .{sp.desc});
+            }
+            help.append(allocator, '\n') catch unreachable;
+        }
+        if (ctx.flags.items.len > 0) {
+            help.appendSlice(allocator, "\nflags:\n") catch unreachable;
+            for (ctx.flags.items) |fl| {
+                CliH.w(&ctx, &help, "  ", .{});
+                var col = std.ArrayList(u8){};
+                if (fl.short) |s| CliH.w(&ctx, &col, "-{c}, ", .{s});
+                CliH.w(&ctx, &col, "--{s}", .{fl.name});
+                help.appendSlice(allocator, col.items) catch unreachable;
+                var pad: usize = if (col.items.len < 22) 22 - col.items.len else 0;
+                while (pad > 0) : (pad -= 1) help.append(allocator, ' ') catch unreachable;
+                CliH.w(&ctx, &help, "{s}\n", .{fl.desc});
+            }
+        }
+        help.appendSlice(allocator, "  -h, --help              show this help\n") catch unreachable;
+    }
+    const help_lit = CliH.zesc(&ctx, help.items);
+
+    // ---- emit the dispatch ------------------------------------------------
+    var d = std.ArrayList(u8){};
+    CliH.w(&ctx, &d, "//@koru:inline_stmt\n{{\nconst __cli_help: []const u8 = \"{s}\";\n", .{help_lit});
+    CliH.w(&ctx, &d, "var __pos: [16][]const u8 = undefined;\nvar __npos: usize = 0;\nvar __help = false;\nvar __err: ?[]const u8 = null;\nvar __ebuf: [512]u8 = undefined;\n", .{});
+    for (ctx.flags.items) |fl| {
+        CliH.w(&ctx, &d, "var __fl_{s}: {s} = ", .{ fl.name, CliH.flagZigTy(fl) });
+        d.appendSlice(allocator, switch (fl.ty) {
+            .boolean => "false",
+            .string => "\"\"",
+            .int => "0",
+            .float => "0",
+        }) catch unreachable;
+        d.appendSlice(allocator, ";\n") catch unreachable;
+        if (fl.ty != .boolean)
+            CliH.w(&ctx, &d, "var __fl_{s}_set = false;\n", .{fl.name});
+    }
+    CliH.w(&ctx, &d, "const __av = @import(\"std\").os.argv;\nvar __want: usize = 0;\nfor (__av[1..]) |__a| {{\n    const __t = @import(\"std\").mem.span(__a);\n    if (__want != 0) {{\n        switch (__want) {{\n", .{});
+    for (ctx.flags.items, 0..) |fl, fi| {
+        if (fl.ty == .boolean) continue;
+        switch (fl.ty) {
+            .int => CliH.w(&ctx, &d, "            {d} => {{ __fl_{s} = @import(\"std\").fmt.parseInt(i64, __t, 10) catch blk: {{ __err = \"--{s} wants an integer\"; break :blk 0; }};", .{ fi + 1, fl.name, fl.name }),
+            .float => CliH.w(&ctx, &d, "            {d} => {{ __fl_{s} = @import(\"std\").fmt.parseFloat(f64, __t) catch blk: {{ __err = \"--{s} wants a number\"; break :blk 0; }};", .{ fi + 1, fl.name, fl.name }),
+            else => CliH.w(&ctx, &d, "            {d} => {{ __fl_{s} = __t;", .{ fi + 1, fl.name }),
+        }
+        CliH.w(&ctx, &d, " __fl_{s}_set = true; }},\n", .{fl.name});
+    }
+    CliH.w(&ctx, &d, "            else => {{}}\n        }}\n        __want = 0;\n        continue;\n    }}\n    if (@import(\"std\").mem.eql(u8, __t, \"--help\") or @import(\"std\").mem.eql(u8, __t, \"-h\")) {{ __help = true; continue; }}\n", .{});
+    for (ctx.flags.items, 0..) |fl, fi| {
+        const long = std.fmt.allocPrint(allocator, "--{s}", .{fl.name}) catch unreachable;
+        const short_cond = if (fl.short) |s|
+            std.fmt.allocPrint(allocator, " or @import(\"std\").mem.eql(u8, __t, \"-{c}\")", .{s}) catch unreachable
+        else
+            "";
+        switch (fl.ty) {
+            .boolean => CliH.w(&ctx, &d, "    if (@import(\"std\").mem.eql(u8, __t, \"{s}\"){s}) {{ __fl_{s} = true; continue; }}\n", .{ long, short_cond, fl.name }),
+            else => {
+                CliH.w(&ctx, &d, "    if (@import(\"std\").mem.startsWith(u8, __t, \"{s}=\")) {{ const __v = __t[{d}..];", .{ long, long.len + 1 });
+                switch (fl.ty) {
+                    .int => CliH.w(&ctx, &d, " __fl_{s} = @import(\"std\").fmt.parseInt(i64, __v, 10) catch blk: {{ __err = \"--{s} wants an integer\"; break :blk 0; }};", .{ fl.name, fl.name }),
+                    .float => CliH.w(&ctx, &d, " __fl_{s} = @import(\"std\").fmt.parseFloat(f64, __v) catch blk: {{ __err = \"--{s} wants a number\"; break :blk 0; }};", .{ fl.name, fl.name }),
+                    else => CliH.w(&ctx, &d, " __fl_{s} = __v;", .{fl.name}),
+                }
+                CliH.w(&ctx, &d, " __fl_{s}_set = true; continue; }}\n", .{fl.name});
+                CliH.w(&ctx, &d, "    if (@import(\"std\").mem.eql(u8, __t, \"{s}\"){s}) {{ __want = {d}; continue; }}\n", .{ long, short_cond, fi + 1 });
+            },
+        }
+    }
+    CliH.w(&ctx, &d, "    if (__t.len > 1 and __t[0] == '-') {{ __err = @import(\"std\").fmt.bufPrint(&__ebuf, \"unknown flag '{{s}}'\", .{{__t}}) catch \"unknown flag\"; continue; }}\n    if (__npos < __pos.len) {{ __pos[__npos] = __t; __npos += 1; }} else {{ __err = \"too many arguments\"; }}\n}}\n", .{});
+    for (ctx.flags.items, 0..) |fl, fi| {
+        if (fl.ty != .boolean)
+            CliH.w(&ctx, &d, "if (__want == {d}) __err = \"--{s} expects a value\";\n", .{ fi + 1, fl.name });
+    }
+    for (ctx.flags.items) |fl| {
+        if (fl.required and fl.ty != .boolean)
+            CliH.w(&ctx, &d, "if (__err == null and !__fl_{s}_set) __err = \"missing required flag --{s}\";\n", .{ fl.name, fl.name });
+    }
+
+    // help/usage paths — spliced arms or generated defaults
+    const help_path = if (help_idx) |hi|
+        std.fmt.allocPrint(allocator, "__koru_inline_{d}(__cli_help);", .{hi}) catch unreachable
+    else
+        "@import(\"std\").debug.print(\"{s}\\n\", .{__cli_help}); @import(\"std\").process.exit(0);";
+    const usage_path = if (usage_idx) |ui|
+        std.fmt.allocPrint(allocator, "__koru_inline_{d}(.{{ .message = __e, .help = __cli_help }});", .{ui}) catch unreachable
+    else
+        "@import(\"std\").debug.print(\"{s}\\n{s}\\n\", .{__e, __cli_help}); @import(\"std\").process.exit(2);";
+
+    CliH.w(&ctx, &d, "if (__help or (__err == null and __npos == 0)) {{\n    {s}\n}} else {{\n    if (__err == null) {{\n        const __cmd = __pos[0];\n", .{help_path});
+
+    for (arms.items, 0..) |a, ai| {
+        const kw = if (ai == 0) "if" else "else if";
+        var cond = std.ArrayList(u8){};
+        CliH.w(&ctx, &cond, "@import(\"std\").mem.eql(u8, __cmd, \"{s}\")", .{CliH.zesc(&ctx, a.name)});
+        if (a.spec) |sp| {
+            if (sp.alias) |al| CliH.w(&ctx, &cond, " or @import(\"std\").mem.eql(u8, __cmd, \"{s}\")", .{CliH.zesc(&ctx, al)});
+        }
+        CliH.w(&ctx, &d, "        {s} ({s}) {{\n", .{ kw, cond.items });
+        const has_fields = a.wants_sub or a.pos.len > 0;
+        if (has_fields) {
+            CliH.w(&ctx, &d, "            var __ai: usize = 1;\n", .{});
+            if (a.wants_sub) {
+                const subs = if (a.spec) |sp| sp.subs else &.{};
+                CliH.w(&ctx, &d, "            var __sub: []const u8 = \"\";\n            if (__ai < __npos) {{ __sub = __pos[__ai]; __ai += 1;", .{});
+                if (subs.len > 0) {
+                    var memb = std.ArrayList(u8){};
+                    for (subs, 0..) |s, si| {
+                        if (si > 0) memb.appendSlice(allocator, " or ") catch unreachable;
+                        CliH.w(&ctx, &memb, "@import(\"std\").mem.eql(u8, __sub, \"{s}\")", .{CliH.zesc(&ctx, s)});
+                    }
+                    var listed = std.ArrayList(u8){};
+                    for (subs, 0..) |s, si| {
+                        if (si > 0) listed.appendSlice(allocator, ", ") catch unreachable;
+                        listed.appendSlice(allocator, s) catch unreachable;
+                    }
+                    CliH.w(&ctx, &d, " if (!({s})) __err = @import(\"std\").fmt.bufPrint(&__ebuf, \"{s}: unknown subcommand '{{s}}' (expected: {s})\", .{{__sub}}) catch \"{s}: unknown subcommand\";", .{ memb.items, a.name, listed.items, a.name });
+                }
+                CliH.w(&ctx, &d, " }} else __err = \"{s}: expected a subcommand\";\n", .{a.name});
+            }
+            for (a.pos) |p| {
+                CliH.w(&ctx, &d, "            var __a_{s}: {s} = ", .{ p.key, p.zigty });
+                d.appendSlice(allocator, switch (p.kind) {
+                    .str => "\"\"",
+                    .boolean => "false",
+                    .int, .float => "0",
+                    .opt => "null",
+                    .rest => "&.{}",
+                }) catch unreachable;
+                CliH.w(&ctx, &d, ";\n            if (__err == null) {{\n", .{});
+                switch (p.kind) {
+                    .rest => CliH.w(&ctx, &d, "                __a_{s} = __pos[@min(__ai, __npos)..__npos]; __ai = __npos;\n", .{p.key}),
+                    .opt => {
+                        CliH.w(&ctx, &d, "                if (__ai < __npos) {{ const __t = __pos[__ai]; __ai += 1;\n                    __a_{s} = ", .{p.key});
+                        if (std.mem.eql(u8, p.inner, "[]const u8")) {
+                            CliH.w(&ctx, &d, "__t", .{});
+                        } else if (std.mem.eql(u8, p.inner, "bool")) {
+                            CliH.w(&ctx, &d, "@import(\"std\").mem.eql(u8, __t, \"true\") or @import(\"std\").mem.eql(u8, __t, \"1\")", .{});
+                        } else {
+                            if (p.inner[0] == 'f') {
+                                CliH.w(&ctx, &d, "@import(\"std\").fmt.parseFloat({s}, __t) catch blk: {{ __err = \"{s}: <{s}> wants a number\"; break :blk null; }}", .{ p.inner, a.name, p.key });
+                            } else {
+                                CliH.w(&ctx, &d, "@import(\"std\").fmt.parseInt({s}, __t, 10) catch blk: {{ __err = \"{s}: <{s}> wants a number\"; break :blk null; }}", .{ p.inner, a.name, p.key });
+                            }
+                        }
+                        CliH.w(&ctx, &d, ";\n                }}\n", .{});
+                    },
+                    else => {
+                        CliH.w(&ctx, &d, "                if (__ai < __npos) {{ const __t = __pos[__ai];\n", .{});
+                        switch (p.kind) {
+                            .str => CliH.w(&ctx, &d, "                    __a_{s} = __t;\n", .{p.key}),
+                            .boolean => CliH.w(&ctx, &d, "                    if (@import(\"std\").mem.eql(u8, __t, \"true\") or @import(\"std\").mem.eql(u8, __t, \"1\")) __a_{s} = true else if (@import(\"std\").mem.eql(u8, __t, \"false\") or @import(\"std\").mem.eql(u8, __t, \"0\")) __a_{s} = false else __err = \"{s}: <{s}> wants true|false\";\n", .{ p.key, p.key, a.name, p.key }),
+                            .int => CliH.w(&ctx, &d, "                    __a_{s} = @import(\"std\").fmt.parseInt({s}, __t, 10) catch blk: {{ __err = \"{s}: <{s}> wants an integer\"; break :blk 0; }};\n", .{ p.key, p.zigty, a.name, p.key }),
+                            .float => CliH.w(&ctx, &d, "                    __a_{s} = @import(\"std\").fmt.parseFloat({s}, __t) catch blk: {{ __err = \"{s}: <{s}> wants a number\"; break :blk 0; }};\n", .{ p.key, p.zigty, a.name, p.key }),
+                            else => unreachable,
+                        }
+                        CliH.w(&ctx, &d, "                    __ai += 1;\n                }} else __err = \"{s}: missing argument <{s}>\";\n", .{ a.name, p.key });
+                    },
+                }
+                CliH.w(&ctx, &d, "            }}\n", .{});
+            }
+            CliH.w(&ctx, &d, "            if (__err == null and __ai < __npos) __err = @import(\"std\").fmt.bufPrint(&__ebuf, \"{s}: unexpected argument '{{s}}'\", .{{__pos[__ai]}}) catch \"{s}: unexpected argument\";\n", .{ a.name, a.name });
+        } else {
+            CliH.w(&ctx, &d, "            if (__npos > 1) __err = @import(\"std\").fmt.bufPrint(&__ebuf, \"{s}: unexpected argument '{{s}}'\", .{{__pos[1]}}) catch \"{s}: unexpected argument\";\n", .{ a.name, a.name });
+        }
+        // splice the arm — payload fields in destructure order
+        var payload = std.ArrayList(u8){};
+        payload.appendSlice(allocator, ".{ ") catch unreachable;
+        {
+            for (a.fields, 0..) |f, ki| {
+                if (ki > 0) payload.appendSlice(allocator, ", ") catch unreachable;
+                switch (f.kind) {
+                    .sub => payload.appendSlice(allocator, ".subcommand = __sub") catch unreachable,
+                    .flag => CliH.w(&ctx, &payload, ".{s} = __fl_{s}", .{ f.key, f.key }),
+                    .pos => CliH.w(&ctx, &payload, ".{s} = __a_{s}", .{ f.key, f.key }),
+                }
+            }
+        }
+        payload.appendSlice(allocator, " }") catch unreachable;
+        CliH.w(&ctx, &d, "            if (__err == null) __koru_inline_{d}({s});\n        }} ", .{ a.idx, payload.items });
+    }
+    CliH.w(&ctx, &d, "else {{\n            __err = @import(\"std\").fmt.bufPrint(&__ebuf, \"unknown command '{{s}}'\", .{{__cmd}}) catch \"unknown command\";\n        }}\n    }}\n    if (__err) |__e| {{\n        {s}\n    }}\n}}\n}}", .{usage_path});
+
+    // ---- finalize: mark @pass_ran, rewrite destructure types, graft ---------
+    const new_marks = allocator.alloc([]const u8, flow.inv().marks.len + 1) catch unreachable;
+    for (flow.inv().marks, 0..) |m, k| new_marks[k] = m;
+    new_marks[flow.inv().marks.len] = allocator.dupe(u8, "@pass_ran(\"transform\")") catch unreachable;
+
+    const new_inv = ast.Invocation{
+        .path = flow.inv().path,
+        .args = flow.inv().args,
+        .annotations = flow.inv().annotations, .marks = new_marks,
+        .inserted_by_tap = flow.inv().inserted_by_tap,
+        .from_opaque_tap = flow.inv().from_opaque_tap,
+    };
+
+    // Rewrite each arm's destructure type_text to emitted-Zig spellings — the
+    // generic splice emits the spec text as a Zig type, and `string` is Koru,
+    // not Zig. Flag/subcommand fields carry none; positionals already map.
+    var conts_out = conts;
+    {
+        const nc = allocator.alloc(ast.Continuation, conts.len) catch unreachable;
+        for (conts, 0..) |c, ci| nc[ci] = c;
+        for (arms.items) |a| {
+            var oc = nc[a.idx];
+            const nf = allocator.alloc(ast.DestructureField, oc.destructure.len) catch unreachable;
+            // Rewrite each destructure entry to its payload member + emitted
+            // type: `file: string` arrived as a rename (path="string") because
+            // this tor reads the shape as an argument grammar — the projection
+            // the splice performs must read `.file`, typed `[]const u8`.
+            for (oc.destructure, 0..) |f, fi2| {
+                nf[fi2] = f;
+                if (fi2 < a.fields.len) {
+                    nf[fi2].path = a.fields[fi2].key;
+                    nf[fi2].type_text = a.fields[fi2].ty;
+                }
+            }
+            oc.destructure = nf;
+            // The glob declares a payload, so a bare `| build` owes the
+            // checker a binding (KORU030). The dispatch emits a record the
+            // arm declines to name — stamp the discard so the contract is
+            // honored on the transformed tree.
+            if (oc.binding == null and oc.destructure.len == 0)
+                oc.binding = "_";
+            nc[a.idx] = oc;
+        }
+        conts_out = nc;
+    }
+
+    var new_flow = flow.*;
+    new_flow.body = ast.rootSite(new_inv, conts_out, flow.location);
+    new_flow.inline_body = d.items;
+
+    return .{ .transformed = .{ .replacement = ast.Item{ .flow = new_flow } } };
+}

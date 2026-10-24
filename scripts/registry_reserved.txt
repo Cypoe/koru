@@ -99,6 +99,10 @@ KORU179
 # `ln|zig` transforms — .kz graft passes, same situation as KORU178 above.
 KORU180
 
+# Emitted by koru_std/cli.kz's `default` transform — a .kz graft pass, same
+# situation as KORU178 above.
+KORU183
+
 # Diagnostic codes printed inline by koru_std pipeline tors — .kz emit
 # sites are invisible to the zig-only scan. KORU207 is the deep-check
 # ast-witness (510_126); KORU209 refuses `dir:` + build:requires together.

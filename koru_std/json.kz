@@ -3,10 +3,10 @@
 //   destructure as the input schema and generates a bespoke parser per site.
 // - `~part emit` (json.emit.kz): the `value:` record literal is the output
 //   schema; a direct writer is generated per site.
-
 ~part parse
 ~part emit
 ~part parsehelpers
+~part parsesub
 const std = @import("std");
 
 // ============================================================================

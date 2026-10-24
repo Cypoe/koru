@@ -1,0 +1,6 @@
+run
+check
+myfile.txt
+--verbose
+--output
+o.txt

@@ -73,3 +73,18 @@ syntax* can carry the shape.
 - Bench breadth: one 250B envelope measured; array-heavy and deep-nested
   docs are unmeasured, and simdjson-class multi-KB throughput is a
   different regime this does not claim.
+
+## Evolution — the consumer, not the spelling, owns the meaning (2026-10-24)
+
+`std/cli` carried the license to a second domain — the branch destructure
+as an argv grammar (`{ subcommand, file: string, verbose }`) — and the
+exercise exposed the marker's true nature: `_:{...}` was never a "schema"
+sigil. `type_text` is only populated inside a *named group*; `_:` was the
+discard-name spelling of the one grammar position producing that slot —
+an AST-plumbing detail wearing a mandatory incantation. json's transform
+accepted bare-word specs via `path` all along; cli's never needed the
+slot. Deleting `_:` required zero parser work — three consumer-side
+edits (spec normalization, a `destructure_named` stamp, sub-entry
+expansion). The tor attached to a branch owns what its destructure means;
+a marker that only encodes an AST slot is surface debt. `my:{...}`
+survives for real group naming; the discard form is unrequired.
