@@ -134,14 +134,24 @@
 
 // C variant of for — the sequential-fragment vertical. `parse_range` on the
 // c_lowered iterable: `lo..hi` becomes the counting loop every C backend
-// wants (the trip count is known); a NON-range iterable has no sequential-C
-// lowering in the first fragment, so the else arm emits a `__koru_c_refuse_*`
-// marker the emitter refuses by name (KORU047) rather than silently emitting
-// wrong C. `long long` is the fragment's int spelling.
+// wants (the trip count is known). `parse_array` then catches the inline
+// literal `&?[_]T{…}` — a site-suffixed `const T __koru_items_N[]` plus a
+// `sizeof/sizeof[0]` bound needs no element count. Anything else falls to
+// the marker form: `__koru_len(ITER)`/`__koru_idx(ITER, i)` are questions
+// the emitter's final pass answers BY BINDING — a fat-slice cell iterates
+// `(x).len`/`.ptr[i]`, a string `const char *` iterates `strlen`/`(x)[i]`
+// (the len is bound once in the for-init: `size_t i, n` keeps it a `for`,
+// not a while, and kills the per-iter strlen). A literal whose element
+// type cTypeOf cannot resolve — a record/proto array — names its refusal
+// through `__koru_c_refuse_*` rather than minting a marker on garbage text.
 ~[template]proc for|c {
-    {% const __koru_iter = c_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% if __koru_range.is_range %}for (long long __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++) {% else %}__koru_c_refuse_non_range_for{% endif %}{
+    {% const __koru_iter = c_lower(expr) %}{% const __koru_range = parse_range(__koru_iter) %}{% const __koru_arr = parse_array(__koru_iter) %}{% if __koru_arr.is_array %}const {{ __koru_arr.ctype }} __koru_items{{ __site }}[] = { {{ __koru_arr.elems }} };
+    {% endif %}{% if __koru_range.is_range %}for (long long __koru_item{{ __site }} = {{ __koru_range.lo }}; __koru_item{{ __site }} < {{ __koru_range.hi }}; __koru_item{{ __site }}++)
+        {% else %}{% if __koru_arr.is_array %}for (size_t __koru_i{{ __site }} = 0; __koru_i{{ __site }} < sizeof(__koru_items{{ __site }}) / sizeof(__koru_items{{ __site }}[0]); __koru_i{{ __site }}++)
+        {% else %}{% if __koru_arr.is_array_literal %}__koru_c_refuse_array_elem_type {% else %}for (size_t __koru_i{{ __site }} = 0, __koru_n{{ __site }} = __koru_len({{ __koru_iter }}); __koru_i{{ __site }} < __koru_n{{ __site }}; __koru_i{{ __site }}++)
+        {% endif %}{% endif %}{% endif %}{
         {% if keep != "" %}{% const __koru_keep = c_lower(keep) %}if (!({{ __koru_keep }})) break;
-        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}({% if __koru_range.is_range %}__koru_item{{ __site }}{% else %}{% if __koru_arr.is_array %}__koru_items{{ __site }}[__koru_i{{ __site }}]{% else %}__koru_idx({{ __koru_iter }}, __koru_i{{ __site }}){% endif %}{% endif %});
         {% endfor %}
     }
     {{ continuations["done"].continue }}

@@ -411,3 +411,21 @@ proto-element roundtrip, `| full` at capacity, `| none` on empty,
 joined consumers (006/007/010/013/022–034) keep their concurrency-axis
 refusal — a custodial channel's delivery point IS a pump, which is real
 concurrency. KORU030/161 pins unchanged. Zig lane: 6/6 parity green.
+
+for-over-iterable landed next (rung 13), closing the named gap from the
+slice paragraph: `for|c` is now three arms, all resolved without type
+knowledge in the template. `lo..hi` stays the counting loop. `&?[_]T{…}`
+literals mint a site-suffixed `const T __koru_items_N[]` + a
+`sizeof/sizeof[0]` bound (no element count needed). Everything else —
+strings, fat slices, anything the registry can see — lowers to the
+MARKER form: `__koru_len(ITER)`/`__koru_idx(ITER, i)` spliced into the
+for-init, answered by the same final pass slices built. The type
+question the template cannot ask ("is this `const char *` or
+`struct __koru_slice_*`?") is deferred exactly once, to where the
+binding registry exists — and the `size_t i, n = __koru_len(…)`
+for-init binds the length once, keeping it a `for` and killing the
+per-iter strlen. Element types cTypeOf cannot resolve name their
+refusal (`__koru_c_refuse_array_elem_type`). `320_028`/`320_042`/
+`320_102` green; the snapshot pin (320_102) verifies cross-field
+capture semantics through ccomp — `p2` reads the incoming `st.p1`, not
+the just-stored value.

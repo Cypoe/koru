@@ -4346,6 +4346,18 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, "))");
         return j;
     }
+    if (eql(u8, name, "max") or eql(u8, name, "min")) {
+        // Helper call, not a `?:` chain — the chain spells each operand
+        // twice, and `a`/`b` may be impure. `long long` is the fragment's
+        // int cell: float args narrow at the call, same int-domain
+        // assumption @divTrunc/@rem already take.
+        try out.appendSlice(allocator, if (name[1] == 'a') "__koru_max_ll((" else "__koru_min_ll((");
+        try lowerCInto(out, allocator, first, mode, diag);
+        try out.appendSlice(allocator, "), (");
+        try lowerCInto(out, allocator, second, mode, diag);
+        try out.appendSlice(allocator, "))");
+        return j;
+    }
     return null;
 }
 

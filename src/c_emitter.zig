@@ -2789,6 +2789,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
         \\    return v;
         \\}
+        \\static long long __koru_max_ll(long long a, long long b) { return a > b ? a : b; }
+        \\static long long __koru_min_ll(long long a, long long b) { return a < b ? a : b; }
         \\
     );
 

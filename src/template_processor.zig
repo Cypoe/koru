@@ -150,6 +150,89 @@ fn parseRangeFilter(allocator: std.mem.Allocator, args: []const liquid.Value) an
     return liquid.Value{ .record = node };
 }
 
+/// `parse_array(expr)` filter: classify a c_lowered iterable as an inline
+/// array literal `&?[_]T{…}` / `&?[N]T{…}`. Returns `{ is_array_literal,
+/// is_array, ctype, elems }`: `is_array_literal` marks the SHAPE (so the
+/// `for|c` template can name the refusal rather than mint a `__koru_len`
+/// marker on garbage text); `is_array` adds that `cTypeOf` resolved the
+/// element type — a record/proto/other element stays `is_array=false` and
+/// the template emits a named `__koru_c_refuse_*` marker. `elems` is the
+/// already-c_lowered interior, spliced verbatim.
+fn parseArrayFilter(allocator: std.mem.Allocator, args: []const liquid.Value) anyerror!liquid.Value {
+    if (args.len != 1 or args[0] != .string) return error.BadArgs;
+    var s = std.mem.trim(u8, args[0].string, " \t");
+    const node = try allocator.create(liquid.Context);
+    node.* = liquid.Context.init(allocator);
+    var is_literal = false;
+    var ctype: []const u8 = "";
+    var elems: []const u8 = "";
+
+    blk: {
+        if (s.len > 0 and s[0] == '&') s = std.mem.trimLeft(u8, s[1..], " \t");
+        if (s.len < 4 or s[0] != '[') break :blk;
+        const close = std.mem.indexOfScalar(u8, s, ']') orelse break :blk;
+        const size = s[1..close];
+        var size_ok = size.len == 0 or std.mem.eql(u8, size, "_");
+        if (!size_ok) {
+            size_ok = true;
+            for (size) |d| {
+                if (d < '0' or d > '9') {
+                    size_ok = false;
+                    break;
+                }
+            }
+        }
+        if (!size_ok) break :blk;
+        var j = close + 1;
+        while (j < s.len and (s[j] == ' ' or s[j] == '\t')) j += 1;
+        const tstart = j;
+        while (j < s.len and (codegen_utils.exprIdentChar(s[j]) or s[j] == '.')) j += 1;
+        const elem_ty = s[tstart..j];
+        if (elem_ty.len == 0) break :blk;
+        while (j < s.len and (s[j] == ' ' or s[j] == '\t')) j += 1;
+        if (j >= s.len or s[j] != '{') break :blk;
+        const open = j;
+        var depth: usize = 0;
+        var quote: ?u8 = null;
+        var skip = false;
+        var end: ?usize = null;
+        for (s[open..], 0..) |ch, k| {
+            if (skip) {
+                skip = false;
+                continue;
+            }
+            if (quote) |q| {
+                if (ch == '\\') {
+                    skip = true;
+                } else if (ch == q) quote = null;
+                continue;
+            }
+            if (ch == '"' or ch == '\'') {
+                quote = ch;
+            } else if (ch == '{') {
+                depth += 1;
+            } else if (ch == '}') {
+                depth -= 1;
+                if (depth == 0) {
+                    end = open + k;
+                    break;
+                }
+            }
+        }
+        const close_brace = end orelse break :blk;
+        if (std.mem.trim(u8, s[close_brace + 1 ..], " \t").len != 0) break :blk;
+        is_literal = true;
+        elems = std.mem.trim(u8, s[open + 1 .. close_brace], " \t");
+        ctype = codegen_utils.cTypeOf(elem_ty) orelse "";
+    }
+
+    try node.put("is_array_literal", .{ .boolean = is_literal });
+    try node.put("is_array", .{ .boolean = is_literal and ctype.len > 0 });
+    try node.put("ctype", .{ .string = ctype });
+    try node.put("elems", .{ .string = elems });
+    return liquid.Value{ .record = node };
+}
+
 /// `js_lower(expr)` filter: run an expression through the JS target's
 /// Koru-expression lowering (`lowerKoruExpr` .js/.koru_expr) so Zig-spelled
 /// terms — `if (c) a else b`, `*%`, `@builtins` — arrive as JavaScript in
@@ -1116,6 +1199,7 @@ pub fn renderTemplateInvocation(
     var filters = liquid.FilterRegistry.init(allocator);
     defer filters.deinit();
     try filters.put("parse_range", parseRangeFilter);
+    try filters.put("parse_array", parseArrayFilter);
     try filters.put("js_lower", jsLowerFilter);
     try filters.put("cs_lower", csLowerFilter);
     try filters.put("c_lower", cLowerFilter);
@@ -1497,6 +1581,37 @@ fn parseTag(tag: []const u8) TagParts {
         }
     }
     return .{ .name = tag, .args = "" };
+}
+
+test "parse_array: inline literal → ctype + elems; other iterables stay non-array" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const Case = struct { in: []const u8, lit: bool, arr: bool, ct: []const u8, elems: []const u8 };
+    const cases = [_]Case{
+        .{ .in = "&[_]i32{ 3, 1, 4, 1, 5 }", .lit = true, .arr = true, .ct = "int32_t", .elems = "3, 1, 4, 1, 5" },
+        .{ .in = "[_]u8{ 'a', 'b' }", .lit = true, .arr = true, .ct = "uint8_t", .elems = "'a', 'b'" },
+        .{ .in = "&[4]i64{ 1, 2, 3, 4 }", .lit = true, .arr = true, .ct = "long long", .elems = "1, 2, 3, 4" },
+        // Literal shape, element type outside the fragment → the named
+        // refusal arm (is_array_literal true, is_array false).
+        .{ .in = "&[_]Point{ p, q }", .lit = true, .arr = false, .ct = "", .elems = "p, q" },
+        // Not literals at all — the __koru_len/__koru_idx marker arm.
+        .{ .in = "xs", .lit = false, .arr = false, .ct = "", .elems = "" },
+        .{ .in = "0..10", .lit = false, .arr = false, .ct = "", .elems = "" },
+        .{ .in = "&xs", .lit = false, .arr = false, .ct = "", .elems = "" },
+        .{ .in = "items[i]", .lit = false, .arr = false, .ct = "", .elems = "" },
+        .{ .in = "&[_]i32{ 1 } + tail", .lit = false, .arr = false, .ct = "", .elems = "" },
+    };
+
+    for (cases) |c| {
+        const v = try parseArrayFilter(a, &.{.{ .string = c.in }});
+        try std.testing.expect(v == .record);
+        try std.testing.expectEqual(c.lit, v.record.get("is_array_literal").?.boolean);
+        try std.testing.expectEqual(c.arr, v.record.get("is_array").?.boolean);
+        try std.testing.expectEqualStrings(c.ct, v.record.get("ctype").?.string);
+        try std.testing.expectEqualStrings(c.elems, v.record.get("elems").?.string);
+    }
 }
 
 test "parse_fields: splits brace-optional, comma/newline-separated field lists" {
