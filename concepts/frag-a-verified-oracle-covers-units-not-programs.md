@@ -343,3 +343,38 @@ non-concurrency tests importing `std/rings` transitively (699_*,
 The zig lane's `a.out` is unchanged — same `First: 42`. The C cell
 is an oracle for the sequential contract only; nothing here claims
 the Vyukov atomics for CompCert.
+
+## Evolve 2026-10-24 — records are structural, protos are nominal; C structs are nominal, so only one translation exists
+
+Two record-flavored walls fell to opposite spellings, and the difference
+is the belief. A Koru anonymous record `{ a: i64, b: i64 }` is a *shape*
+— `mk` and `pick` returning the same shape return the same type, and a
+`pick` may return a record `mk` produced. The first C spelling minted a
+`struct <event>_ret` per event; CompCert caught what the emitter
+couldn't say: C structs are nominal, so `input_mk_ret` is not
+`input_pick_ret` even when the layouts are identical. The translation
+that exists is the slice-cell one: canonicalize the shape
+(`f:t,g:u` signature → mangled tag) and mint one
+`struct __koru_rec_<tag>` for every occurrence — structural in, nominal
+out, exactly the rung-7 trick.
+
+Protos go the other way: a proto *is* a nominal type (the decl's name is
+its identity), so `proto Point { x: f64 }` mints `struct Point`, and the
+emitter seeds the table from live `std.proto:default` invocations plus
+erased `// proto` markers — mirroring `rings.leafgate`'s scan. A value-
+recursive proto refuses (no finite struct exists); the refusal names the
+cycle, it does not mint a broken forward decl. Both cell kinds emit
+member-complete in one driver — a record holding a proto waits on the
+proto's def, a proto field holding a record waits on the rec cell.
+
+The rings proto gate was already written for this: `cTypeOf(elem)` on a
+proto element now resolves through the table, so `320_101`'s
+`Ring<Reading>` mints `struct Reading buf[8]` — the ring cell itself is
+unchanged. Proto-element rings were a type-table problem pretending to
+be a rings problem.
+
+Measured: 020_024/063/065 (arrow/bare produces, structural sharing
+across three events), 241/242/210_025 (record produce + arg literals),
+320_101 (proto-element ring) — all emit, ccomp `-fstruct-passing`
+verifies byte-identical output, zig/cs lanes hold. 699_001 refuses
+honestly on `i128` — the next wall, not a record problem.

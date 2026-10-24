@@ -31,6 +31,7 @@ const ast = @import("ast");
 const errors = @import("errors");
 const file_types = @import("file_types");
 const codegen_utils = @import("codegen_utils");
+const struct_literal = @import("struct_literal");
 
 pub const CEmitError = error{
     OutOfMemory,
@@ -524,6 +525,24 @@ const Emitter = struct {
     /// `_in`/`_res` struct can name one.
     slice_decls: *std.StringArrayHashMap([]const u8),
 
+    /// `std/proto(Name) { f: t }` field tables — live `std.proto:default`
+    /// decl invocations and erased `// proto Name: f: t` markers both
+    /// seed (the same two-form read rings.leafgate's protoSourceText
+    /// does). Fields stay unflattened: a proto name resolves to
+    /// `struct Name`, the same spelling the zig lane's emitted struct
+    /// carries.
+    protos: *const std.StringArrayHashMap([]const ProtoField),
+    /// Anonymous record tag → field table — `{ a: i64, b: i64 }` spells
+    /// `struct __koru_rec_<tag>` where the tag is the mangled canonical
+    /// field signature. Records are STRUCTURAL in Koru: two events
+    /// returning `{ a: i64, b: i64 }` share one C type, so a bound value
+    /// of one event's record can return as another's (020_065).
+    record_decls: *std.StringArrayHashMap([]const ProtoField),
+    /// Depth guard on proto-field resolution — a value-recursive proto
+    /// graph (`A` holds `B`, `B` holds `A`) can never mint; the cap
+    /// refuses it rather than recursing.
+    proto_depth: usize = 0,
+
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
     res_counter: usize = 0,
@@ -648,12 +667,52 @@ const Emitter = struct {
             self.slice_decls.put(tag, member) catch return null;
             return std.fmt.allocPrint(self.allocator, "struct __koru_slice_{s}", .{tag}) catch null;
         }
+        // `{ f: T, g: U }` — an anonymous record. Koru records are
+        // structural: the C type is `struct __koru_rec_<tag>` where the tag
+        // is the mangled canonical `f:t` list — shape-identical records
+        // share one struct, so a value bound to one event's `{a,b}` returns
+        // through another's. Resolution registers the cell for the def pass.
+        // (Before the `<` strip — a phantom-qualified field type inside the
+        // braces must not split the record at its inner `<`.)
+        if (t.len > 1 and t[0] == '{' and struct_literal.isKoruStructLiteral(t)) {
+            const rfields = struct_literal.parseFields(self.allocator, t) catch return null;
+            defer self.allocator.free(rfields);
+            for (rfields) |f| {
+                if (self.cTypeOfResolved(f.value) == null) return null;
+            }
+            const tag = recordTagOf(self.allocator, t) orelse return null;
+            if (!self.record_decls.contains(tag)) {
+                var pfields: std.ArrayList(ProtoField) = .empty;
+                for (rfields) |f| {
+                    pfields.append(self.allocator, .{
+                        .name = self.allocator.dupe(u8, f.name) catch return null,
+                        .ktype = self.allocator.dupe(u8, f.value) catch return null,
+                    }) catch return null;
+                }
+                self.record_decls.put(self.allocator.dupe(u8, tag) catch return null, pfields.toOwnedSlice(self.allocator) catch return null) catch return null;
+            }
+            return std.fmt.allocPrint(self.allocator, "struct __koru_rec_{s}", .{tag}) catch null;
+        }
         // `T<...>` — a phantom-qualified scalar: the obligation marks the
         // value, not the runtime shape (`string<!allocated>` IS a
         // `const char *`). The base name resolves the same way;
         // `List_i64<list!>` strips to `List_i64` and still finds no C type.
         if (std.mem.indexOfScalar(u8, t, '<')) |lt| {
             return self.cTypeOfResolved(std.mem.trim(u8, t[0..lt], " \t"));
+        }
+        // A record proto's name IS its C struct's name — `Reading` spells
+        // `struct Reading`, the same nominal type the zig lane mints. Every
+        // field must resolve (a nested proto field resolves by the same
+        // rule); the depth cap refuses value-recursive field graphs that
+        // could never mint a finite struct.
+        if (self.protos.get(t)) |pfields| {
+            if (self.proto_depth >= 16) return null;
+            self.proto_depth += 1;
+            defer self.proto_depth -= 1;
+            for (pfields) |pf| {
+                if (self.cTypeOfResolved(pf.ktype) == null) return null;
+            }
+            return std.fmt.allocPrint(self.allocator, "struct {s}", .{t}) catch null;
         }
         // `Expression`/`Source` — the compiler's own AST types reach input
         // records on comptime-surface events as flow-through holes: the C
@@ -809,9 +868,9 @@ const Emitter = struct {
                 return CEmitError.UnsupportedConstruct;
             }
             try self.emitFieldBindings(event);
-            try self.write("    return ");
-            try self.writeExpr(v.plain_value.?);
-            try self.write(";\n}\n\n");
+            try self.write("    ");
+            try self.emitReturnExpr(v.plain_value.?);
+            try self.write("}\n\n");
             return;
         }
         if (self.impl_flows.get(key)) |flist| {
@@ -1571,6 +1630,64 @@ const Emitter = struct {
 
     /// A `->`/produce: `return <value>;` — bare value only; named or fielded
     /// branch payloads are the tagged-result lane.
+    /// `{ f: v, ... }` against a known C struct → `(<ct>){ .f = v, ... }`.
+    /// Field names and values come through the shared struct_literal
+    /// projector (the pun law's ONE parser); values lower via writeExpr.
+    fn emitRecordLiteral(self: *Emitter, text: []const u8, ct: []const u8) CEmitError!void {
+        const fields = struct_literal.parseFields(self.allocator, text) catch |err| {
+            std.debug.print("error[KORU047]: C lane: record literal `{s}` — {s}\n", .{ text, struct_literal.describeError(err) });
+            return CEmitError.UnsupportedConstruct;
+        };
+        defer self.allocator.free(fields);
+        try self.writeFmt("({s}){{ ", .{ct});
+        for (fields, 0..) |f, fi| {
+            if (fi > 0) try self.write(", ");
+            try self.writeFmt(".{s} = ", .{codegen_utils.cMemberName(self.allocator, f.name)});
+            try self.writeExpr(f.value);
+        }
+        try self.write(" }");
+    }
+
+    /// The C struct a `{ f: v }` produce must spell: `-> { f: T }` resolves
+    /// to `struct __koru_rec_<tag>`, `-> Proto` to the proto's own
+    /// `struct <Name>` — both through the ordinary type resolver.
+    fn recordProduceCType(self: *Emitter, ev: *const ast.EventDecl, pv: []const u8) CEmitError![]const u8 {
+        const rt = ev.return_type orelse {
+            std.debug.print("error[KORU047]: C lane: record produce `{s}` against a void `->`\n", .{pv});
+            return CEmitError.UnsupportedConstruct;
+        };
+        const ct = self.cTypeOfResolved(std.mem.trim(u8, rt, " \t\n\r")) orelse {
+            std.debug.print("error[KORU047]: C lane: record produce `{s}` against return `{s}` — no C type in the first fragment\n", .{ pv, rt });
+            return CEmitError.UnsupportedConstruct;
+        };
+        if (!std.mem.startsWith(u8, ct, "struct ")) {
+            std.debug.print("error[KORU047]: C lane: record produce `{s}` against return `{s}` — `{s}` is not a record type\n", .{ pv, rt, ct });
+            return CEmitError.UnsupportedConstruct;
+        }
+        return ct;
+    }
+
+    /// `return <pv>;` — a `{ f: v, ... }` produce against a record return
+    /// lowers to a compound literal of the declared struct; anything else
+    /// emits verbatim through writeExpr.
+    fn emitReturnExpr(self: *Emitter, pv: []const u8) CEmitError!void {
+        const t = std.mem.trim(u8, pv, " \t\n\r");
+        if (t.len > 1 and t[0] == '{' and t[t.len - 1] == '}') {
+            const ev = self.cur_event orelse {
+                std.debug.print("error[KORU047]: C lane: record produce `{s}` outside an event\n", .{t});
+                return CEmitError.UnsupportedConstruct;
+            };
+            const ct = try self.recordProduceCType(ev, t);
+            try self.write("return ");
+            try self.emitRecordLiteral(t, ct);
+            try self.write(";\n");
+            return;
+        }
+        try self.write("return ");
+        try self.writeExpr(t);
+        try self.write(";\n");
+    }
+
     fn emitProduce(self: *Emitter, bc: *const ast.BranchConstructor, indent: []const u8) CEmitError!void {
         try self.write(indent);
         if (!bc.is_bare_return and bc.branch_name.len != 0) {
@@ -1627,9 +1744,7 @@ const Emitter = struct {
             return CEmitError.UnsupportedConstruct;
         }
         if (bc.plain_value) |pv| {
-            try self.write("return ");
-            try self.writeExpr(pv);
-            try self.write(";\n");
+            try self.emitReturnExpr(pv);
         } else {
             try self.write("return;\n");
         }
@@ -1894,6 +2009,17 @@ const Emitter = struct {
     /// when the field spells a `[]T` cell, else ordinary expression text.
     fn emitArgValue(self: *Emitter, value: []const u8, f: ast.Field) CEmitError!void {
         const ct = self.cTypeOfResolved(f.type) orelse return self.writeExpr(value);
+        // `{ f: v, ... }` into a record-typed field → the compound literal
+        // `(<ct>){ .f = v }`. Payload, `_in`, `_ret` and proto structs all
+        // spell `struct <name>`; `__koru_` cells take their own arms below.
+        if (std.mem.startsWith(u8, ct, "struct ") and
+            !std.mem.startsWith(u8, ct, "struct __koru_"))
+        {
+            const vt = std.mem.trim(u8, value, " \t\n\r");
+            if (vt.len > 1 and vt[0] == '{' and vt[vt.len - 1] == '}') {
+                return self.emitRecordLiteral(vt, ct);
+            }
+        }
         if (!std.mem.startsWith(u8, ct, "struct __koru_slice_")) return self.writeExpr(value);
         // Parse `&[_]T{ e0, e1, … }` / `[_]T{ … }` — the Koru array-literal
         // reference spellings. Anything else is an expression and stays one.
@@ -2009,6 +2135,175 @@ fn seedProtoTerminals(items: []const ast.Item, aliases: *std.StringHashMap([]con
             else => {},
         }
     }
+}
+
+/// One `std/proto` field: declared name + its Koru type text. The table
+/// stays unflattened — a nested proto field keeps its proto type and
+/// resolves to that proto's own `struct`, the nested shape the zig lane
+/// emits.
+pub const ProtoField = struct { name: []const u8, ktype: []const u8 };
+
+/// The proto door's live form — `std/proto(Name) { f: t }` / a
+/// `std/types:proto` decl arrives as a flow-head invocation of the module's
+/// `default`/`proto` verb. Mirror of rings.leafgate's isProtoDoor.
+fn isProtoDoorInv(inv: *const ast.Invocation) bool {
+    if (inv.path.segments.len != 1) return false;
+    const verb = inv.path.segments[0];
+    if (!std.mem.eql(u8, verb, "proto") and !std.mem.eql(u8, verb, "default")) return false;
+    const mq = inv.path.module_qualifier orelse return false;
+    return std.mem.eql(u8, mq, "std.proto") or std.mem.eql(u8, mq, "std/proto") or
+        std.mem.eql(u8, mq, "std.types") or std.mem.eql(u8, mq, "std/types");
+}
+
+/// `name: type` pairs from proto field text — the live decl's `source`
+/// arg (newline-joined) and the erased `// proto Name: f: t, g: u` marker
+/// (comma-joined) both tokenize the same way.
+fn seedProtoFields(allocator: std.mem.Allocator, protos: *std.StringArrayHashMap([]const ProtoField), name: []const u8, text: []const u8) CEmitError!void {
+    if (name.len == 0 or protos.contains(name)) return;
+    var fields: std.ArrayList(ProtoField) = .empty;
+    defer fields.deinit(allocator);
+    var lines = std.mem.tokenizeAny(u8, text, "\n,");
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r,");
+        if (line.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const fname = std.mem.trim(u8, line[0..colon], " \t");
+        const ftype = std.mem.trim(u8, line[colon + 1 ..], " \t,");
+        if (fname.len == 0 or ftype.len == 0) continue;
+        try fields.append(allocator, .{ .name = try allocator.dupe(u8, fname), .ktype = try allocator.dupe(u8, ftype) });
+    }
+    try protos.put(try allocator.dupe(u8, name), try fields.toOwnedSlice(allocator));
+}
+
+/// Record the field table of every record proto in reach — the live
+/// `std/proto(Name)` decl flow (its `source` arg text) or the erased
+/// `// proto Name: f: t` marker inside transform-minted inline code.
+fn seedProtoStructs(allocator: std.mem.Allocator, items: []const ast.Item, protos: *std.StringArrayHashMap([]const ProtoField)) CEmitError!void {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*f| {
+                if (f.body.node) |*n| {
+                    if (n.* == .invocation and isProtoDoorInv(&n.invocation)) {
+                        const inv = &n.invocation;
+                        if (inv.args.len == 0) continue;
+                        const a0 = inv.args[0];
+                        const name = if (a0.had_explicit_label)
+                            std.mem.trim(u8, std.mem.trimRight(u8, a0.name, "<:"), " \t")
+                        else
+                            std.mem.trim(u8, a0.value, " \t\"'");
+                        for (inv.args) |a| {
+                            if (a.source_value) |sv| {
+                                try seedProtoFields(allocator, protos, name, sv.text);
+                                break;
+                            }
+                        }
+                    }
+                }
+            },
+            .inline_code => |*ic| {
+                var lines = std.mem.splitScalar(u8, ic.code, '\n');
+                while (lines.next()) |raw| {
+                    const line = std.mem.trimLeft(u8, raw, " \t");
+                    const prefix = "// proto ";
+                    if (!std.mem.startsWith(u8, line, prefix)) continue;
+                    const spec = line[prefix.len..];
+                    const colon = std.mem.indexOfScalar(u8, spec, ':') orelse continue;
+                    const name = std.mem.trim(u8, spec[0..colon], " \t");
+                    try seedProtoFields(allocator, protos, name, spec[colon + 1 ..]);
+                }
+            },
+            .module_decl => |*m| try seedProtoStructs(allocator, m.items, protos),
+            else => {},
+        }
+    }
+}
+
+/// The canonical `f:t` signature of a `{ f: T, g: U }` record text —
+/// the `struct __koru_rec_<tag>` tag's preimage. Shape-identical records
+/// canonicalize to one tag, the same struct.
+fn recordTagOf(allocator: std.mem.Allocator, t: []const u8) ?[]const u8 {
+    const rfields = struct_literal.parseFields(allocator, t) catch return null;
+    defer allocator.free(rfields);
+    var sig: std.ArrayList(u8) = .empty;
+    defer sig.deinit(allocator);
+    for (rfields, 0..) |f, fi| {
+        if (fi > 0) sig.append(allocator, ',') catch return null;
+        sig.appendSlice(allocator, f.name) catch return null;
+        sig.append(allocator, ':') catch return null;
+        sig.appendSlice(allocator, f.value) catch return null;
+    }
+    return mangleOpaqueName(allocator, sig.items);
+}
+
+const CellKind = enum { proto, record };
+
+/// `struct <Name>` protos and `struct __koru_rec_<tag>` records, emitted
+/// member-complete: a struct whose field names another cell waits for the
+/// member's def (a `struct B` member is ill-formed while B is incomplete).
+/// A cell that never resolves — an unresolvable field or a value-cycle —
+/// stays unminted; every type position naming it refuses upstream.
+fn emitCellStructDefs(em: *Emitter) CEmitError!void {
+    var emitted = std.StringHashMap(void).init(em.allocator);
+    defer emitted.deinit();
+    var in_progress = std.StringHashMap(void).init(em.allocator);
+    defer in_progress.deinit();
+    var pit = em.protos.iterator();
+    while (pit.next()) |e| try emitCellDef(em, .proto, e.key_ptr.*, &emitted, &in_progress);
+    var rit = em.record_decls.iterator();
+    while (rit.next()) |e| try emitCellDef(em, .record, e.key_ptr.*, &emitted, &in_progress);
+}
+
+fn emitCellDef(em: *Emitter, kind: CellKind, key: []const u8, emitted: *std.StringHashMap(void), in_progress: *std.StringHashMap(void)) CEmitError!void {
+    const sname = switch (kind) {
+        .proto => try std.fmt.allocPrint(em.allocator, "struct {s}", .{key}),
+        .record => try std.fmt.allocPrint(em.allocator, "struct __koru_rec_{s}", .{key}),
+    };
+    if (emitted.contains(sname) or in_progress.contains(sname)) return;
+    const fields = switch (kind) {
+        .proto => em.protos.get(key) orelse return,
+        .record => em.record_decls.get(key) orelse return,
+    };
+    try in_progress.put(sname, {});
+    defer _ = in_progress.remove(sname);
+    // Member cells first: a field whose type is a proto or a record needs
+    // that struct's def above this one.
+    for (fields) |f| {
+        const ft = std.mem.trim(u8, f.ktype, " \t");
+        if (em.protos.contains(ft)) {
+            try emitCellDef(em, .proto, ft, emitted, in_progress);
+        } else if (ft.len > 1 and ft[0] == '{' and struct_literal.isKoruStructLiteral(ft)) {
+            const rtag = recordTagOf(em.allocator, ft) orelse return;
+            if (em.record_decls.contains(rtag)) try emitCellDef(em, .record, rtag, emitted, in_progress);
+        }
+    }
+    // A member that never minted — unresolvable or a value-cycle — blocks
+    // this struct as well; its own uses refuse through cTypeOfResolved.
+    for (fields) |f| {
+        const ft = std.mem.trim(u8, f.ktype, " \t");
+        if (em.protos.contains(ft)) {
+            const m = try std.fmt.allocPrint(em.allocator, "struct {s}", .{ft});
+            if (!emitted.contains(m)) return;
+        } else if (ft.len > 1 and ft[0] == '{' and struct_literal.isKoruStructLiteral(ft)) {
+            const rtag = recordTagOf(em.allocator, ft) orelse return;
+            if (em.record_decls.contains(rtag)) {
+                const m = try std.fmt.allocPrint(em.allocator, "struct __koru_rec_{s}", .{rtag});
+                if (!emitted.contains(m)) return;
+            }
+        }
+    }
+    var ctypes: std.ArrayList([]const u8) = .empty;
+    defer ctypes.deinit(em.allocator);
+    for (fields) |f| {
+        const ct = em.cTypeOfResolved(f.ktype) orelse return;
+        try ctypes.append(em.allocator, ct);
+    }
+    try em.writeFmt("{s} {{\n", .{sname});
+    if (fields.len == 0) try em.write("    char __koru_empty;\n");
+    for (fields, ctypes.items) |f, ct| {
+        try em.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(em.allocator, f.name) });
+    }
+    try em.write("};\n");
+    try emitted.put(sname, {});
 }
 
 fn emitCHostLines(em: *Emitter, items: []const ast.Item) CEmitError!void {
@@ -2309,6 +2604,12 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     defer aliases.deinit();
     try seedProtoTerminals(program.items, &aliases);
 
+    var protos = std.StringArrayHashMap([]const ProtoField).init(allocator);
+    defer protos.deinit();
+    try seedProtoStructs(allocator, program.items, &protos);
+    var record_decls = std.StringArrayHashMap([]const ProtoField).init(allocator);
+    defer record_decls.deinit();
+
     var int_bindings = std.StringHashMap([]const u8).init(allocator);
     defer int_bindings.deinit();
     var slice_decls = std.StringArrayHashMap([]const u8).init(allocator);
@@ -2323,6 +2624,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         .aliases = &aliases,
         .int_bindings = &int_bindings,
         .slice_decls = &slice_decls,
+        .protos = &protos,
+        .record_decls = &record_decls,
     };
 
     // Preamble — includes plus the runtime surface the lowering and the |c
@@ -2379,14 +2682,12 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\
     );
 
-    try emitCHostLines(&em, program.items);
-    try emitTopLevelInlineCode(&em, program.items);
-    try emitFileScopeBodies(&em, program.items);
-
-    // Slice-cell pre-pass — resolving every declared type on the reached
-    // events registers each `struct __koru_slice_<tag>` it names, so the
-    // definitions emit before any `_in`/`_res` struct or prototype can
-    // spell one.
+    // Cell-definition pre-pass — resolving every declared type on the
+    // reached events (and every proto's whole field table) registers each
+    // `struct __koru_slice_<tag>` and proto struct a `.kc` host line,
+    // `_in`/`_res`/`_ret` struct or prototype can spell. The definitions
+    // emit before any text that can name one — the ring's `.kc` cell
+    // types its buffer `struct Reading`, so the struct must already exist.
     for (reached_events.items) |event| {
         for (event.input.fields) |f| _ = em.cTypeOfResolved(f.type);
         if (event.return_type) |rt| _ = em.cTypeOfResolved(rt);
@@ -2394,9 +2695,16 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
             for (b.payload.fields) |f| _ = em.cTypeOfResolved(f.type);
         }
     }
+    var pit = protos.iterator();
+    while (pit.next()) |e| _ = em.cTypeOfResolved(e.key_ptr.*);
     for (slice_decls.keys(), slice_decls.values()) |tag, member| {
         try em.writeFmt("struct __koru_slice_{s} {{ {s} *ptr; uintptr_t len; }};\n", .{ tag, member });
     }
+    try emitCellStructDefs(&em);
+
+    try emitCHostLines(&em, program.items);
+    try emitTopLevelInlineCode(&em, program.items);
+    try emitFileScopeBodies(&em, program.items);
 
     for (reached_events.items) |event| {
         try em.emitEventDeclaration(event);

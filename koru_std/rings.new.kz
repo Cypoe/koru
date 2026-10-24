@@ -470,15 +470,25 @@ const R = struct {
     // ---- The C lane's sequential cell + `|c` op bodies. The Vyukov MPMC
     // cell is the native runtime's; what the ccomp oracle verifies is the
     // sequential contract — a bounded FIFO with `full`/`none` at the edges —
-    // not the atomics. Only scalar elements have a C spelling; a proto
-    // element mints nothing here and the generated event's `value: Proto`
-    // field keeps its honest no-C-type refusal. ----
+    // not the atomics. A scalar element spells its cTypeOf; a proto element
+    // spells `struct <Name>` — the nominal struct the c emitter's proto
+    // table mints — when every leaf field resolves (the flattened walk;
+    // an owned leaf already refused above). Anything else mints no C text
+    // and the generated event's `value: Proto` field keeps its honest
+    // no-C-type refusal. ----
     var c_cell: ?[]const u8 = null;
     var cenq_body: ?[]const u8 = null;
     var cdeq_body: ?[]const u8 = null;
-    if (!is_proto_elem) blk: {
+    const c_elem: ?[]const u8 = blk: {
         const cgu = @import("codegen_utils");
-        const ect = cgu.cTypeOf(elem_type) orelse break :blk;
+        if (!is_proto_elem) break :blk cgu.cTypeOf(elem_type);
+        const leaves = RL.protoFields(allocator, program, elem_type) orelse break :blk null;
+        for (leaves) |lf| {
+            if (cgu.cTypeOf(std.mem.trim(u8, lf.ftype, " \t")) == null) break :blk null;
+        }
+        break :blk std.fmt.allocPrint(allocator, "struct {s}", .{elem_type}) catch unreachable;
+    };
+    if (c_elem) |ect| {
         const rnf = R.cFoldIdent(allocator, ring_name);
         const cmod = R.cFoldIdent(allocator, ast_functional.moduleHome(program, flow) orelse flow.module);
         const cenq = std.fmt.allocPrint(allocator, "{s}___ring_{s}_enqueue", .{ cmod, rnf }) catch unreachable;
