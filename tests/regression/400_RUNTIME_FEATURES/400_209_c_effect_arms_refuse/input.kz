@@ -1,9 +1,11 @@
 // PINS the C-lane refusal axis for `!`-effect arms — verification-path
 // refusal row 2: "`!`-effect arms | resume semantics out of oracle scope".
 //
-// `! pong string` declares an effect op on the tor; `! pong reply |> ...`
-// is the consumer-side handler that runs mid-callee — the resume
-// semantics the doc puts out of the CompCert oracle's scope.
+// `! pong string -> string` declares a RESUMING effect op on the tor;
+// `! pong reply -> reply` resumes with the payload itself — the resume
+// semantics the doc puts out of the CompCert oracle's scope. (A void
+// `! pong string` is not this row: it lowers by per-call-site splice —
+// `230_018` pins that on the c lane.)
 // Co-present axes: raw host lines (row 1) and zig-only procs with no `|c`
 // variant (NoCProcBody) — which reason an emitter reports first is a
 // design call; this pin asserts the effect-arms reason is the one named.
@@ -16,13 +18,16 @@
 const std = @import("std");
 
 ~pub tor ping { msg: string }
-! pong string
+! pong string -> string
+| done string
 
 ~proc ping|zig {
-    pong(msg);
+    const reply = pong(msg);
+    return .{ .done = reply };
 }
 
 ~ping(msg: "hello effect branches")
-! pong reply |> std/io:print.blk {
-    {{ reply:s }}
+! pong reply -> reply
+| done d |> std/io:print.blk {
+    {{ d:s }}
 }

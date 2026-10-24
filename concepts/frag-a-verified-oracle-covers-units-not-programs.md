@@ -263,3 +263,42 @@ wall to an honest `NoCProcBody` (program-local proc). What still
 refuses: member/call-operand indexing the registry cannot see
 (`a.b[i]` — honest oracle refusal, same as before), Koru list literals
 (no type inference), `for` over slices (out of cell+accessor scope).
+
+## Evolve 2026-10-24 — ungoverned `!` is a call-site splice; resume was never the unit under test
+
+The `effect arms` axis mislabeled a callback as a continuation. The
+zig lane's own lowering for a consumed `!` arm is per-call-site
+textual inline — the proc body lands in the consumer's frame and each
+`item(it)` raise splices the arm's text with ambient bindings as
+plain locals; no env object exists (`fs.kz` documents the mechanism,
+`400_086`'s emitted zig proves the shape). The census's governed/
+ungoverned split already named it: governed `!` sites are template
+vocabulary; ungoverned ones are the same splice at an ordinary call.
+
+The resume boundary the old census cited was real but misplaced:
+`! ask -> T` arms are never inline-eligible even on the zig lane —
+they route to the comptime `__H` Handlers path, a handler VALUE. Void
+`!` arms now census through; resume-valued decls and sites still
+refuse; a raise whose required arm has no installed handler is a
+named KORU047, while an uninstalled optional arm's no-op splice
+matches zig's presence-test semantics.
+
+Mechanism: `emitEffectInlineSite` emits field binds + the `|c` body
+text in a block; `__koru_raise_<arm>(v)` markers splice
+`{ <payload-ctype> const <bind> = <v>; if (<when>) { <arm> } }` per
+matching arm in source order (the zig multicast); `return E` becomes
+`<res> = E; goto <done>` so `|` dispatch follows. Payload types come
+from `branchPayloadCType`, not an assumed `long long`; kebab arm
+names compare on the C-mangled spelling. `std/fs:read-lines` lands
+the mixed shape — `fgets` streaming, `! line` splices, tagged
+`done`/`failed` dispatch — and `230_018` + `320_060` pin it green on
+both lanes. The `400_209` refusal pin was re-pinned to a real resume
+arm (`! pong -> string`), since a void arm is no longer this row.
+
+Measured over the 115-row effect corpus: resume-valued rows still
+refuse by name; void-effect rows moved past the axis to
+`NoCProcBody` — their program-local `|zig` procs carry no `|c` body,
+the same honest wall `140_019` landed on. `!`-bearing events whose
+procs are Koru-impls (templates) rather than `|c` bodies are the next
+adjacent surface, not a silent gap: `cProcOf` only returns `|c`
+bodies.

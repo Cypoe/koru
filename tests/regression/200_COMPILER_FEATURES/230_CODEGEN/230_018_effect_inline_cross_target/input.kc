@@ -1,0 +1,8 @@
+~proc each-i32|c {
+    uintptr_t __koru_n = 0;
+    for (uintptr_t __i = 0; __i < items.len; __i++) {
+        __koru_raise_item(items.ptr[__i]);
+        __koru_n += 1;
+    }
+    return (struct input_each_i32_res){ .tag = input_each_i32_tag_done, .done = __koru_n };
+}

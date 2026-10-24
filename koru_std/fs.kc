@@ -1,0 +1,40 @@
+// std/fs — C implementation facet.
+//
+// Events are declared in fs.kz (merged at import). This file holds the `|c`
+// proc bodies — the per-call-site inline kind: a `!`-declaring event has no
+// standalone C function; this text lands at the consumer's call site and
+// `__koru_raise_<arm>(v)` splices the installed `!` arm with `v` bound to
+// its payload name. `return` retargets to the call's result cell + goto.
+//
+// HYGIENE: the body inlines into the consumer's frame (same as the zig
+// facet's own note) — locals are __koru-prefixed to never collide with
+// user bindings in the surrounding flow.
+
+// `fgets` streams line-by-line — constant memory, the streaming fix the zig
+// facet's aspirational note still defers. The per-line `! line` arm sees a
+// static buffer valid only for the call, matching zig's "handlers complete
+// before the buffer is freed" contract. `| failed` maps errno to the same
+// strings the zig body uses; `| done` delivers the line count.
+~proc read-lines|c {
+    FILE *__koru_rl_f = fopen(path, "r");
+    if (!__koru_rl_f) {
+        const char *__koru_rl_msg = "Failed to open file";
+        if (errno == ENOENT) __koru_rl_msg = "File not found";
+        else if (errno == EACCES) __koru_rl_msg = "Access denied";
+        else if (errno == EISDIR) __koru_rl_msg = "Path is a directory";
+        return (struct std_fs_read_lines_res){ .tag = std_fs_read_lines_tag_failed, .failed = __koru_rl_msg };
+    }
+    static char __koru_rl_buf[65536];
+    uintptr_t __koru_rl_n = 0;
+    while (fgets(__koru_rl_buf, (int)sizeof __koru_rl_buf, __koru_rl_f)) {
+        size_t __koru_rl_len = strlen(__koru_rl_buf);
+        while (__koru_rl_len > 0 &&
+               (__koru_rl_buf[__koru_rl_len - 1] == '\n' || __koru_rl_buf[__koru_rl_len - 1] == '\r')) {
+            __koru_rl_buf[--__koru_rl_len] = '\0';
+        }
+        __koru_raise_line(__koru_rl_buf);
+        __koru_rl_n += 1;
+    }
+    fclose(__koru_rl_f);
+    return (struct std_fs_read_lines_res){ .tag = std_fs_read_lines_tag_done, .done = __koru_rl_n };
+}

@@ -177,10 +177,16 @@ const AxisCensus = struct {
     concurrency: ?errors.SourceLocation = null,
 };
 
+const CensusCtx = struct {
+    allocator: std.mem.Allocator,
+    events: *const EventIndex,
+};
+
 fn axisRefusalItems(
     items: []const ast.Item,
     main_module: []const u8,
     census: *AxisCensus,
+    ctx: *const CensusCtx,
 ) CEmitError!void {
     for (items) |*item| {
         switch (item.*) {
@@ -193,7 +199,11 @@ fn axisRefusalItems(
             .event_decl => |*e| {
                 if (!std.mem.eql(u8, e.module, main_module)) continue;
                 for (e.branches) |b| {
-                    if (b.kind == .effect) {
+                    // A declared `!` is only a wall when its resume shape
+                    // needs a handler VALUE (`-> T` / multi-arm sum) — the
+                    // zig lane's own inline splice refuses the same shape.
+                    // A void `!` decl is per-call-site splice vocabulary.
+                    if (b.kind == .effect and (b.resume_type != null or b.resume_arms != null)) {
                         if (census.resumable == null) census.resumable = e.location;
                     }
                 }
@@ -205,8 +215,12 @@ fn axisRefusalItems(
                 // vocabulary exactly when the flow itself was rendered —
                 // `flow.inline_body` resolves markers against
                 // `flow.body.continuations`.
-                if (f.body.node) |*node| _ = try axisRefusalNode(node, f.body.location, census);
-                for (f.body.continuations) |*cont| try axisRefusalSite(cont, census, f.inline_body != null);
+                var head_inv: ?*const ast.Invocation = null;
+                if (f.body.node) |*node| {
+                    _ = try axisRefusalNode(node, f.body.location, census, ctx);
+                    if (node.* == .invocation) head_inv = &node.invocation;
+                }
+                for (f.body.continuations) |*cont| try axisRefusalSite(cont, census, f.inline_body != null, ctx, head_inv);
             },
             .module_decl => |*m| {
                 // Transforms consume their invocations before emission (pump flows are
@@ -217,7 +231,7 @@ fn axisRefusalItems(
                 if (isConcurrencyModule(m.logical_name) or isConcurrencyModule(m.canonical_path)) {
                     if (census.concurrency == null) census.concurrency = m.location;
                 }
-                try axisRefusalItems(m.items, main_module, census);
+                try axisRefusalItems(m.items, main_module, census, ctx);
             },
             else => {},
         }
@@ -227,23 +241,57 @@ fn axisRefusalItems(
 /// `governed` — the parent (invocation or flow) carried an inline body,
 /// i.e. a transform/template already dispatched this site. Its `!` kind is
 /// then transplant vocabulary (for's `! each`, capture's `! as`) — the
-/// template's own body runs it — not a resumable pair. A `!` arm with NO
-/// governing parent is a genuine resumable: the event it names suspends and
-/// resumes, which CompCert's sequential subset cannot model. Governance is
-/// NOT inherited past the direct parent: a nested event's `!` arm inside a
-/// rendered arm is governed only by its own invocation.
-fn axisRefusalSite(site: *const ast.Continuation, census: *AxisCensus, governed: bool) CEmitError!void {
-    if (site.kind == .effect and !governed and census.resumable == null) census.resumable = site.location;
-    var children_governed = false;
-    if (site.node) |*node| {
-        children_governed = try axisRefusalNode(node, site.location, census);
+/// template's own body runs it — not a resumable pair. An ungoverned `!`
+/// arm is the per-call-site splice the zig lane emits: the proc's `|c`
+/// body inlines at the site and `__koru_raise_<arm>` markers splice the
+/// consumer's arm text — same boundary the zig inline path draws, so a
+/// VOID effect arm (`->` absent) on a resolvable event is fragment; a
+/// RESUMING arm (`-> T` / multi-arm sum) stays refused — the zig lane
+/// itself routes those to the comptime __H Handlers path, and a C
+/// handler-value analog is a separate ruling. Governance is NOT inherited
+/// past the direct parent: a nested event's `!` arm inside a rendered arm
+/// is governed only by its own invocation.
+fn axisRefusalSite(
+    site: *const ast.Continuation,
+    census: *AxisCensus,
+    governed: bool,
+    ctx: *const CensusCtx,
+    parent_inv: ?*const ast.Invocation,
+) CEmitError!void {
+    if (site.kind == .effect and !governed and census.resumable == null) {
+        if (!try effectArmInlineable(ctx, parent_inv, site.branch)) census.resumable = site.location;
     }
-    for (site.continuations) |*cont| try axisRefusalSite(cont, census, children_governed);
+    var children_governed = false;
+    var child_inv: ?*const ast.Invocation = null;
+    if (site.node) |*node| {
+        children_governed = try axisRefusalNode(node, site.location, census, ctx);
+        if (node.* == .invocation) child_inv = &node.invocation;
+    }
+    for (site.continuations) |*cont| try axisRefusalSite(cont, census, children_governed, ctx, child_inv);
+}
+
+/// An ungoverned `! <arm>` site lowers by per-call-site inline exactly when
+/// the invocation it arms resolves to an event whose declared `arm` is a
+/// plain void effect — no `-> T` resume, no multi-arm resume sum.
+fn effectArmInlineable(
+    ctx: *const CensusCtx,
+    parent_inv: ?*const ast.Invocation,
+    arm_name: []const u8,
+) CEmitError!bool {
+    const inv = parent_inv orelse return false;
+    const key = try pathKey(ctx.allocator, inv.path);
+    defer ctx.allocator.free(key);
+    const event = ctx.events.get(key) orelse return false;
+    for (event.branches) |*b| {
+        if (b.kind != .effect or !std.mem.eql(u8, b.name, arm_name)) continue;
+        return b.resume_type == null and b.resume_arms == null;
+    }
+    return false;
 }
 
 /// Walk a site's node for axis evidence; returns whether the node dispatched
 /// a template (its children are template vocabulary).
-fn axisRefusalNode(node: *const ast.Node, loc: errors.SourceLocation, census: *AxisCensus) CEmitError!bool {
+fn axisRefusalNode(node: *const ast.Node, loc: errors.SourceLocation, census: *AxisCensus, ctx: *const CensusCtx) CEmitError!bool {
     switch (node.*) {
         .invocation => |*inv| {
             if (isConcurrencyPath(inv.path) and census.concurrency == null) {
@@ -251,17 +299,17 @@ fn axisRefusalNode(node: *const ast.Node, loc: errors.SourceLocation, census: *A
             }
             return inv.inline_body != null;
         },
-        .conditional => |*c| try axisRefusalBranches(c.branches, census),
-        .foreach => |*f| try axisRefusalBranches(f.branches, census),
-        .switch_result => |*sw| try axisRefusalBranches(sw.branches, census),
+        .conditional => |*c| try axisRefusalBranches(c.branches, census, ctx),
+        .foreach => |*f| try axisRefusalBranches(f.branches, census, ctx),
+        .switch_result => |*sw| try axisRefusalBranches(sw.branches, census, ctx),
         else => {},
     }
     return false;
 }
 
-fn axisRefusalBranches(branches: []const ast.NamedBranch, census: *AxisCensus) CEmitError!void {
+fn axisRefusalBranches(branches: []const ast.NamedBranch, census: *AxisCensus, ctx: *const CensusCtx) CEmitError!void {
     for (branches) |*b| {
-        for (b.body) |*site| try axisRefusalSite(site, census, false);
+        for (b.body) |*site| try axisRefusalSite(site, census, false, ctx, null);
     }
 }
 
@@ -642,6 +690,12 @@ const Emitter = struct {
                 }
                 try self.write("};\n");
             }
+            // An event declaring `!` arms has no standalone function — its
+            // `|c` body is per-call-site inline text (raise markers splice
+            // the consumer's arms), so no prototype exists either. The zig
+            // lane's `handler(input, comptime __H)` is the same shape: the
+            // decl exists, the call never does.
+            if (eventHasEffectBranch(event)) return;
             try self.writeFmt("static struct {s}_res {s}(", .{ name, name });
             if (event.input.fields.len == 0) {
                 try self.write("void");
@@ -698,6 +752,19 @@ const Emitter = struct {
             return;
         }
 
+        // An event declaring `!` arms is never a C function: its `|c` body
+        // is per-call-site inline text, spliced where the flow invokes it
+        // (the zig lane's `handler(input, comptime __H)` twin — decl yes,
+        // direct call never). Requiring the |c body here keeps the wall
+        // honest: a `!` event without one is NoCProcBody, not a silent void.
+        if (eventHasEffectBranch(event)) {
+            if (self.cProcOf(key) == null) {
+                std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
+                return CEmitError.NoCProcBody;
+            }
+            return;
+        }
+
         if (event.input.is_wildcard) {
             std.debug.print("error[KORU047]: C lane: {s} wildcard input — outside the first fragment\n", .{key});
             return CEmitError.UnsupportedConstruct;
@@ -719,19 +786,11 @@ const Emitter = struct {
         try self.write(") {\n");
 
         // Impl resolution: |c proc > immediate `->` > subflow impl > refuse.
-        if (self.procs.get(key)) |plist| {
-            var c_proc: ?*const ast.ProcDecl = null;
-            for (plist.items) |p| {
-                if (p.target) |t| {
-                    if (std.mem.eql(u8, t, C_TARGET)) c_proc = p;
-                }
-            }
-            if (c_proc) |p| {
-                try self.emitFieldBindings(event);
-                try self.writeHostText(p.body.text);
-                try self.write("\n}\n\n");
-                return;
-            }
+        if (self.cProcOf(key)) |p| {
+            try self.emitFieldBindings(event);
+            try self.writeHostText(p.body.text);
+            try self.write("\n}\n\n");
+            return;
         }
         if (self.impls.get(key)) |ii| {
             const v = ii.value;
@@ -779,6 +838,27 @@ const Emitter = struct {
         return null;
     }
 
+    /// The event declares `!` arms — the shape that makes it call-site
+    /// inline text rather than a standalone function.
+    fn eventHasEffectBranch(event: *const ast.EventDecl) bool {
+        for (event.branches) |*b| {
+            if (b.kind == .effect) return true;
+        }
+        return false;
+    }
+
+    /// The event's declared `|c` proc body, if one exists.
+    fn cProcOf(self: *Emitter, key: []const u8) ?*const ast.ProcDecl {
+        if (self.procs.get(key)) |plist| {
+            for (plist.items) |p| {
+                if (p.target) |t| {
+                    if (std.mem.eql(u8, t, C_TARGET)) return p;
+                }
+            }
+        }
+        return null;
+    }
+
     /// The payload member's C spelling for a branch: null for an empty
     /// payload, the scalar's C type for a `__type_ref` single, the named
     /// payload struct `struct <name>_<branch>_t` for a record payload.
@@ -822,18 +902,16 @@ const Emitter = struct {
     /// machinery an event's named `|` branches lower to (the union(enum)
     /// the zig lane emits, spelled flat the way the js record is).
     fn emitTaggedResultDecl(self: *Emitter, event: *const ast.EventDecl, name: []const u8, key: []const u8) CEmitError!void {
+        // `!` effect branches join no result — they splice per call site.
+        // Their payload structs still emit (an effect arm's binding reads
+        // that type at the raise), but the enum and `_res` members are
+        // terminal-only.
+        var terminal_count: usize = 0;
         for (event.branches) |*b| {
-            if (b.kind == .effect) {
-                std.debug.print("error[KORU047]: C lane: {s} declares effect branch `! {s}` — handler dispatch is outside the first fragment\n", .{ key, b.name });
-                return CEmitError.UnsupportedConstruct;
-            }
+            if (b.kind == .effect) continue;
+            terminal_count += 1;
             _ = try self.branchPayloadCType(name, key, b);
         }
-        try self.write("enum {\n");
-        for (event.branches) |*b| {
-            try self.writeFmt("    {s},\n", .{codegen_utils.cResTagConst(self.allocator, name, b.name)});
-        }
-        try self.write("};\n");
         for (event.branches) |*b| {
             const fs = b.payload.fields;
             const is_rec = (fs.len > 0 and !std.mem.eql(u8, fs[0].name, "__type_ref")) or b.payload.is_wildcard;
@@ -845,15 +923,26 @@ const Emitter = struct {
                 try self.write("    char __koru_wildcard;\n");
             } else {
                 for (fs) |f| {
-                    const ct = self.cTypeOfResolved(f.type).?;
+                    const ct = self.cTypeOfResolved(f.type) orelse {
+                        std.debug.print("error[KORU047]: C lane: {s} branch `! {s}` payload field {s} has type {s} — no C type in the first fragment\n", .{ key, b.name, f.name, f.type });
+                        return CEmitError.UnsupportedConstruct;
+                    };
                     try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
                 }
             }
             try self.write("};\n");
         }
+        if (terminal_count == 0) return;
+        try self.write("enum {\n");
+        for (event.branches) |*b| {
+            if (b.kind == .effect) continue;
+            try self.writeFmt("    {s},\n", .{codegen_utils.cResTagConst(self.allocator, name, b.name)});
+        }
+        try self.write("};\n");
         try self.writeFmt("struct {s}_res {{\n", .{name});
         try self.write("    int tag;\n");
         for (event.branches) |*b| {
+            if (b.kind == .effect) continue;
             const ptype = (try self.branchPayloadCType(name, key, b)) orelse continue;
             try self.writeFmt("    {s} {s};\n", .{ ptype, codegen_utils.cPayloadMember(self.allocator, b.name) });
         }
@@ -1101,6 +1190,317 @@ const Emitter = struct {
         try self.writeHostText(trimmed[pos..]);
     }
 
+    /// A `!`-declaring event's call site: the proc's `|c` body emits INLINE
+    /// at the site — the same lowering the zig lane performs (its emitted
+    /// flow text splices the proc body and each `item(it)` raise is the
+    /// consumer's `!` arm). Field binds come from the invocation args;
+    /// `__koru_raise_<arm>(v)` markers in the body splice the site's
+    /// matching `!` continuations with `v` bound to the arm's payload name;
+    /// every `return` in the host text becomes `<res> = E; goto <done>` so
+    /// a `|` dispatch can follow the block. Ambient locals are plain
+    /// locals — scope is shared, no env exists. Returns the consumed mask:
+    /// all of the site's continuations are handled here (~0).
+    fn emitEffectInlineSite(
+        self: *Emitter,
+        site: *const ast.Continuation,
+        inv: *const ast.Invocation,
+        event: *const ast.EventDecl,
+        key: []const u8,
+        indent: []const u8,
+        ctx: SiteCtx,
+    ) CEmitError!u64 {
+        const name = try mangle(self.allocator, inv.path);
+        defer self.allocator.free(name);
+        const cproc = self.cProcOf(key) orelse {
+            std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
+            return CEmitError.NoCProcBody;
+        };
+        if (inv.return_destructure.len != 0) {
+            std.debug.print("error[KORU047]: C lane: {s} destructure at the bind — outside the first fragment\n", .{key});
+            return CEmitError.UnsupportedConstruct;
+        }
+        for (site.continuations) |*c| {
+            if (c.kind != .terminal) continue;
+            if (c.is_catchall) {
+                std.debug.print("error[KORU047]: C lane: {s} — `|*` catchall arm is outside the first fragment\n", .{key});
+                return CEmitError.UnsupportedConstruct;
+            }
+            if (c.branch.len != 0 and c.condition != null) {
+                std.debug.print("error[KORU047]: C lane: {s} arm `| {s} when` — guarded dispatch is outside the first fragment\n", .{ key, c.branch });
+                return CEmitError.UnsupportedConstruct;
+            }
+            if (c.branch.len != 0 and findBranch(event, c.branch) == null) {
+                std.debug.print("error[KORU047]: C lane: {s} arm `| {s}` names no declared branch\n", .{ key, c.branch });
+                return CEmitError.UnsupportedConstruct;
+            }
+        }
+
+        var has_terms = false;
+        for (event.branches) |*b| {
+            if (b.kind == .terminal) has_terms = true;
+        }
+        self.res_counter += 1;
+        const site_id = self.res_counter;
+        var res_ty_owned: ?[]const u8 = null;
+        defer if (res_ty_owned) |t| self.allocator.free(t);
+        const res_ty: ?[]const u8 = if (has_terms)
+            blk: {
+                res_ty_owned = try std.fmt.allocPrint(self.allocator, "struct {s}_res", .{name});
+                break :blk res_ty_owned;
+            }
+        else if (event.return_type) |rt|
+            self.cTypeOfResolved(rt) orelse {
+                std.debug.print("error[KORU047]: C lane: {s} returns {s} — no C type in the first fragment\n", .{ key, rt });
+                return CEmitError.UnsupportedConstruct;
+            }
+        else
+            null;
+        var res_name_owned: ?[]const u8 = null;
+        defer if (res_name_owned) |rn| self.allocator.free(rn);
+        const res_name: ?[]const u8 = if (res_ty != null)
+            if (inv.return_binding) |bind| bind else blk: {
+                res_name_owned = try std.fmt.allocPrint(self.allocator, "__koru_eff_res_{d}", .{site_id});
+                break :blk res_name_owned;
+            }
+        else
+            null;
+        const done_label = try std.fmt.allocPrint(self.allocator, "__koru_eff_done_{d}", .{site_id});
+        defer self.allocator.free(done_label);
+
+        if (res_ty) |rt| {
+            if (res_name) |rn| {
+                try self.int_bindings.put(rn, rt);
+                try self.writeFmt("{s}{s} {s};\n", .{ indent, rt, rn });
+            }
+        }
+        try self.writeFmt("{s}{{\n", .{indent});
+        const inner = try std.fmt.allocPrint(self.allocator, "{s}    ", .{indent});
+        defer self.allocator.free(inner);
+        // `const <ct> <field> = <arg>;` — the emitFieldBindings shape with
+        // the call site's expression instead of `__koru_in.<field>`.
+        for (event.input.fields, 0..) |f, fi| {
+            const ct = self.cTypeOfResolved(f.type) orelse {
+                std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
+                return CEmitError.UnsupportedConstruct;
+            };
+            try self.int_bindings.put(f.name, ct);
+            try self.writeFmt("{s}{s} const {s} = ", .{ inner, ct, f.name });
+            var argbuf: std.ArrayList(u8) = .empty;
+            const saved_buf = self.buf;
+            self.buf = &argbuf;
+            defer self.buf = saved_buf;
+            try self.emitArgForField(inv, f, fi);
+            self.buf = saved_buf;
+            try self.write(argbuf.items);
+            argbuf.deinit(self.allocator);
+            try self.write(";\n");
+        }
+        try self.emitEffectBodyInline(cproc.body.text, site, event, name, key, res_name, done_label, inner, ctx);
+        try self.writeFmt("{s}{s}: ;\n{s}}}\n", .{ inner, done_label, indent });
+
+        // `|` dispatch on the produced result — the emitTaggedCall shape.
+        if (res_name != null and has_terms) {
+            const rn = res_name.?;
+            try self.writeFmt("{s}switch ({s}.tag) {{\n", .{ indent, rn });
+            for (site.continuations) |*cont| {
+                if (cont.kind != .terminal or cont.branch.len == 0) continue;
+                try self.writeFmt("{s}case {s}: {{\n", .{ indent, codegen_utils.cResTagConst(self.allocator, name, cont.branch) });
+                try self.emitBranchBinding(event, cont, rn, inner);
+                const consumed = try self.emitSiteNode(cont, inner, ctx);
+                try self.emitUnconsumedContinuations(cont.continuations, consumed, inner, ctx);
+                try self.writeFmt("{s}break; }}\n", .{inner});
+            }
+            try self.writeFmt("{s}default: break;\n{s}}}\n", .{ indent, indent });
+        }
+        // The post-call sequel: unnamed terminal continuations always run.
+        for (site.continuations) |*cont| {
+            if (cont.kind != .terminal or cont.branch.len != 0) continue;
+            try self.emitSite(cont, indent, ctx);
+        }
+        return ~@as(u64, 0);
+    }
+
+    /// One `|c` proc body emitted as call-site inline text. Two host-text
+    /// spells get rewritten; everything else passes verbatim:
+    ///   `__koru_raise_<arm>(<v>);` — splice the site's `! <arm>`
+    ///     continuations with `<v>` bound to the arm payload name (all
+    ///     matching arms, each under its `when`; an optional arm with no
+    ///     installed continuation splices nothing).
+    ///   `return E;` — `<res> = (E); goto <done>;` so the block stays
+    ///     inline under the enclosing flow (a `return` would exit `main`,
+    ///     and `break` could not escape a nested `for`).
+    /// Strings, chars, and comments are never rewritten.
+    fn emitEffectBodyInline(
+        self: *Emitter,
+        body: []const u8,
+        site: *const ast.Continuation,
+        event: *const ast.EventDecl,
+        name: []const u8,
+        key: []const u8,
+        res_name: ?[]const u8,
+        done_label: []const u8,
+        indent: []const u8,
+        ctx: SiteCtx,
+    ) CEmitError!void {
+        const RAISE = "__koru_raise_";
+        var i: usize = 0;
+        while (i < body.len) {
+            const c = body[i];
+            // literals and comments pass through untouched.
+            if (c == '"' or c == '\'') {
+                const start = i;
+                i += 1;
+                while (i < body.len and body[i] != c) {
+                    if (body[i] == '\\') i += 1;
+                    i += 1;
+                }
+                if (i < body.len) i += 1;
+                try self.writeHostText(body[start..i]);
+                continue;
+            }
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
+                const start = i;
+                while (i < body.len and body[i] != '\n') i += 1;
+                try self.writeHostText(body[start..i]);
+                continue;
+            }
+            if (c == '/' and i + 1 < body.len and body[i + 1] == '*') {
+                const start = i;
+                i += 2;
+                while (i + 1 < body.len and !(body[i] == '*' and body[i + 1] == '/')) i += 1;
+                if (i + 1 < body.len) i += 2;
+                try self.writeHostText(body[start..i]);
+                continue;
+            }
+            if (std.ascii.isAlphabetic(c) or c == '_') {
+                const id_start = i;
+                while (i < body.len and codegen_utils.exprIdentChar(body[i])) i += 1;
+                const ident = body[id_start..i];
+                if (std.mem.eql(u8, ident, "return")) {
+                    var j = i;
+                    var depth: usize = 0;
+                    while (j < body.len) : (j += 1) {
+                        const b = body[j];
+                        if (b == '(' or b == '[' or b == '{') depth += 1;
+                        if (b == ')' or b == ']' or b == '}') {
+                            if (depth == 0) break;
+                            depth -= 1;
+                        }
+                        if (b == ';' and depth == 0) break;
+                    }
+                    const expr = std.mem.trim(u8, body[i..j], " \t\r\n");
+                    if (j < body.len) j += 1; // the ';'
+                    if (expr.len == 0) {
+                        try self.writeFmt("goto {s}; ", .{done_label});
+                    } else if (res_name) |rn| {
+                        try self.writeFmt("{s} = ({s}); goto {s}; ", .{ rn, expr, done_label });
+                    } else {
+                        try self.writeFmt("({s}); goto {s}; ", .{ expr, done_label });
+                    }
+                    i = j;
+                    continue;
+                }
+                if (std.mem.startsWith(u8, ident, RAISE)) {
+                    const arm_name = ident[RAISE.len..];
+                    // `<name>(<args>)` — balanced parens, then optional `;`.
+                    var j = i;
+                    while (j < body.len and std.ascii.isWhitespace(body[j])) j += 1;
+                    if (j >= body.len or body[j] != '(') {
+                        std.debug.print("error[KORU047]: C lane: `__koru_raise_{s}` is a marker, not a value — write `__koru_raise_{s}(v);`\n", .{ arm_name, arm_name });
+                        return CEmitError.UnsupportedConstruct;
+                    }
+                    const arg_start = j + 1;
+                    var depth: usize = 1;
+                    j = arg_start;
+                    while (j < body.len and depth > 0) : (j += 1) {
+                        if (body[j] == '(') depth += 1;
+                        if (body[j] == ')') depth -= 1;
+                    }
+                    const argtext = body[arg_start .. j - 1];
+                    if (topLevelComma(argtext) != null) {
+                        std.debug.print("error[KORU047]: C lane: `__koru_raise_{s}` carries several values — an effect payload is one value\n", .{arm_name});
+                        return CEmitError.UnsupportedConstruct;
+                    }
+                    const arg = std.mem.trim(u8, argtext, " \t\r\n");
+                    if (j < body.len and body[j] == ';') j += 1;
+                    try self.spliceEffectArms(site, event, name, key, arm_name, arg, indent, ctx);
+                    i = j;
+                    continue;
+                }
+                try self.writeHostText(ident);
+                continue;
+            }
+            try self.writeHostText(body[i .. i + 1]);
+            i += 1;
+        }
+    }
+
+    /// Splice every `! <arm>` continuation the site installed for `arm_name`
+    /// — `{ <payload-type> const <bind> = <arg>; if (<when>) { <body> } }`
+    /// per arm, source order (the zig multicast: several same-name arms each
+    /// fire under their own guard). An optional arm never installed splices
+    /// nothing; a required arm never installed — or a raise naming no
+    /// declared effect — is a named refusal, never a silent skip.
+    fn spliceEffectArms(
+        self: *Emitter,
+        site: *const ast.Continuation,
+        event: *const ast.EventDecl,
+        name: []const u8,
+        key: []const u8,
+        arm_name: []const u8,
+        arg: []const u8,
+        indent: []const u8,
+        ctx: SiteCtx,
+    ) CEmitError!void {
+        // `! out-of-bounds` is authored `__koru_raise_out_of_bounds` in the
+        // |c body — a C identifier; compare on the mangled spelling.
+        var arm: ?*const ast.Branch = null;
+        for (event.branches) |*b| {
+            if (!std.mem.eql(u8, codegen_utils.cMemberName(self.allocator, b.name), arm_name)) continue;
+            arm = b;
+            break;
+        }
+        const arm_b = arm orelse {
+            std.debug.print("error[KORU047]: C lane: `__koru_raise_{s}` names no branch of {s}\n", .{ arm_name, key });
+            return CEmitError.UnsupportedConstruct;
+        };
+        if (arm_b.kind != .effect) {
+            std.debug.print("error[KORU047]: C lane: `__koru_raise_{s}` names a `|` terminal — only `!` arms splice at raises\n", .{arm_name});
+            return CEmitError.UnsupportedConstruct;
+        }
+        var installed: usize = 0;
+        for (site.continuations) |*cont| {
+            if (cont.kind != .effect or !std.mem.eql(u8, cont.branch, arm_b.name)) continue;
+            installed += 1;
+            if (cont.destructure.len != 0) {
+                std.debug.print("error[KORU047]: C lane: destructured effect binding — outside the first fragment\n", .{});
+                return CEmitError.UnsupportedConstruct;
+            }
+            try self.write("{ ");
+            if (cont.binding) |binding| {
+                if (!std.mem.eql(u8, binding, "_")) {
+                    if (try self.branchPayloadCType(name, key, arm_b)) |pt| {
+                        try self.int_bindings.put(binding, pt);
+                        try self.writeFmt("{s} const {s} = {s}; ", .{ pt, binding, arg });
+                    }
+                }
+            }
+            const guarded = cont.condition != null;
+            if (guarded) {
+                try self.write("if (");
+                try self.writeExpr(cont.condition.?);
+                try self.write(") { ");
+            }
+            try self.emitInlineContinuationBody(cont, indent, ctx);
+            if (guarded) try self.write(" }");
+            try self.write(" }\n");
+        }
+        if (installed == 0 and !arm_b.is_optional) {
+            std.debug.print("error[KORU047]: C lane: {s} raises `! {s}` but the call site installs no handler — a required arm cannot fire silently\n", .{ key, arm_name });
+            return CEmitError.UnsupportedConstruct;
+        }
+    }
+
     /// Emit the arm's own node; returns the marker-consumed mask of the
     /// site's continuation list (0 when the node installed nothing — the
     /// caller drains the rest).
@@ -1116,6 +1516,16 @@ const Emitter = struct {
                     try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), site.continuations, indent, ctx, &consumed);
                     return consumed;
                 } else {
+                    const key = try pathKey(self.allocator, inv.path);
+                    defer self.allocator.free(key);
+                    if (self.events.get(key)) |event| {
+                        if (eventHasEffectBranch(event)) {
+                            // Per-call-site inline: the |c body lands here
+                            // and its raise markers splice the site's `!`
+                            // arms — the zig lane's identical lowering.
+                            return try self.emitEffectInlineSite(site, inv, event, key, indent, ctx);
+                        }
+                    }
                     for (site.continuations) |*c| {
                         if (c.kind == .terminal and (c.branch.len != 0 or c.is_catchall)) {
                             try self.emitTaggedCall(site, inv, indent, ctx);
@@ -1436,7 +1846,10 @@ const Emitter = struct {
     /// The value for declared field `f` (ordinal `fi`) at a call site: the
     /// arg named `f`, else the positional arg at the same ordinal, else the
     /// field default, else refuse — a missing argument is a shape error the
-    /// C lane does not guess on.
+    /// C lane does not guess on. A `&[_]T{…}` / `[_]T{…}` slice literal
+    /// against a `[]T` field emits the fat-cell compound literal — arg
+    /// position is where the element type is declared, so no inference is
+    /// needed: `(struct __koru_slice_<tag>){ .ptr = (<elem>[]){…}, .len = n }`.
     fn emitArgForField(self: *Emitter, inv: *const ast.Invocation, f: ast.Field, fi: usize) CEmitError!void {
         // A comptime-hole field takes its hole, not the arg text — the
         // source expression is comptime cargo the C lane never evaluates.
@@ -1450,21 +1863,64 @@ const Emitter = struct {
         for (inv.args) |*a| {
             if (a.name.len == 0) {
                 if (positional == fi) {
-                    try self.writeExpr(a.value);
+                    try self.emitArgValue(a.value, f);
                     return;
                 }
                 positional += 1;
             } else if (std.mem.eql(u8, a.name, f.name)) {
-                try self.writeExpr(a.value);
+                try self.emitArgValue(a.value, f);
                 return;
             }
         }
         if (f.default) |d| {
-            try self.writeExpr(d);
+            try self.emitArgValue(d, f);
             return;
         }
         std.debug.print("error[KORU047]: C lane: call supplies no value for field {s}\n", .{f.name});
         return CEmitError.UnresolvedEvent;
+    }
+
+    /// One arg's value against declared field `f`: slice-literal lowering
+    /// when the field spells a `[]T` cell, else ordinary expression text.
+    fn emitArgValue(self: *Emitter, value: []const u8, f: ast.Field) CEmitError!void {
+        const ct = self.cTypeOfResolved(f.type) orelse return self.writeExpr(value);
+        if (!std.mem.startsWith(u8, ct, "struct __koru_slice_")) return self.writeExpr(value);
+        // Parse `&[_]T{ e0, e1, … }` / `[_]T{ … }` — the Koru array-literal
+        // reference spellings. Anything else is an expression and stays one.
+        var t = std.mem.trim(u8, value, " \t");
+        if (std.mem.startsWith(u8, t, "&")) t = std.mem.trim(u8, t[1..], " \t");
+        if (!std.mem.startsWith(u8, t, "[_]")) return self.writeExpr(value);
+        t = std.mem.trim(u8, t[3..], " \t");
+        const open = std.mem.indexOfScalar(u8, t, '{') orelse return self.writeExpr(value);
+        if (t.len == 0 or t[t.len - 1] != '}') return self.writeExpr(value);
+        const elem_ty = self.sliceMemberOf(ct) orelse return self.writeExpr(value);
+        const elems_text = t[open + 1 .. t.len - 1];
+        try self.writeFmt("(({s}){{ ", .{ct});
+        if (std.mem.trim(u8, elems_text, " \t\n").len == 0) {
+            try self.write(".ptr = 0, .len = 0 }})");
+            return;
+        }
+        try self.writeFmt(".ptr = ({s}[]){{ ", .{elem_ty});
+        var n: usize = 0;
+        var rest = elems_text;
+        while (true) {
+            const comma = topLevelComma(rest) orelse rest.len;
+            const piece = std.mem.trim(u8, rest[0..comma], " \t\n");
+            if (piece.len == 0) break;
+            if (n > 0) try self.write(", ");
+            try self.writeExpr(piece);
+            n += 1;
+            if (comma == rest.len) break;
+            rest = rest[comma + 1 ..];
+        }
+        try self.writeFmt(" }}, .len = {d} }})", .{n});
+    }
+
+    /// `<slice-cell>` → its `ptr` member's pointee C type —
+    /// `struct __koru_slice_<tag>`'s registered `<member>` spelling.
+    fn sliceMemberOf(self: *Emitter, ct: []const u8) ?[]const u8 {
+        const tag = ct["struct __koru_slice_".len..];
+        return self.slice_decls.get(tag);
     }
 
     // -- flow emission ------------------------------------------------------
@@ -1819,7 +2275,8 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     // Pre-flight: name every applicable refusal axis before emitting a byte.
     var census: AxisCensus = .{};
-    try axisRefusalItems(program.items, program.main_module_name, &census);
+    const census_ctx = CensusCtx{ .allocator = allocator, .events = &events };
+    try axisRefusalItems(program.items, program.main_module_name, &census, &census_ctx);
     if (census.host_lines != null or census.resumable != null or census.concurrency != null) {
         return refuseAxes(&census);
     }
@@ -1866,6 +2323,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         \\#include <string.h>
         \\#include <stdint.h>
         \\#include <stdbool.h>
+        \\#include <errno.h>
         \\
         \\static char *__koru_concat(const char *a, const char *b) {
         \\    size_t la = strlen(a), lb = strlen(b);

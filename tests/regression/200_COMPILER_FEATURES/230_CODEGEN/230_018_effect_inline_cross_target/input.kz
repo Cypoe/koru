@@ -1,0 +1,5 @@
+~proc each-i32|zig {
+    var __koru_n: usize = 0;
+    for (items) |it| { item(it); __koru_n += 1; }
+    return .{ .done = __koru_n };
+}
