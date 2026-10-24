@@ -4767,7 +4767,13 @@ fn appendScopeDestructure(
     out: *std.ArrayList(ast.ScopeBinding),
 ) !void {
     for (fields) |*df| {
-        try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+        // The bound name's declared type: `x: T` carries T on type_text
+        // (sigil-shaped RHS) or on path (ident-shaped RHS — `service:
+        // string` can't be told from a rename at parse, so the consumer
+        // reads the spec). A rename `x: p` puts p here too — the old
+        // annotation reading — and resolves (or fails) as a type name.
+        const spec: []const u8 = df.type_text orelse (if (!std.mem.eql(u8, df.path, df.name)) df.path else "");
+        try out.append(allocator, .{ .name = df.name, .type = spec, .value_ref = df.name });
         if (df.sub.len > 0) try appendScopeDestructure(allocator, df.sub, out);
     }
 }
@@ -6098,6 +6104,21 @@ pub fn emitInlineBodyNode(
             var body_calls_effect = false;
             for (ed.branches) |b| {
                 if (b.kind != .effect or std.mem.eql(u8, b.name, "*")) continue;
+                // A bare `name(` call only needs a Handlers member when a
+                // LIVE arm supplies one — transform-consumed arms resolve
+                // through the graft, not `Handlers_N.name`, so calls to
+                // consumed-only branch names must not force the struct
+                // (690_342: the bulk insert consumed `! each`; the textual
+                // `each(` resolves through the graft, and a memberless
+                // `const Handlers_0 = struct {}` is just an unused local).
+                var has_live_arm = false;
+                for (inline_effect_conts.items) |lc| {
+                    if (std.mem.eql(u8, lc.branch, b.name)) {
+                        has_live_arm = true;
+                        break;
+                    }
+                }
+                if (!has_live_arm) continue;
                 if (callsBranchByName(inline_code, b.name)) {
                     body_calls_effect = true;
                     break;

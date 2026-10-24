@@ -229,6 +229,7 @@ koru_std/refine.k	78
 koru_std/refine.kz	417
 koru_std/refine.terminal.kz	85
 koru_std/regex.kz	471
+koru_std/regex.norm.kz	53
 koru_std/regex.scan.kz	421
 koru_std/rings.home.kz	62
 koru_std/rings.kz	161

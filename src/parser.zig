@@ -7815,6 +7815,7 @@ pub const Parser = struct {
 
             var name: []const u8 = undefined;
             var path: []const u8 = rest;
+            var type_text: ?[]const u8 = null;
 
             if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
                 // Rename: `{ local: path }` — the RHS is the defined symbol
@@ -7833,12 +7834,29 @@ pub const Parser = struct {
                 }
             }
 
+            // A type-shaped RHS (`x: []string`, `x: ?bool`, `x: {…}`) can
+            // never name a field, so it is never a rename — it is the
+            // arm's type spec, and the arm's consumer decides what the
+            // spec means (a json schema type, a regex conversion). We
+            // carry it on type_text with the field path defaulted to the
+            // name — the same shape schema mode produces.
+            const is_rename = std.mem.indexOfScalar(u8, rest, ':') != null;
+            const sigil_type = is_rename and blk: {
+                for (path) |ch| {
+                    if (ch == '[' or ch == '?' or ch == '*' or ch == '{' or ch == '<') break :blk true;
+                }
+                break :blk false;
+            };
+            if (sigil_type) {
+                type_text = path;
+                path = name;
+            }
+
             // The path's last segment is the auto-pun name; a rename whose
             // local equals it is refused — if you can pun, you must.
             const last_seg = if (std.mem.lastIndexOfScalar(u8, path, '.')) |d| path[d + 1 ..] else path;
-            const is_rename = std.mem.indexOfScalar(u8, rest, ':') != null;
             if (!is_rename) name = last_seg;
-            if (is_rename and std.mem.eql(u8, name, last_seg)) {
+            if (!sigil_type and is_rename and std.mem.eql(u8, name, last_seg)) {
                 try self.reporter.addError(
                     .PARSE001,
                     self.current,
@@ -7850,7 +7868,7 @@ pub const Parser = struct {
             }
 
             const name_ok = std.mem.eql(u8, name, "_") or isValidIdentifier(name);
-            const path_ok = isValidIdentifier(path) or isValidDottedName(path);
+            const path_ok = sigil_type or isValidIdentifier(path) or isValidDottedName(path);
             if (!name_ok or !path_ok) {
                 try self.reporter.addError(
                     .PARSE001,
@@ -7865,6 +7883,7 @@ pub const Parser = struct {
             try fields.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, name),
                 .path = try self.allocator.dupe(u8, path),
+                .type_text = if (type_text) |t| try self.allocator.dupe(u8, t) else null,
                 .annotations = try anns.toOwnedSlice(self.allocator),
             });
         }

@@ -200,7 +200,7 @@ const ParseH = struct {
                 return null;
             }
             var ty: *const JTy = undefined;
-            var nf = f;
+            var nf = f; nf.path = f.name; // `:` carries the schema spec — the binding is the payload name, never spec text
             if (f.sub.len > 0) {
                 var sub_rw = std2.ArrayList(ast2.DestructureField){};
                 const sub = convFields(ctx, f.sub, &sub_rw) orelse return null;
@@ -208,7 +208,7 @@ const ParseH = struct {
                 const idx = ctx.shapes.items.len;
                 ctx.shapes.append(ctx.a, sub) catch unreachable;
                 ty = dupTy(ctx, .{ .obj = idx });
-            } else if (f.type_text) |t| {
+            } else if (f.type_text orelse (if (!std2.mem.eql(u8, f.path, f.name)) f.path else null)) |t| {
                 ty = parseTyText(ctx, t) orelse return null;
             } else {
                 ty = dupTy(ctx, .raw);

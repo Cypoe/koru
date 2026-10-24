@@ -1,0 +1,8 @@
+// PIN: a trailing `[]` on a type position is an OPAQUE compiler annotation —
+// `*Resource[active!]` parses to type_annotations ["active!"] with
+// phantom=null (zero obligation checking — the accepted cost, ruled
+// 2026-10-24: the bracket lane never carries a taxonomy). The phantom lane
+// is ANGLE brackets: `*Resource<active!>` → type "*Resource",
+// phantom="active!". Both spellings on one decl pin the split.
+~tor use-sq { r: *Resource[active!], s: *Resource<active!> }
+~proc use-sq|zig { _ = r; _ = s; }
