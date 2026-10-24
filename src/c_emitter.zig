@@ -2949,6 +2949,27 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // proto/record def that might name one as a field.
     if (em.needs_i128) try em.write("struct __koru_i128 { unsigned long long lo; long long hi; };\n");
     if (em.needs_u128) try em.write("struct __koru_u128 { unsigned long long lo; unsigned long long hi; };\n");
+    // Proto-terminal typedefs — a proto field spelled `Health` binds the
+    // alias name in a cell def, so the typedef must precede every struct
+    // that binds it. The transform's verbatim `typedef` still lands later
+    // in program order; a duplicate identical typedef is legal C11
+    // (verified through ccomp).
+    {
+        var td_names: std.ArrayList([]const u8) = .empty;
+        defer td_names.deinit(allocator);
+        var ait = aliases.iterator();
+        while (ait.next()) |e| try td_names.append(allocator, e.key_ptr.*);
+        std.mem.sort([]const u8, td_names.items, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+        for (td_names.items) |name| {
+            const scalar = aliases.get(name).?;
+            const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
+            if (cTypeOf(host)) |ct| try em.writeFmt("typedef {s} {s};\n", .{ ct, name });
+        }
+    }
     try emitCellStructDefs(&em);
 
     try emitCHostLines(&em, program.items);

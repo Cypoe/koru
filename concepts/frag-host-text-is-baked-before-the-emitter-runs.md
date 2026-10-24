@@ -132,3 +132,16 @@ deferred-resolution marker is a second pass's pattern space leaking into the
 first pass's input — the fix was teaching the indexed rewriter the marker
 spelling too (`__koru_idx(<store>, <idx>).<field>`), because the un-spelled
 form no longer exists by the time it looks.
+
+## Evolution — baked text also carries DECLARATION-ORDER semantics (2026-10-24)
+
+690_272 shows a third direction of the same claim. `proto.terminal.kz` mints
+`typedef <ct> <Name>;` as an `inline_code` item, which the C emitter writes
+verbatim at program position — AFTER `emitCellStructDefs` has already minted
+`struct Player { Health health; }`. C's declaration-before-use is semantic,
+not cosmetic: program-order text arrives too late whenever a generated decl
+needs to *name* what the text binds. The fix was not moving the text but
+emitting the typedefs a second time ahead of the cell defs (duplicate
+identical typedefs are legal C11 — verified through ccomp). The rule to
+carry: where host text mints a name, treat its program position as
+information, never as the binding's legal arrival point.
