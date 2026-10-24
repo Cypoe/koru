@@ -63,3 +63,13 @@ with no `! each` head fails with a compileError, not a silent group-guess.
 Producer-side pushdown (turning a pre-`{ }` `when` into stride or index
 work) is legal by the scope rule and unimplemented — it is the payoff the
 grammar was shaped to allow, not a claim the emitter already keeps.
+
+**Zig is the oracle; JS/C# are a known gap, not a supported second
+lowering.** `control.targets.kz`'s `for|js`/`for|cs` templates render
+only `effects["each"]`, and the telescoped else-guard lives in the Zig
+splice — so `! else` on a non-Zig build drops its handlers silently
+rather than refusing. The produce stage shares the gap: the splice-side
+consts, rebind renames, and post-guard wrap exist only on the Zig emit
+path. Closing it is a separate-session port of the same semantics to the
+JS/CS emitters, measured against the Zig pins (320_179/180/181) — not
+something the current tree claims to do.
