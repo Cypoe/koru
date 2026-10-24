@@ -23,9 +23,13 @@ value ever crosses a thread — because a library cannot know its caller's
 context. Koru's whole-program call graph does know: a program with no
 `@threaded` root emits zero synchronization, and a threaded program pays
 only in the locksets the parallel scope reaches. The price is opt-in per
-program region — not per type, not blanket. The caveat it stands on: the
-graph must be complete, so an opaque-pointer escape is where "free" ends —
-the same trust line as `[threadsafe]`.
+program region — not per type, not blanket. The cost it stands on is
+*located*, not diffuse: the unsafe surface is `|zig` bodies plus
+`[threadsafe]` declarations — enumerable, reviewable, confined to the
+module-authoring tier. Application code on the tor/flow surface cannot
+express the escape (no opaque pointers, no skipped protocols, no false
+claims), so it inherits correctness by construction — the stdlib gets
+it right once and every program on top is free.
 
 **v1 — four exclusive modes, one lock per call, emitted mechanically.**
 
