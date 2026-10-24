@@ -21,8 +21,11 @@ N-writers defect already pinned twice at rule granularity.
 
 ```
 std/target    — the catalog (declared arms; data)
-std/emitter   — the generic walker (target-blind engine)
+std/emit      — the generic walker (target-blind engine)
 ```
+
+Walker name resolved 2026-10-24: `std/emit` — the verb, inline
+with the rest of the module naming.
 
 Mirrors `std/realize`: a generic solver over declared rows, with
 policy declared separately (`koruos/realize` is one consumer's
@@ -92,10 +95,15 @@ hand-rolled variant select; the catalog makes it a row lookup.
 
 1. **catalog** — extract per-target tables from the three emitters
    into declared rows; emitters read rows (still `.zig`).
+   **Measure: declarative-c parity with the imperative c_emitter**
+   — the existing C lane's emitted text is the oracle; the declared
+   rows must reproduce it before any lane-vs-lane claim.
 2. **walker** — fold the ~60% shared code into one engine; emitters
    become thin or gone. Refusal messages distinguish "no row" from
-   "walker cannot express".
-3. **purify** — `std/emitter` Koru-authored; backend reuse keyed on
+   "walker cannot express". **Measure: c-vs-zig congruence** — the
+   harness already byte-compares lane outputs on the shared
+   fragment; that comparison against zig is the second rung.
+3. **purify** — `std/emit` Koru-authored; backend reuse keyed on
    `ctx.target` marks (CC's shared-backend ask falls out of marks).
 
 ## K3 connection
@@ -104,7 +112,16 @@ FlowDialect pairwise congruence runs over declared rows: lanes
 agree on the shared fragment iff their overlapping rows denote the
 same quotient classes. The catalog is the proof object; the walker
 stays trusted machinery. This is the invariant layer the
-FlowDialect rung needs to exist before it can be proven over.
+FlowDialect rung needs to exist before it can be proven over —
+outstanding, over isar-proofs.
+
+The congruence battery is already multi-regime: ccomp (CompCert
+semantics), c-through-zig, zig-llvm, c-llvm (Alive2). The c lane
+carries precedence — it is the verified oracle the others are
+measured against — which is why phase 1's acceptance is *c*
+parity, not zig parity. koru semantics keep getting re-derived in
+`verify/` as formalizations of the same programs; the catalog
+rows are the next such re-derivation surface.
 
 ## Open questions
 
@@ -114,8 +131,7 @@ FlowDialect rung needs to exist before it can be proven over.
   rather than duplicating them.
 - Where do rows live physically: `std/target` facet files
   (`index.kz` + `arms.kz`?), or `koru_std/targets/`?
-- Walker's name: `std/emit` vs `std/emitter` — both floated,
-  unresolved. `std/emit` reads as the verb it performs.
+- ~~Walker's name~~ — resolved: `std/emit`.
 - `std/target:zig` rows describe what `visitor_emitter` does —
   declared after the fact; the default arm is just the one
   `target-of` returns without `--lang`.

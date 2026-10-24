@@ -39,7 +39,8 @@ solver/policy split.**
   promise boundary). `std/target:c` is data; the zig lane is arm `zig`,
   not a privileged default — `target-of` resolving to `zig` is the same
   lookup as resolving to `c`.
-- `std/emitter` (or `std/emit` — name open) — the generic walker.
+- `std/emit` — the generic walker (name resolved: the verb, inline
+  with the rest of the module naming).
   Target-blind machinery reading rows; it does not know C exists.
   Not a `std/compiler` part: `compiler:emission` owns the coordinate
   flow (when, in what order — already an overwritable tor); the

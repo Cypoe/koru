@@ -5112,6 +5112,9 @@ fn installZigDirect(allocator: std.mem.Allocator) !void {
         return;
     };
     defer allocator.free(home);
+    // HOME arrives backslashed on Windows (C:\Users\...) and the sh -c
+    // command below eats the escapes; drive paths work forward-slashed.
+    std.mem.replaceScalar(u8, home, '\\', '/');
 
     const install_dir = std.fmt.allocPrint(allocator, "{s}/.koru", .{home}) catch {
         std.debug.print("  \x1b[31m✗\x1b[0m Failed to build install path\n", .{});
@@ -5138,7 +5141,7 @@ fn installZigDirect(allocator: std.mem.Allocator) !void {
 
     // Download and extract
     const download_cmd = if (builtin.os.tag == .windows)
-        std.fmt.allocPrint(allocator, "cd {s} && curl -LSso zig.zip {s} && unzip -o zig.zip && del zig.zip", .{ install_dir, url }) catch return
+        std.fmt.allocPrint(allocator, "cd {s} && curl -LSso zig.zip {s} && unzip -oq zig.zip && rm -f zig.zip", .{ install_dir, url }) catch return
     else
         std.fmt.allocPrint(allocator, "cd {s} && curl -LSs {s} | tar -xJ", .{ install_dir, url }) catch return;
     defer allocator.free(download_cmd);
@@ -7913,7 +7916,7 @@ pub fn main() !void {
                 if (std.mem.eql(u8, arg, "deps")) continue;
                 if (std.mem.startsWith(u8, arg, "-")) continue;
                 if (std.mem.eql(u8, arg, "install")) continue;
-                if (std.mem.endsWith(u8, arg, "koruc")) continue;
+                if (std.mem.endsWith(u8, arg, "koruc") or std.mem.endsWith(u8, arg, "koruc.exe")) continue;
 
                 if (koruModuleExists(allocator, arg)) {
                     try printStderr(allocator, "error: `koruc deps {s}` has the arguments the wrong way round\n\n" ++
