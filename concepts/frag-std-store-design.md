@@ -1140,3 +1140,22 @@ to be installed at all three `store[…]` lowering paths — `stored`'s row
 head, `stored`'s envelope head, and `take` — because the rule lands per
 path, not per construct (the `frag-a-fix-lands-in-one-lowering-path`
 recurrence, again on store internals).
+
+## Evolution — the centralizing write-subflow is a host shape, the settle-then-fire contract is the semantics (2026-08-22)
+
+Ruling (f) reads as "one write-subflow per store hosts the arms." The C lane
+now shows what part of that was shape and what part was semantics. With
+zero arm machinery on `|c` — no tagged dispatch, no ctx clones — the first
+watch fragment lowers by keeping the semantics and dropping the container:
+the flat `|c` write proc still settles every cell first, then calls one
+`retain`ed event per watch arm in declaration order. Each arm is its own
+`event + impl-of-flow` pair — the same shape interceptors already use — and
+the `retain` annotation is what keeps a synthesized event alive when its
+only caller is opaque host text.
+
+So (f) survives narrowed: what the write path owes is *settled-state-then-
+watch-in-source-order*; whether that contract sits inside a spliced
+write-subflow or as flat per-arm calls after the store is a choice the
+target makes. Interceptors, dischargers, `when` guards, and multi-arm
+atomicity still name the centralizing subflow on `|c` — the envelope is
+where the host shape starts paying for itself again.

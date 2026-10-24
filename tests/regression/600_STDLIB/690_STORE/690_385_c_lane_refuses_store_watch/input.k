@@ -1,8 +1,9 @@
-// PINS the C-lane refusal for store watches — the census's watch class.
-// Under --lang=c the store:new transform names the gate — singleton
-// stores: watches/interceptors/dischargers are outside the C lane's first fragment
-// (store.new.kz). Zig leg must still pass — the refusal is a lane
-// boundary, not a language error.
+// PINS a scalar singleton watch lowering on the C lane — the census's
+// watch class, lifted. The store:new transform mints a @retain event +
+// impl flow per watch arm and calls it from the flat |c write proc after
+// the cell settles. What still refuses on C: interceptors, dischargers,
+// guarded arms — pinned by 690_386 and siblings. The directory name keeps
+// the census numbering; the pin it names moved.
 import std/io
 import std/store
 

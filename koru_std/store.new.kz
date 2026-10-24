@@ -5417,21 +5417,34 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     //
     // The general shape below routes a write through `__store_apply_<s>` —
     // an event with one NAMED BRANCH per field — and an impl flow whose
-    // arms carry the transplanted watches/interceptors. Named branches are
-    // tagged results: outside the C lane's first fragment, so the store's
-    // C path is a write event + a `|c` proc doing the field dispatch
-    // directly, and that is sound ONLY while no arm machinery exists —
-    // a watch that silently never fired would be a semantic lie, so any
-    // interceptor/watch/guard presence REFUSES the declaration.
+    // arms carry the transplanted watches/interceptors. The C lane keeps
+    // its flat shape: a write event + a `|c` proc doing the field dispatch
+    // directly, with each watch arm minted as its own event + impl flow
+    // (`__store_watch_<s>_<f>_<n>`) the proc calls after the store write —
+    // settled state first, matching the (h) sequencing lean. Interceptors
+    // and dischargers have no per-arm event shape yet and still REFUSE.
     // `__store_apply_<s>` is still minted (decl only): `stored`'s drain
     // probe keys on it, and `storeAllNames` re-discovers the store from it.
     // ------------------------------------------------------------------
     var c_write_body: []const u8 = "";
     if (host_is_c) {
-        if (watch_arms.items.len != 0 or field_iceptors.items.len != 0 or
+        if (field_iceptors.items.len != 0 or
             updated_iceptors.items.len != 0 or foreign_guards.items.len != 0)
         {
-            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): watches, interceptors and dischargers are outside the C lane's first fragment - the write subflow's named-branch dispatch has no C lowering this rung", .{store_name}) };
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): interceptors and dischargers are outside the C lane's first fragment", .{store_name}) };
+        }
+        // Watches lower on C as per-arm events called from the write proc
+        // (`__store_watch_<s>_<f>_<n>(value)` after the store write — the
+        // settled state is written before the call, matching the (h)
+        // sequencing lean). A guarded or destructured watch arm is a later
+        // slice — it stays refused, never silently dropped.
+        for (watch_arms.items) |*wa| {
+            if (wa.cont.condition != null or wa.cont.destructure.len != 0) {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): a guarded or destructured watch arm is outside the C lane's first fragment", .{store_name}) };
+            }
+            if (wa.cont.node == null or wa.cont.node.? != .invocation) {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): a watch arm whose body is not a call is outside the C lane's first fragment", .{store_name}) };
+            }
         }
         // The write surface is one `value` slot — every column must share
         // the C type it binds, or a write lands through the wrong width.
@@ -5447,7 +5460,16 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
 
         var cpb = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
         for (field_names, 0..) |fname, i| {
-            cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    if (field == {d}) {{ __koru_store_{s}.{s} = value; return; }}\n", .{ i, store_name, fname }) catch unreachable) catch unreachable;
+            cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    if (field == {d}) {{ __koru_store_{s}.{s} = value;", .{ i, store_name, fname }) catch unreachable) catch unreachable;
+            var wn: usize = 0;
+            for (watch_arms.items) |*wa| {
+                if (wa.field_idx != i) continue;
+                const wbind = if (wa.cont.binding) |b| b else "_v";
+                const wfn = std.fmt.allocPrint(allocator, "{s}___store_watch_{s}_{s}_{d}", .{ home_ns, store_name, codegen_utils_store.cMemberName(allocator, fname), wn }) catch unreachable;
+                cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, " {s}((struct {s}_in){{ .{s} = value }});", .{ wfn, wfn, wbind }) catch unreachable) catch unreachable;
+                wn += 1;
+            }
+            cpb.appendSlice(allocator, " return; }\n") catch unreachable;
         }
         cpb.appendSlice(allocator, std.fmt.allocPrint(allocator, "    __koru_unreachable(\"__store_write_{s}: field index is not a column of store '{s}'\");", .{ store_name, store_name }) catch unreachable) catch unreachable;
         c_write_body = cpb.toOwnedSlice(allocator) catch unreachable;
@@ -6058,12 +6080,12 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     if (host_is_c) {
         // The C unit set: flat cell + the two event decls (`stored`'s
         // drain probe and `storeAllNames` key on `__store_apply_*`) +
-        // ONE direct write proc. No impl flow — named branches are
-        // outside the first fragment. This return site sits AFTER the
+        // ONE direct write proc + one event/impl-flow pair per watch arm.
+        // This return site sits AFTER the
         // whole-program `Walk` above so the store's own whole-text
         // lowering (`acc.n` -> `__koru_store_acc.n`, including inside
         // `{{ ... }}` interpolation payloads) has already run.
-        const c_appended = allocator.alloc(ast.Item, 8) catch unreachable;
+        const c_appended = allocator.alloc(ast.Item, 8 + watch_arms.items.len * 2) catch unreachable;
         c_appended[0] = ast.Item{ .inline_code = ast.InlineCode{
             .code = cell_decl,
             .location = flow.location,
@@ -6105,8 +6127,17 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
         cew.appendSlice(allocator, "const unsigned long long __koru_mask = (unsigned long long)field;\n") catch unreachable;
         for (field_names, 0..) |fname, i| {
             cew.appendSlice(allocator, std.fmt.allocPrint(allocator,
-                "if (__koru_mask & (1ULL << {d})) __koru_store_{s}.{s} = value;\n",
+                "if (__koru_mask & (1ULL << {d})) {{ __koru_store_{s}.{s} = value;",
                 .{ i, store_name, fname }) catch unreachable) catch unreachable;
+            var wn: usize = 0;
+            for (watch_arms.items) |*wa| {
+                if (wa.field_idx != i) continue;
+                const wbind = if (wa.cont.binding) |b| b else "_v";
+                const wfn = std.fmt.allocPrint(allocator, "{s}___store_watch_{s}_{s}_{d}", .{ home_ns, store_name, codegen_utils_store.cMemberName(allocator, fname), wn }) catch unreachable;
+                cew.appendSlice(allocator, std.fmt.allocPrint(allocator, " {s}((struct {s}_in){{ .{s} = value }});", .{ wfn, wfn, wbind }) catch unreachable) catch unreachable;
+                wn += 1;
+            }
+            cew.appendSlice(allocator, " }\n") catch unreachable;
         }
         c_appended[5] = ast.Item{ .proc_decl = ast.ProcDecl{
             .path = mkPath(allocator, home_ns, c_envw_name),
@@ -6126,14 +6157,87 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } };
+        // announce re-fires standing watches with CURRENT values — no
+        // write, no interceptors (ruling: dispatch-only re-announce). On
+        // this lane each watch is its own event, so the announce proc is
+        // the same field-index switch the write proc carries.
+        var can = std.ArrayList(u8).initCapacity(allocator, 96 + watch_arms.items.len * 128) catch unreachable;
+        if (watch_arms.items.len == 0) {
+            can.appendSlice(allocator, "(void)field;") catch unreachable;
+        } else {
+            can.appendSlice(allocator, "switch (field) {\n") catch unreachable;
+            for (field_names, 0..) |fname, i| {
+                var wn: usize = 0;
+                for (watch_arms.items) |*wa| {
+                    if (wa.field_idx != i) continue;
+                    const wbind = if (wa.cont.binding) |b| b else "_v";
+                    const wfn = std.fmt.allocPrint(allocator, "{s}___store_watch_{s}_{s}_{d}", .{ home_ns, store_name, codegen_utils_store.cMemberName(allocator, fname), wn }) catch unreachable;
+                    if (wn == 0) can.appendSlice(allocator, std.fmt.allocPrint(allocator, "  case {d}: ", .{i}) catch unreachable) catch unreachable;
+                    can.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}((struct {s}_in){{ .{s} = __koru_store_{s}.{s} }}); ", .{ wfn, wfn, wbind, store_name, fname }) catch unreachable) catch unreachable;
+                    wn += 1;
+                }
+                if (wn != 0) can.appendSlice(allocator, "break;\n") catch unreachable;
+            }
+            can.appendSlice(allocator, "}") catch unreachable;
+        }
         c_appended[7] = ast.Item{ .proc_decl = ast.ProcDecl{
             .path = mkPath(allocator, home_ns, c_ann_name),
-            .body = ast.Source{ .text = allocator.dupe(u8, "(void)field;") catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+            .body = ast.Source{ .text = can.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
             .annotations = &[_][]const u8{},
             .target = allocator.dupe(u8, "c") catch unreachable,
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } };
+        // Per-watch event + impl flow: `! hp v |> <body>` lowers to a
+        // `__store_watch_<s>_<f>_<n>` event whose input field IS the arm's
+        // binding (the field bindings emit `v = __koru_in.v`), the impl
+        // flow's head is the arm's own call, and its continuations ride
+        // along unchanged. The write/announce procs call it by C name.
+        var c_wn: usize = 0;
+        for (watch_arms.items) |*wa| {
+            const wfname = field_names[wa.field_idx];
+            // Per-field ordinal — the write/announce procs name the same
+            // index when they call `__store_watch_<s>_<f>_<ord>(value)`.
+            var wford: usize = 0;
+            for (watch_arms.items[0..c_wn]) |*earlier| {
+                if (earlier.field_idx == wa.field_idx) wford += 1;
+            }
+            const wev_name = std.fmt.allocPrint(allocator, "__store_watch_{s}_{s}_{d}", .{ store_name, codegen_utils_store.cMemberName(allocator, wfname), wford }) catch unreachable;
+            c_wn += 1;
+            const wbind = if (wa.cont.binding) |b| b else "_v";
+            const win = allocator.alloc(ast.Field, 1) catch unreachable;
+            win[0] = ast.Field{ .name = allocator.dupe(u8, wbind) catch unreachable, .type = allocator.dupe(u8, field_types[wa.field_idx]) catch unreachable };
+            // `retain`: the write/announce |c bodies call this event by C
+            // name — raw host text is invisible to AST reachability (the
+            // dead_strip/`__grid_body_*` contract markRetainedEvents reads).
+            const retain_ann = blk: {
+                const anns = allocator.alloc([]const u8, 1) catch unreachable;
+                anns[0] = allocator.dupe(u8, "retain") catch unreachable;
+                break :blk anns;
+            };
+            c_appended[6 + c_wn * 2] = ast.Item{ .event_decl = ast.EventDecl{
+                .path = mkPath(allocator, home_ns, wev_name),
+                .input = ast.Shape{ .fields = win },
+                .branches = &[_]ast.Branch{},
+                .is_public = false,
+                .is_implicit_flow = false,
+                .annotations = retain_ann,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } };
+            c_appended[7 + c_wn * 2] = ast.Item{ .flow = ast.Flow{
+                .body = ast.rootSite(wa.cont.node.?.invocation, wa.cont.continuations, flow.location),
+                .pre_label = null,
+                .impl_of = mkPath(allocator, home_ns, wev_name),
+                .super_shape = null,
+                .inline_body = null,
+                .preamble_code = null,
+                .is_pure = false,
+                .is_transitively_pure = false,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } };
+        }
         // Every named arm on the `new` site was collected above and compiled
         // into the appended machinery — none ride the site's own write-back.
         const c_consumed = allocator.alloc([]const u8, flow.body.continuations.len) catch unreachable;

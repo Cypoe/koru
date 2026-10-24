@@ -193,7 +193,7 @@ the refusal is part of the contract, not just the census:
 
 | pin | gated surface | pinned text |
 |---|---|---|
-| 690_385 | store watch (singleton) | watches, interceptors and dischargers … |
+| 690_385 | store watch (singleton) | lifted — basic scalar watches lower on C (per-arm @retain event called after the write settles); interceptors/dischargers/guards still refuse |
 | 690_386 | `! inserted`/`! removed` arms | lifecycle interceptors and watches … |
 | 690_387 | `[tree]` | [tree] stores are outside … |
 | 690_388 | `char[N]` column | char[N] columns are outside … |
