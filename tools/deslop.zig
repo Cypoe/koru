@@ -195,11 +195,14 @@ fn collectDecls(
 fn collectFiles(alloc: std.mem.Allocator, roots: []const []const u8, exts_only: bool) !std.ArrayList([]const u8) {
     var out: std.ArrayList([]const u8) = .empty;
     for (roots) |root| {
-        const st = std.fs.cwd().statFile(root) catch |e| {
+        const st: ?std.fs.File.Stat = std.fs.cwd().statFile(root) catch |e| blk: {
+            // Windows statFile refuses directories (IsDir) where POSIX
+            // stat() answers — a directory root means descend, same result.
+            if (e == error.IsDir) break :blk null;
             std.debug.print("deslop: cannot stat '{s}': {s}\n", .{ root, @errorName(e) });
             return e;
         };
-        if (st.kind == .file) {
+        if (st != null and st.?.kind == .file) {
             if (!exts_only or std.mem.endsWith(u8, root, ".zig")) try out.append(alloc, try alloc.dupe(u8, root));
             continue;
         }

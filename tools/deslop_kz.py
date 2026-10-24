@@ -146,7 +146,8 @@ def collect_files(roots):
 
 def ast_of(path):
     proc = subprocess.run([KORUC, "--ast-canon", path],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         return None
     try:
@@ -279,7 +280,8 @@ def host_census(paths):
                               "deslop.zig")
     cmd = ["zig", "run", "-O", "ReleaseFast", deslop_zig,
            "--", tmpdir, f"--min-tokens={MIN_TOKENS}", f"--top={TOP}"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         shutil.rmtree(tmpdir, ignore_errors=True)
         print("BROKEN deslop-host: fingerprint run failed\n"
