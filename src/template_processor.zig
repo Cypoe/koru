@@ -753,11 +753,6 @@ fn appendDestructureConsts(
 ) !void {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, "_")) continue;
-        if (f.sub.len > 0) {
-            const sub_prefix = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, f.name });
-            try appendDestructureConsts(allocator, buf, f.sub, sub_prefix, seen, host);
-            continue;
-        }
         if (seen) |s| {
             if (s.contains(f.name)) continue;
             try s.put(f.name, {});
@@ -774,7 +769,7 @@ fn appendDestructureConsts(
         try buf.appendSlice(allocator, " = ");
         try buf.appendSlice(allocator, prefix);
         try buf.appendSlice(allocator, ".");
-        try buf.appendSlice(allocator, f.name);
+        try buf.appendSlice(allocator, f.path);
         try buf.appendSlice(allocator, ";");
         if (host == .zig) {
             try buf.appendSlice(allocator, " _ = &");
@@ -1542,7 +1537,7 @@ test "cond binds: a struct scrutinee lowers to each host's literal syntax" {
 
     // `cond({ value: n }) | c { value } when …` — destructure binder. The
     // scrutinee is materialized to a site-unique temp, then one const per leaf.
-    const fields = [_]ast.DestructureField{.{ .name = "value" }};
+    const fields = [_]ast.DestructureField{.{ .name = "value", .path = "value" }};
     const conts = [_]ast.Continuation{.{
         .branch = "c",
         .binding = null,

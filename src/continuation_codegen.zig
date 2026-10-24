@@ -340,8 +340,8 @@ fn replaceIdent(allocator: std.mem.Allocator, body: []const u8, from: []const u8
     return buf.toOwnedSlice(allocator) catch unreachable;
 }
 
-/// `const <name> = <prefix>.<name>; _ = &<name>;` per leaf — the string-side
-/// port of emitDestructureConsts for the `! each {a, b}` binding shape.
+/// `const <local> = <prefix>.<path>; _ = &<local>;` per bound name — the
+/// string-side port of emitDestructureConsts for the `! each {a, b}` shape.
 fn appendDestructureConsts(
     buf: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -350,20 +350,16 @@ fn appendDestructureConsts(
 ) !void {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, "_")) continue;
-        if (f.sub.len > 0) {
-            var path_buf: [256]u8 = undefined;
-            const sub_prefix = std.fmt.bufPrint(&path_buf, "{s}.{s}", .{ prefix, f.name }) catch {
-                @panic("destructure path too long");
-            };
-            try appendDestructureConsts(buf, allocator, f.sub, sub_prefix);
-            continue;
-        }
         try buf.appendSlice(allocator, "const ");
         try codegen_utils.appendBranchName(buf, allocator, f.name);
+        if (f.type_text) |t| {
+            try buf.appendSlice(allocator, ": ");
+            try buf.appendSlice(allocator, t);
+        }
         try buf.appendSlice(allocator, " = ");
         try buf.appendSlice(allocator, prefix);
         try buf.appendSlice(allocator, ".");
-        try codegen_utils.appendBranchName(buf, allocator, f.name);
+        try buf.appendSlice(allocator, f.path);
         try buf.appendSlice(allocator, "; _ = &");
         try codegen_utils.appendBranchName(buf, allocator, f.name);
         try buf.appendSlice(allocator, "; ");

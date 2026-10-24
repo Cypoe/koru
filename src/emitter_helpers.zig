@@ -4759,21 +4759,16 @@ fn scopeWalkCont(
     return false;
 }
 
-/// Append a destructure's bound names to the scope, recursing into `sub` —
-/// nested fields bind too (`{ limits: { rps } }` binds `rps` as an access
-/// path off the payload). The intermediate name (`limits`) is NOT bound by
-/// emitDestructureConsts, so it is not reported here.
+/// Append a destructure's bound names to the scope. Paths are flat —
+/// every entry binds exactly its local name (`{ pos.x }` binds `x`).
 fn appendScopeDestructure(
     allocator: std.mem.Allocator,
     fields: []const ast.DestructureField,
     out: *std.ArrayList(ast.ScopeBinding),
 ) !void {
     for (fields) |*df| {
-        if (df.sub.len > 0) {
-            try appendScopeDestructure(allocator, df.sub, out);
-            continue;
-        }
         try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+        if (df.sub.len > 0) try appendScopeDestructure(allocator, df.sub, out);
     }
 }
 
@@ -5492,39 +5487,38 @@ const INLINE_CONTINUE_PREFIX = "__koru_continue_";
 /// they round-trip deterministically. An omitted optional terminal never minted a
 /// marker, so its absence simply emits nothing. Markers resolve in source order.
 /// Emit the consts for a shape-destructure binding: one
-/// `const <name>[: <type>] = <prefix>.<name>;` per named leaf, recursing into
-/// nested sub-shapes with longer access paths. `_` fields are skipped (the
-/// payload field simply isn't bound). Interiors may be host types — the
+/// `const <local> = <prefix>.<path>;` per bound name. `_` fields are skipped
+/// (the payload field simply isn't bound). Interiors may be host types — the
 /// emitter only writes access paths; Zig validates them at the next stage.
 pub fn emitDestructureConsts(
     emitter: *CodeEmitter,
     fields: []const ast.DestructureField,
     prefix: []const u8,
 ) anyerror!void {
+    // Flat paths (ruled 2026-10-24): each entry mints `const <local> =
+    // <prefix>.<path>` — `pos.x` descends inline, no recursion needed.
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, "_")) continue;
-        if (f.sub.len > 0) {
-            var path_buf: [256]u8 = undefined;
-            const sub_prefix = std.fmt.bufPrint(&path_buf, "{s}.{s}", .{ prefix, f.name }) catch {
-                @panic("destructure path too long");
-            };
-            try emitDestructureConsts(emitter, f.sub, sub_prefix);
-            continue;
-        }
         try emitter.write("const ");
         try writeBranchName(emitter, f.name);
         if (f.type_text) |t| {
             try emitter.write(": ");
-            // Lower the canonical `string` to its Zig slice at emission.
             try emitter.write(lowerZigType(t));
         }
         try emitter.write(" = ");
         try emitter.write(prefix);
         try emitter.write(".");
-        try writeBranchName(emitter, f.name);
+        try emitter.write(f.path);
         try emitter.write("; _ = &");
         try writeBranchName(emitter, f.name);
         try emitter.write("; ");
+        // Named-group nested fields (`addr: { city }`) bind their leaves too —
+        // `city` comes off `prefix.addr` the same as it did under sub-descent.
+        if (f.sub.len > 0) {
+            var pb: [256]u8 = undefined;
+            const np = std.fmt.bufPrint(&pb, "{s}.{s}", .{ prefix, f.path }) catch @panic("destructure path too long");
+            try emitDestructureConsts(emitter, f.sub, np);
+        }
     }
 }
 
@@ -5707,7 +5701,12 @@ fn emitInlineCodeResolvingSplices(
                 // so a fixed `__koru_dst` shadows the outer one and Zig rejects it
                 // (surfaced by AoC day16: `Sue …` match → per-piece match).
                 var dst_buf: [64]u8 = undefined;
-                const dst = std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
+                // A named group (`| ok e:{ k }`) makes the whole-bind name the
+                // prefix — `const e = arg; const k = e.k;` — plain `const`s.
+                const dst = if (binding.len > 0 and !std.mem.eql(u8, binding, "_"))
+                    binding
+                else
+                    std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
                 try emitter.write("const ");
                 try emitter.write(dst);
                 try emitter.write(" = ");
@@ -8025,19 +8024,11 @@ const ArmScope = struct {
 fn collectArmScope(cont: *const ast.Continuation, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
     if (cont.is_transformed_subtree) return;
     if (cont.binding) |b| try scope.binds.put(b, {});
-    for (cont.destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+    for (cont.destructure) |f| try scope.binds.put(f.name, {});
     if (cont.condition) |c| try scanArmRefs(c, &scope.refs);
     if (cont.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
     if (cont.node) |*n| try collectArmNodeScope(n, scope, allocator);
     for (cont.continuations) |*child| try collectArmScope(child, scope, allocator);
-}
-
-fn collectArmDestructureBinds(f: ast.DestructureField, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
-    if (f.sub.len > 0) {
-        for (f.sub) |sub| try collectArmDestructureBinds(sub, scope, allocator);
-        return;
-    }
-    try scope.binds.put(f.name, {});
 }
 
 fn collectArmNamedBranch(nb: *const ast.NamedBranch, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
@@ -8050,7 +8041,7 @@ fn collectArmNodeScope(n: *const ast.Node, scope: *ArmScope, allocator: std.mem.
         .invocation => |*inv| {
             for (inv.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
             if (inv.return_binding) |rb| try scope.binds.put(rb, {});
-            for (inv.return_destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+            for (inv.return_destructure) |f| try scope.binds.put(f.name, {});
         },
         .label_with_invocation => |*lwi| {
             for (lwi.invocation.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
@@ -11085,8 +11076,13 @@ fn emitContinuationCase(
 
         if (cont.destructure.len > 0) {
             // Shape-destructure: capture the payload under a temp, then
-            // per-field consts at the top of the case block.
-            try emitter.write("__koru_dst");
+            // per-field consts at the top of the case block. A named group
+            // (`| ok e:{ k }`) captures under the group name instead.
+            if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) {
+                try writeBranchName(emitter, cont.binding.?);
+            } else {
+                try emitter.write("__koru_dst");
+            }
         } else if (binding_name.len == 0 or !binding_used) {
             try emitter.write("_");
         } else {
@@ -11101,7 +11097,8 @@ fn emitContinuationCase(
 
     if (cont.destructure.len > 0 and has_payload_fields) {
         try emitter.writeIndent();
-        try emitDestructureConsts(emitter, cont.destructure, "__koru_dst");
+        const dst = if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) cont.binding.? else "__koru_dst";
+        try emitDestructureConsts(emitter, cont.destructure, dst);
         try emitter.write("\n");
     }
 
@@ -11154,7 +11151,7 @@ fn emitWhenClauseCase(
     result_counter: *usize,
 ) !void {
     const first_cont = group.continuations[0];
-    const binding_name = if (first_cont.destructure.len > 0) "__koru_dst" else first_cont.binding orelse first_cont.branch;
+    const binding_name = if (first_cont.destructure.len > 0) (first_cont.binding orelse "__koru_dst") else first_cont.binding orelse first_cont.branch;
 
     // Check if any continuation in the group wants mutable binding
     var needs_mutable = false;
@@ -11480,10 +11477,6 @@ fn emitFoldFallthroughGuard(emitter: *CodeEmitter, ctx: *EmissionContext) !void 
 /// `emitDestructureConsts` mints them as `const`s at the same site.
 fn registerDestructureScopeNames(ctx: *EmissionContext, fields: []const ast.DestructureField) !void {
     for (fields) |f| {
-        if (f.sub.len > 0) {
-            try registerDestructureScopeNames(ctx, f.sub);
-            continue;
-        }
         if (std.mem.eql(u8, f.name, "_") or std.mem.startsWith(u8, f.name, "__")) continue;
         try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, f.name));
     }

@@ -1332,13 +1332,11 @@ pub const FlowChecker = struct {
                     .{},
                 );
             }
-            if (f.sub.len > 0) try self.refuseIgnoredDestructureAnnotations(cont, f.sub);
         }
     }
 
-    /// KORU100 for destructured fields: every named leaf must be used in
-    /// the continuation's body. Nested sub-shapes recurse; only LEAF names
-    /// are bindings (an intermediate field with a sub-shape binds nothing).
+    /// KORU100 for destructured fields: every bound name must be used in
+    /// the continuation's body. Paths are flat — every entry is a leaf.
     /// Bind-position destructure usage check (`~f(): { name, age } |> ...`).
     /// Unlike a branch payload, the destructure DECLARATION lives on the same
     /// node whose result flows downstream, so usage must be searched in the
@@ -1346,11 +1344,8 @@ pub const FlowChecker = struct {
     /// declaration itself as a use (a self-reference false positive that let an
     /// unused field slip through).
     fn validateReturnDestructureUsage(self: *FlowChecker, cont: *const ast.Continuation, fields: []const ast.DestructureField) anyerror!void {
+        if (cont.destructure_named) return; // declared shape, not projection
         for (fields) |f| {
-            if (f.sub.len > 0) {
-                try self.validateReturnDestructureUsage(cont, f.sub);
-                continue;
-            }
             if (std.mem.startsWith(u8, f.name, "_")) continue;
             var used = false;
             for (cont.continuations) |*c| {
@@ -1374,11 +1369,8 @@ pub const FlowChecker = struct {
     }
 
     fn validateDestructureUsage(self: *FlowChecker, cont: *const ast.Continuation, fields: []const ast.DestructureField) anyerror!void {
+        if (cont.destructure_named) return; // declared shape, not projection
         for (fields) |f| {
-            if (f.sub.len > 0) {
-                try self.validateDestructureUsage(cont, f.sub);
-                continue;
-            }
             if (std.mem.startsWith(u8, f.name, "_")) continue;
             if (!self.isBindingUsed(cont, f.name)) {
                 try self.reporter.addErrorWithHint(
@@ -1525,10 +1517,6 @@ pub const FlowChecker = struct {
     }
 
     fn noteDestructure(self: *FlowChecker, scope: *std.ArrayList(ScopedBind), f: ast.DestructureField, location: errors.SourceLocation) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.noteDestructure(scope, sub, location);
-            return;
-        }
         try self.noteBind(scope, f.name, location);
     }
 
@@ -1606,10 +1594,6 @@ pub const FlowChecker = struct {
     }
 
     fn noteBorrowDestructure(self: *FlowChecker, scope: *std.ArrayList(BorrowScopeBind), f: ast.DestructureField) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.noteBorrowDestructure(scope, sub);
-            return;
-        }
         try scope.append(self.allocator, .{ .name = f.name, .mutable = hasMutableAnnotation(f.annotations) });
     }
 
@@ -1994,10 +1978,6 @@ pub const FlowChecker = struct {
     }
 
     fn appendDestructureSites(self: *FlowChecker, out: *std.ArrayList(BindSite), f: ast.DestructureField, glyph: u8, branch: []const u8) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.appendDestructureSites(out, sub, glyph, branch);
-            return;
-        }
         if (f.name.len > 0 and f.name[0] != '_') try out.append(self.allocator, .{ .glyph = glyph, .branch = branch, .name = f.name });
     }
 

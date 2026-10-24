@@ -1120,6 +1120,8 @@ pub const AstSerializer = struct {
             if (i > 0) try self.write(", ");
             try self.write(".{ .name = ");
             try self.writeString(f.name);
+            try self.write(", .path = ");
+            try self.writeString(f.path);
             if (f.type_text) |t| {
                 try self.write(", .type_text = ");
                 try self.writeString(t);
@@ -1133,10 +1135,6 @@ pub const AstSerializer = struct {
                     try self.writeString(a);
                 }
                 try self.write(" }");
-            }
-            if (f.sub.len > 0) {
-                try self.write(", .sub = ");
-                try self.serializeDestructure(f.sub);
             }
             try self.write(" }");
         }

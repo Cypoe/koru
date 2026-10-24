@@ -502,7 +502,8 @@ const Printer = struct {
             return self.unprintable("binding annotations without binding");
         }
         if (c.destructure.len > 0) {
-            try self.write(" ");
+            if (c.destructure_named and c.binding == null) try self.write(" _");
+            try self.write(if (c.destructure_named) ":" else " ");
             try self.printDestructure(c.destructure);
         }
         if (c.condition) |cond| try self.print(" when {s}", .{cond});
@@ -574,12 +575,18 @@ const Printer = struct {
         try self.write("{ ");
         for (fields, 0..) |*f, i| {
             if (i > 0) try self.write(", ");
-            try self.write(f.name);
-            if (f.type_text) |t| try self.print(": {s}", .{t});
-            if (f.sub.len > 0) {
-                if (f.type_text != null) return self.unprintable("destructure field with both type and sub");
-                try self.write(": ");
-                try self.printDestructure(f.sub);
+            for (f.annotations) |a| try self.print("[{s}]", .{a});
+            if (f.type_text) |t| {
+                // Named-group field-list entry: `name: Type`.
+                try self.print("{s}: {s}", .{ f.name, t });
+                continue;
+            }
+            // Pun when the local is the path's last segment, else `local: path`.
+            const last_seg = if (std.mem.lastIndexOfScalar(u8, f.path, '.')) |d| f.path[d + 1 ..] else f.path;
+            if (std.mem.eql(u8, f.name, last_seg)) {
+                try self.write(f.path);
+            } else {
+                try self.print("{s}: {s}", .{ f.name, f.path });
             }
         }
         try self.write(" }");

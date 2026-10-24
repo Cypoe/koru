@@ -484,6 +484,7 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
             .binding_annotations = anns,
             .binding_marks = marks,
             .destructure = try ast.copyDestructure(allocator, cont.destructure),
+            .destructure_named = cont.destructure_named,
             .binding_type = cont.binding_type,
             // Preserve the branch axis (`|` vs `!`) and catch-all markers — a
             // clone that resets `kind` would turn an effect arm into a terminal.

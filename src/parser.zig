@@ -5318,6 +5318,7 @@ pub const Parser = struct {
         var return_binding: ?[]const u8 = null;
         var return_binding_annotations: []const []const u8 = &[_][]const u8{};
         var return_destructure: []const ast.DestructureField = &.{};
+        var return_destructure_named: bool = false;
         var stitched_clean: ?[]const u8 = null;
         defer if (stitched_clean) |s| self.allocator.free(s);
         bind_colon: {
@@ -5373,11 +5374,30 @@ pub const Parser = struct {
                 if (j < clean.len and clean[j] == ':') {
                     var k = j + 1;
                     while (k < clean.len and (clean[k] == ' ' or clean[k] == '\t')) : (k += 1) {}
-                    // Bind-position shape-destructure: `~f(): { pos: { x }, label } |> ...`
+                    // Bind-position shape-destructure: `~f(): { pos.x, label } |> ...`
                     // Brace-balance from `{`, parse the field list (same machinery as
                     // the branch-payload destructure), bind the return to a synthetic
                     // temp, and stitch out `: { ... }` so the rest sees a plain call.
-                    if (k < clean.len and clean[k] == '{') {
+                    // Named group `~f(): my:{ a: T }` binds `my` as the return and the
+                    // braces carry a field list (schema mode), not a projection.
+                    var group_name: ?[]const u8 = null;
+                    var brace_at = k;
+                    if (k < clean.len and clean[k] != '{') {
+                        // Possible `name:` prefix before the brace.
+                        var m = k;
+                        while (m < clean.len and (std.ascii.isAlphanumeric(clean[m]) or clean[m] == '_' or clean[m] == '-')) : (m += 1) {}
+                        if (m > k and m < clean.len and clean[m] == ':') {
+                            var b2 = m + 1;
+                            while (b2 < clean.len and (clean[b2] == ' ' or clean[b2] == '\t')) : (b2 += 1) {}
+                            if (b2 < clean.len and clean[b2] == '{') {
+                                const gn = clean[k..m];
+                                if (!std.mem.eql(u8, gn, "_")) group_name = gn;
+                                brace_at = b2;
+                            }
+                        }
+                    }
+                    if (brace_at < clean.len and clean[brace_at] == '{') {
+                        k = brace_at;
                         var bdepth: i32 = 0;
                         var b = k;
                         var brace_end: ?usize = null;
@@ -5400,9 +5420,15 @@ pub const Parser = struct {
                                 .{},
                             );
                         };
-                        return_destructure = try self.parseDestructureFields(lexer.trim(clean[k + 1 .. be]), 0);
-                        const temp_name = try std.fmt.allocPrint(self.allocator, "__ret_destr_{d}", .{self.destructure_ret_counter});
-                        self.destructure_ret_counter += 1;
+                        return_destructure = try self.parseDestructureFields(lexer.trim(clean[k + 1 .. be]), 0, group_name != null);
+                        if (group_name != null) return_destructure_named = true;
+                        const temp_name = if (group_name) |gn|
+                            try self.allocator.dupe(u8, gn)
+                        else blk: {
+                            const t = try std.fmt.allocPrint(self.allocator, "__ret_destr_{d}", .{self.destructure_ret_counter});
+                            self.destructure_ret_counter += 1;
+                            break :blk t;
+                        };
                         return_binding = temp_name;
                         const before_colon = lexer.trim(clean[0..j]);
                         const after = lexer.trim(clean[be + 1 ..]); // "|> ..." or ""
@@ -5990,6 +6016,7 @@ pub const Parser = struct {
             .return_binding = return_binding,
             .return_binding_annotations = return_binding_annotations,
             .return_destructure = return_destructure,
+            .return_destructure_named = return_destructure_named,
         };
         return_binding = null; // ownership transferred; disarm the errdefer
         return_binding_annotations = &[_][]const u8{}; // ownership transferred; disarm the errdefer
@@ -7655,13 +7682,23 @@ pub const Parser = struct {
     }
 
     /// Parse the comma-separated field list of a shape-destructure binding
-    /// (inner text, outer braces already stripped). Grammar per field:
-    ///   name                  — bind payload.name
-    ///   name: Type            — bind with a representation annotation
-    ///   name: { ... }         — nested destructure into payload.name
-    ///   _                     — discard the slot (named position skipped)
+    /// (inner text, outer braces already stripped). Grammar per field —
+    /// ruled 2026-10-24, name-matched, never positional:
+    ///   path              — bind last(path) from payload.path (`{ pos.x }`
+    ///                       binds `x`; `{ k }` is the auto-pun `{ k: k }`)
+    ///   local: path       — rename: bind `local` from payload.path. Legal
+    ///                       only when `local` differs from path's last
+    ///                       segment — if you can pun, you must (`{ x: pos.x }`
+    ///                       is refused: write `{ pos.x }`)
+    ///   [ann]entry        — prefix annotations ride either form (`{ [row]f }`)
+    ///   _                 — discard
+    /// In `schema` mode the braces are a FIELD LIST, not a projection —
+    /// reached only via a named group `my:{ ... }` (the name binds the
+    /// whole payload; the shape is a codegen-inspectable definition):
+    ///   ident             — declared+bound field
+    ///   ident: TYPE       — typed field (`{ name: string, addr: { city } }`)
     /// Splitting happens at brace-depth 0 so nested shapes stay intact.
-    fn parseDestructureFields(self: *Parser, inner: []const u8, indent: usize) anyerror![]const ast.DestructureField {
+    fn parseDestructureFields(self: *Parser, inner: []const u8, indent: usize, schema: bool) anyerror![]const ast.DestructureField {
         var fields = try std.ArrayList(ast.DestructureField).initCapacity(self.allocator, 4);
         errdefer {
             for (fields.items) |*f| f.deinit(self.allocator);
@@ -7720,44 +7757,94 @@ pub const Parser = struct {
                 rest = lexer.trim(rest[close + 1 ..]);
             }
 
-            var name: []const u8 = rest;
-            var type_text: ?[]const u8 = null;
-            var sub: []const ast.DestructureField = &.{};
-
-            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
-                name = lexer.trim(rest[0..colon]);
-                const after = lexer.trim(rest[colon + 1 ..]);
-                if (after.len >= 2 and after[0] == '{' and after[after.len - 1] == '}') {
-                    sub = try self.parseDestructureFields(lexer.trim(after[1 .. after.len - 1]), indent);
-                } else if (after.len > 0) {
-                    type_text = try self.allocator.dupe(u8, after);
-                } else {
+            if (schema) {
+                // Field-list entry: `ident`, `ident: TYPE`, or
+                // `ident: { nested }` — the old destructure grammar lives
+                // verbatim inside a named group.
+                var sname: []const u8 = rest;
+                var stype: ?[]const u8 = null;
+                var ssub: []const ast.DestructureField = &.{};
+                if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                    sname = lexer.trim(rest[0..colon]);
+                    const after = lexer.trim(rest[colon + 1 ..]);
+                    if (after.len >= 2 and after[0] == '{' and after[after.len - 1] == '}') {
+                        ssub = try self.parseDestructureFields(lexer.trim(after[1 .. after.len - 1]), indent, true);
+                    } else if (after.len > 0) {
+                        stype = try self.allocator.dupe(u8, after);
+                    }
+                }
+                if (!std.mem.eql(u8, sname, "_") and !isValidIdentifier(sname)) {
                     try self.reporter.addError(
                         .PARSE001,
                         self.current,
                         indent + 2,
-                        "Destructure field '{s}' has ':' but no type or nested shape.",
-                        .{name},
+                        "Invalid field name '{s}' in a named destructure group — write '{{ name, name: Type }}'.",
+                        .{sname},
+                    );
+                    return error.InvalidBinding;
+                }
+                try fields.append(self.allocator, .{
+                    .name = try self.allocator.dupe(u8, sname),
+                    .path = try self.allocator.dupe(u8, sname),
+                    .type_text = stype,
+                    .sub = ssub,
+                    .annotations = try anns.toOwnedSlice(self.allocator),
+                });
+                continue;
+            }
+
+            var name: []const u8 = undefined;
+            var path: []const u8 = rest;
+
+            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                // Rename: `{ local: path }` — the RHS is the defined symbol
+                // (a path into the payload), the LHS the local name minted.
+                name = lexer.trim(rest[0..colon]);
+                path = lexer.trim(rest[colon + 1 ..]);
+                if (path.len == 0) {
+                    try self.reporter.addError(
+                        .PARSE001,
+                        self.current,
+                        indent + 2,
+                        "Destructure field '{s}' has ':' but no source path — write '{{ {s}: field.path }}'.",
+                        .{ name, name },
                     );
                     return error.InvalidBinding;
                 }
             }
 
-            if (!std.mem.eql(u8, name, "_") and !isValidIdentifier(name) and !isValidDottedName(name)) {
+            // The path's last segment is the auto-pun name; a rename whose
+            // local equals it is refused — if you can pun, you must.
+            const last_seg = if (std.mem.lastIndexOfScalar(u8, path, '.')) |d| path[d + 1 ..] else path;
+            const is_rename = std.mem.indexOfScalar(u8, rest, ':') != null;
+            if (!is_rename) name = last_seg;
+            if (is_rename and std.mem.eql(u8, name, last_seg)) {
                 try self.reporter.addError(
                     .PARSE001,
                     self.current,
                     indent + 2,
-                    "Invalid destructure field name '{s}' - must be a valid identifier, dotted path, or '_'.",
-                    .{name},
+                    "redundant rename '{{ {s}: {s} }}' — the auto-pun already binds '{s}'; write '{{ {s} }}'",
+                    .{ name, path, last_seg, path },
+                );
+                return error.InvalidBinding;
+            }
+
+            const name_ok = std.mem.eql(u8, name, "_") or isValidIdentifier(name);
+            const path_ok = isValidIdentifier(path) or isValidDottedName(path);
+            if (!name_ok or !path_ok) {
+                try self.reporter.addError(
+                    .PARSE001,
+                    self.current,
+                    indent + 2,
+                    "Invalid destructure '{s}' — write '{{ path }}' or '{{ local: path }}' (a path is identifiers joined by '.').",
+                    .{rest},
                 );
                 return error.InvalidBinding;
             }
 
             try fields.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, name),
-                .type_text = type_text,
-                .sub = sub,
+                .path = try self.allocator.dupe(u8, path),
                 .annotations = try anns.toOwnedSlice(self.allocator),
             });
         }
@@ -8034,10 +8121,36 @@ pub const Parser = struct {
         var binding: ?[]const u8 = null;
         var binding_annotations: [][]const u8 = &[_][]const u8{};
         var destructure: []const ast.DestructureField = &.{};
+        var destructure_named: bool = false;
         var rest = parts.rest();
+        var named_group = false;
+        var fused_head: ?[]const u8 = null;
 
-        if (parts.peek()) |maybe_brace| {
-            if (maybe_brace.len > 0 and maybe_brace[0] == '{') {
+        // Named group: `| ok my:{ ... }` or `| ok my: { ... }` — `my` binds
+        // the whole payload and the braces are a field list (schema), not a
+        // projection.
+        if (parts.peek()) |tok0| {
+            if (std.mem.indexOfScalar(u8, tok0, ':')) |ci| {
+                const cand = tok0[0..ci];
+                const after = tok0[ci + 1 ..];
+                if (isValidIdentifier(cand) and after.len > 0 and after[0] == '{') {
+                    _ = parts.next(); // fused `my:{...`
+                    if (!std.mem.eql(u8, cand, "_")) binding = cand;
+                    named_group = true;
+                    fused_head = after;
+                } else if (isValidIdentifier(cand) and after.len == 0) {
+                    _ = parts.next(); // spaced `my:` — brace must follow
+                    const ahead = lexer.trim(parts.rest());
+                    if (ahead.len > 0 and ahead[0] == '{') {
+                        if (!std.mem.eql(u8, cand, "_")) binding = cand;
+                        named_group = true;
+                    }
+                }
+            }
+        }
+
+        if (fused_head != null or (parts.peek() != null and parts.peek().?.len > 0 and parts.peek().?[0] == '{')) {
+            {
                 // Shape-destructure at the binding position:
                 //   | found { name, age: i64, user: { city } } |> ...
                 // Consume whitespace tokens until the brace depth closes, then
@@ -8046,8 +8159,15 @@ pub const Parser = struct {
                 var collected = try std.ArrayList(u8).initCapacity(self.allocator, 64);
                 defer collected.deinit(self.allocator);
                 var depth: i32 = 0;
-                var closed = false;
-                while (parts.peek() != null) {
+                if (fused_head) |fh| {
+                    try collected.appendSlice(self.allocator, fh);
+                    for (fh) |ch| {
+                        if (ch == '{') depth += 1;
+                        if (ch == '}') depth -= 1;
+                    }
+                }
+                var closed = depth == 0 and fused_head != null;
+                while (!closed and parts.peek() != null) {
                     const tok = parts.next().?;
                     if (collected.items.len > 0) try collected.append(self.allocator, ' ');
                     try collected.appendSlice(self.allocator, tok);
@@ -8071,8 +8191,10 @@ pub const Parser = struct {
                     return error.InvalidBinding;
                 }
                 const text = collected.items;
-                // Strip the outer braces and parse the field list.
-                destructure = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent);
+                // Strip the outer braces and parse the field list — schema
+                // mode inside a named group, projection mode otherwise.
+                destructure = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent, named_group);
+                if (named_group) destructure_named = true;
                 rest = parts.rest();
             }
         }
@@ -8473,6 +8595,7 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
@@ -8569,6 +8692,7 @@ pub const Parser = struct {
                 pipe_cont.branch = owned_branch;
                 pipe_cont.binding = binding;
                 pipe_cont.destructure = destructure;
+                pipe_cont.destructure_named = destructure_named;
                 pipe_cont.binding_annotations = binding_annotations;
                 pipe_cont.binding_type = .branch_payload;
                 pipe_cont.condition = condition;
@@ -8620,6 +8744,7 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
@@ -8644,6 +8769,7 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
@@ -8661,6 +8787,7 @@ pub const Parser = struct {
             .branch = owned_branch,
             .binding = binding,
             .destructure = destructure,
+            .destructure_named = destructure_named,
             .binding_annotations = binding_annotations,
             .binding_type = .branch_payload, // Parser always uses branch_payload; backend determines transition semantics
             .condition = condition,

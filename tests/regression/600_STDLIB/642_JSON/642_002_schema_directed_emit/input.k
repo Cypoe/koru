@@ -18,11 +18,11 @@ std/json:emit(value: { service: "orisha", port: 8080, tls: true, meta: { tier: "
 // `binding.field` path, a `?string` (null-or-inner), and a `[]string`.
 std/json:parse(input: "{\"name\":\"ada\",\"age\":36,\"addr\":{\"city\":\"paris\"},\"nick\":null,\"tags\":[\"a\",\"b\"]}")
 | malformed { message, offset } |> std/io:print.ln("BAD {{ offset:d }}: {{ message:s }}")
-| ok { name: string, age: i64, addr: { city: string }, nick: ?string, tags: []string } |> std/json:emit(value: { who: name, years: age, town: city, alias: nick, seen: tags, active: true }): out
+| ok _:{ name: string, age: i64, addr: { city: string }, nick: ?string, tags: []string } |> std/json:emit(value: { who: name, years: age, town: city, alias: nick, seen: tags, active: true }): out
     |> std/io:print.ln("{{ out:s }}") |> std/json:emit.free(text: out)
 
 // same, with the optional field present
 std/json:parse(input: "{\"name\":\"cid\",\"age\":9,\"addr\":{\"city\":\"oslo\"},\"nick\":\"ciddy\",\"tags\":[]}")
 | malformed { message, offset } |> std/io:print.ln("BAD2 {{ offset:d }}: {{ message:s }}")
-| ok { name: string, age: i64, addr: { city: string }, nick: ?string, tags: []string } |> std/json:emit(value: { who: name, years: age, town: city, alias: nick, seen: tags }): out
+| ok _:{ name: string, age: i64, addr: { city: string }, nick: ?string, tags: []string } |> std/json:emit(value: { who: name, years: age, town: city, alias: nick, seen: tags }): out
     |> std/io:print.ln("{{ out:s }}") |> std/json:emit.free(text: out)

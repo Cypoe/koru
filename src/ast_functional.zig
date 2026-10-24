@@ -622,6 +622,7 @@ fn cloneContinuationWithNodeAndContinuations(
         .branch = try allocator.dupe(u8, cont.branch),
         .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
         .destructure = try ast.copyDestructure(allocator, cont.destructure),
+        .destructure_named = cont.destructure_named,
         .binding_annotations = binding_annotations,
         .binding_marks = binding_marks,
         .binding_type = cont.binding_type,
@@ -1518,6 +1519,7 @@ pub fn cloneInvocation(allocator: std.mem.Allocator, invocation: *const ast.Invo
             null,
         .return_binding_annotations = return_binding_annotations,
         .return_destructure = try ast.copyDestructure(allocator, invocation.return_destructure),
+        .return_destructure_named = invocation.return_destructure_named,
         .inline_body = if (invocation.inline_body) |ib|
             try allocator.dupe(u8, ib)
         else

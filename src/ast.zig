@@ -1717,7 +1717,10 @@ pub const Invocation = struct {
     variant: ?[]const u8 = null, // Variant selector: "gpu", "naive", etc. for ~event|variant() calls
     return_binding: ?[]const u8 = null, // `~double(a:21) -> d |> ...`: binds the event's single unnamed `-> T` return value to `d` for the following pipeline. Call-site twin of EventDecl.return_type.
     return_binding_annotations: []const []const u8 = &[_][]const u8{}, // `~get-data(): r[mutable] |> ...`: annotations on the bare-return bind. Call-site twin of Branch.annotations; `[mutable]` makes the emitter bind `var` not `const`.
-    return_destructure: []const DestructureField = &.{}, // `~locate(): { pos: { x }, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
+    return_destructure: []const DestructureField = &.{}, // `~locate(): { pos.x, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
+    /// `f(): my:{ … }` — the braces are a declared shape (named group), not a
+    /// projection. Same rule as `Continuation.destructure_named`.
+    return_destructure_named: bool = false,
 
     // Transform replacement: if set, emitter outputs this code instead of calling the handler.
     // The path is kept for shape validation (the shape checker uses it to verify branch coverage).
@@ -1770,15 +1773,23 @@ pub const BindingType = enum {
 };
 
 /// One field of a shape-destructure at the binding position:
-/// `| found { name, age: i64, user: { city } } |> ...`
-/// Each field binds the payload's same-named field directly — by NAME, never
-/// by position. `type_text` is an optional representation annotation (a typed
-/// const in the emission; transforms like match may define it as conversion).
-/// `sub` is a nested destructure into that field (emission is just longer
-/// access paths; interiors may be host types — Zig validates at Stage D).
+/// `| found { name, x: pos.x, user.city } |> ...`
+/// Each field binds by name — `path` is the source path into the payload — `k`, `pos.x`,
+/// `a.b.c`. `name` is the local binding minted; a bare `{ pos.x }` puns to
+/// the path's last segment (`{ k }` ≡ `{ k: k }`). A `local: path` entry
+/// renames; the parser refuses `local == last(path)` — if you can pun, you
+/// must. Ruled 2026-10-24: name-matched, never positional; the path list is
+/// the projection set an emitter materializes.
 pub const DestructureField = struct {
-    name: []const u8, // binding name, or "_" to discard the slot
+    name: []const u8, // local binding name, or "_" to discard the slot
+    path: []const u8, // source path into the payload (`pos.x`); `k` for puns
+    /// Set only inside a NAMED group (`my:{ name: Type }`) — the declared
+    /// type text of the field (may be `{...}`, `?T`, `[]T` — the schema
+    /// reads it, e.g. std/json:parse). Bare-brace destructures never carry
+    /// one: `:` there is rename (`local: path`), never a type.
     type_text: ?[]const u8 = null,
+    /// Nested field list inside a named group (`my:{ addr: { city } }`) —
+    /// the schema recursion. Never set on a bare-brace projection entry.
     sub: []const DestructureField = &.{},
     /// PREFIX annotations on the entry: `{ [row]e, [ordinal]n }`. Prefix is the
     /// language's annotation form (`[comptime]tor`, `[global(name)]`); the
@@ -1793,10 +1804,11 @@ pub const DestructureField = struct {
 
     pub fn deinit(self: *const DestructureField, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        allocator.free(self.path);
         if (self.type_text) |t| allocator.free(t);
+        freeDestructure(allocator, self.sub);
         for (self.annotations) |a| allocator.free(@constCast(a));
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
-        freeDestructure(allocator, self.sub);
     }
 };
 
@@ -1811,6 +1823,7 @@ pub fn copyDestructure(allocator: std.mem.Allocator, fields: []const Destructure
     for (fields, 0..) |f, i| {
         out[i] = .{
             .name = try allocator.dupe(u8, f.name),
+            .path = try allocator.dupe(u8, f.path),
             .type_text = if (f.type_text) |t| try allocator.dupe(u8, t) else null,
             .sub = try copyDestructure(allocator, f.sub),
             .annotations = blk: {
@@ -1836,6 +1849,10 @@ pub const Continuation = struct {
     /// exclusive with `binding`: a continuation binds the whole payload to
     /// one name OR destructures it by field name.
     destructure: []const DestructureField = &.{},
+    /// Set when the destructure rode a named group (`my:{ … }` / `_:{ … }`):
+    /// the braces are a declared shape, not a projection — field-existence
+    /// and unused-field checks do not apply to its entries.
+    destructure_named: bool = false,
     binding_type: BindingType = .branch_payload,
     kind: BranchKind = .terminal, // `|` = terminal handler, `!` = effect handler
     is_catchall: bool = false, // True for |* or !* residual continuations

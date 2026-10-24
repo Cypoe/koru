@@ -6638,9 +6638,9 @@ fn enforceUniqueBindingNamesInItems(
 
 /// A destructure list is a binding list — `{ name, name }` emits two
 /// `const name` decls and dies in backend Zig. `_` is a discard, not a
-/// binding, and may repeat. Recurses into `sub` (a nested destructure is
-/// the same list one level down), and compares leaf names across the whole
-/// tree — `{ user: { x }, x }` emits `const x` at both levels.
+/// binding, and may repeat. Paths are flat (ruled 2026-10-24): every entry
+/// binds exactly its local name, so `{ pos, pos.x }` binds `pos` and `x` —
+/// both checked here.
 fn checkDestructureBindOnce(
     fields: []const ast.DestructureField,
     owner: []const u8,
@@ -6649,44 +6649,22 @@ fn checkDestructureBindOnce(
     bound: *std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 ) !void {
-    for (fields, 0..) |field, i| {
-        if (!std.mem.eql(u8, field.name, "_")) {
-            for (fields[0..i]) |earlier| {
-                if (std.mem.eql(u8, earlier.name, "_")) continue;
-                if (!std.mem.eql(u8, earlier.name, field.name)) continue;
-                try reporter.addErrorWithHint(
-                    .PARSE010,
-                    location.line,
-                    location.column,
-                    "field '{s}' is bound twice in {s} — a field list takes each name once",
-                    .{ field.name, owner },
-                    "drop one, or rename it — the list cannot carry two '{s}'",
-                    .{field.name},
-                );
-                break;
-            }
-            // A leaf entry emits one `const <name>`; a field with a sub-shape
-            // emits nothing itself — only its leaves do. So a name collides
-            // not only with its siblings but with every leaf bound anywhere
-            // in the tree (`{ user: { x }, x }` emits `const x` twice).
-            if (field.sub.len == 0) {
-                for (bound.items) |n| {
-                    if (!std.mem.eql(u8, n, field.name)) continue;
-                    try reporter.addErrorWithHint(
-                        .PARSE010,
-                        location.line,
-                        location.column,
-                        "field '{s}' is bound twice in {s} — a field list takes each name once",
-                        .{ field.name, owner },
-                        "drop one, or rename it — the list cannot carry two '{s}'",
-                        .{field.name},
-                    );
-                    break;
-                }
-                try bound.append(allocator, field.name);
-            }
+    for (fields) |field| {
+        if (std.mem.eql(u8, field.name, "_")) continue;
+        for (bound.items) |n| {
+            if (!std.mem.eql(u8, n, field.name)) continue;
+            try reporter.addErrorWithHint(
+                .PARSE010,
+                location.line,
+                location.column,
+                "field '{s}' is bound twice in {s} — a field list takes each name once",
+                .{ field.name, owner },
+                "drop one, or rename it — the list cannot carry two '{s}'",
+                .{field.name},
+            );
+            break;
         }
-        try checkDestructureBindOnce(field.sub, owner, reporter, location, bound, allocator);
+        try bound.append(allocator, field.name);
     }
 }
 

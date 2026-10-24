@@ -1497,12 +1497,19 @@ pub const ShapeChecker = struct {
                 if (!branch.payload.is_wildcard) {
                     const is_identity = branch.payload.fields.len == 1 and
                         std.mem.eql(u8, branch.payload.fields[0].name, "__type_ref");
-                    if (!is_identity) {
+                    // A named group (`| ok parsed:{ name: string }`) declares a
+                    // shape, it does not project the payload — skip field checks.
+                    if (!is_identity and !cont.destructure_named) {
                         for (cont.destructure) |df| {
                             if (std.mem.eql(u8, df.name, "_")) continue;
+                            // The demanded field is the path's FIRST segment
+                            // (`{ pos.x }` demands `pos`; `{ key: k }` demands
+                            // `k`, binding `key`). Deeper segments are host-
+                            // typed interiors — Zig validates them at Stage D.
+                            const head = if (std.mem.indexOfScalar(u8, df.path, '.')) |d| df.path[0..d] else df.path;
                             var field_exists = false;
                             for (branch.payload.fields) |pf| {
-                                if (std.mem.eql(u8, pf.name, df.name)) {
+                                if (std.mem.eql(u8, pf.name, head)) {
                                     field_exists = true;
                                     break;
                                 }
@@ -1514,7 +1521,7 @@ pub const ShapeChecker = struct {
                                     if (fi > 0) try fnames.appendSlice(self.allocator, ", ");
                                     try fnames.appendSlice(self.allocator, pf.name);
                                 }
-                                try self.reporter.addErrorAtLocation(.KORU036, cont.location, "destructure field '{s}' is not a field of branch '{s}' (payload fields: {s})", .{ df.name, branch.name, fnames.items });
+                                try self.reporter.addErrorAtLocation(.KORU036, cont.location, "destructure field '{s}' is not a field of branch '{s}' (payload fields: {s})", .{ df.path, branch.name, fnames.items });
                                 has_errors = true;
                             }
                         }

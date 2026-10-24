@@ -9,8 +9,8 @@ import std/json
 
 std/json:parse(input: "{\"id\":42,\"payload\":{\"nested\":[1,2,3]}}")
 | malformed { message, offset } |> std/io:print.ln("BAD {{ offset:d }}: {{ message:s }}")
-| ok { id: i64, payload } |> std/io:print.ln("id={{ id:d }} payload={{ payload:s }}")
+| ok _:{ id: i64, payload } |> std/io:print.ln("id={{ id:d }} payload={{ payload:s }}")
 
 std/json:parse(input: "{\"id\":7,\"payload\":\"a string\"}")
 | malformed { message, offset } |> std/io:print.ln("BAD2 {{ offset:d }}: {{ message:s }}")
-| ok { id: i64, payload } |> std/io:print.ln("id={{ id:d }} payload={{ payload:s }}")
+| ok _:{ id: i64, payload } |> std/io:print.ln("id={{ id:d }} payload={{ payload:s }}")

@@ -3065,18 +3065,15 @@ const Emitter = struct {
         base: []const u8,
         indent: []const u8,
     ) JsEmitError!void {
+        // Flat paths: `{ pos.x }` → `const x = base.pos.x`.
         for (fields) |field| {
             if (std.mem.eql(u8, field.name, "_")) continue;
-            if (field.sub.len > 0) {
-                const path = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base, field.name });
-                defer self.allocator.free(path);
-                try self.emitDestructureBindings(field.sub, path, indent);
-                continue;
-            }
             try self.writeFmt("{s}const ", .{indent});
             try self.writeBinding(field.name);
             try self.write(" = ");
-            try self.writeMember(base, field.name);
+            try self.write(base);
+            try self.write(".");
+            try self.write(field.path);
             try self.write(";\n");
         }
     }
