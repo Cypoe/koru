@@ -778,6 +778,10 @@ const Emitter = struct {
             if (event.input.fields.len > 0) {
                 try self.writeFmt("struct {s}_in {{\n", .{name});
                 for (event.input.fields) |f| {
+                    if (codegen_utils.cArrayType(f.type)) |at| {
+                        try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
+                        continue;
+                    }
                     const ct = self.cTypeOfResolved(f.type) orelse {
                         std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
                         return CEmitError.UnsupportedConstruct;
@@ -806,6 +810,10 @@ const Emitter = struct {
         if (event.input.fields.len > 0) {
             try self.writeFmt("struct {s}_in {{\n", .{name});
             for (event.input.fields) |f| {
+                if (codegen_utils.cArrayType(f.type)) |at| {
+                    try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
+                    continue;
+                }
                 const ct = self.cTypeOfResolved(f.type) orelse {
                     std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
                     return CEmitError.UnsupportedConstruct;
@@ -1056,12 +1064,21 @@ const Emitter = struct {
     /// convention, same as the js/cs prologue off their input param.
     fn emitFieldBindings(self: *Emitter, event: *const ast.EventDecl) CEmitError!void {
         for (event.input.fields) |f| {
+            const cm = codegen_utils.cMemberName(self.allocator, f.name);
+            if (codegen_utils.cArrayType(f.type)) |at| {
+                // `[N]T` fields bind as pointers — C arrays are not
+                // assignable, and `arr[i]` indexes identically on
+                // `T *` (1-D) / `T (*)[M]` (N-D), so .kc bodies stay
+                // verbatim.
+                try self.int_bindings.put(f.name, at.base);
+                try self.writeFmt("    {s} = {s}.{s};\n", .{ codegen_utils.cArrayPtrDecl(self.allocator, at, cm), INPUT_PARAM, cm });
+                continue;
+            }
             const ct = self.cTypeOfResolved(f.type) orelse {
                 std.debug.print("error[KORU047]: C lane: field {s} has type {s} — no C type in the first fragment\n", .{ f.name, f.type });
                 return CEmitError.UnsupportedConstruct;
             };
             try self.int_bindings.put(f.name, ct);
-            const cm = codegen_utils.cMemberName(self.allocator, f.name);
             try self.writeFmt("    {s} const {s} = {s}.{s};\n", .{ ct, cm, INPUT_PARAM, cm });
         }
     }
@@ -1675,7 +1692,9 @@ const Emitter = struct {
                     // Single field — no cross-field read is possible; the
                     // direct store is the snapshot form.
                     const f = asgn.fields[0];
-                    try self.writeFmt("{s}{s}.{s} = ", .{ indent, asgn.target, codegen_utils.cMemberName(self.allocator, f.name) });
+                    try self.write(indent);
+                    try self.emitMemberPath(asgn.target, f.name);
+                    try self.write(" = ");
                     try self.writeExpr(f.expression_str orelse f.type);
                     try self.write(";\n");
                 } else {
@@ -1684,7 +1703,9 @@ const Emitter = struct {
                     try self.writeFmt("{s}{{\n", .{indent});
                     try self.writeFmt("{s}struct __koru_cap_{s} __koru_snap = {s};\n", .{ ind2, asgn.target, asgn.target });
                     for (asgn.fields) |f| {
-                        try self.writeFmt("{s}__koru_snap.{s} = ", .{ ind2, codegen_utils.cMemberName(self.allocator, f.name) });
+                        try self.write(ind2);
+                        try self.emitMemberPath("__koru_snap", f.name);
+                        try self.write(" = ");
                         try self.writeExpr(f.expression_str orelse f.type);
                         try self.write(";\n");
                     }
@@ -1711,6 +1732,29 @@ const Emitter = struct {
             },
         }
         return 0;
+    }
+
+    /// `<owner>.<member>` where the field may carry an index chain —
+    /// `arr[i]`, `g[a][b]` (captured-on-array writes): the base member
+    /// name mangles, each bracket's expression lowers through writeExpr.
+    fn emitMemberPath(self: *Emitter, owner: []const u8, field: []const u8) CEmitError!void {
+        const brk = std.mem.indexOfScalar(u8, field, '[') orelse field.len;
+        try self.writeFmt("{s}.{s}", .{ owner, codegen_utils.cMemberName(self.allocator, field[0..brk]) });
+        var rest = field[brk..];
+        while (rest.len > 0) {
+            if (rest[0] != '[') {
+                std.debug.print("error[KORU047]: C lane: indexed field `{s}` — trailing text after index chain\n", .{field});
+                return CEmitError.UnsupportedConstruct;
+            }
+            const close = std.mem.indexOfScalar(u8, rest, ']') orelse {
+                std.debug.print("error[KORU047]: C lane: indexed field `{s}` — unclosed index\n", .{field});
+                return CEmitError.UnsupportedConstruct;
+            };
+            try self.write("[");
+            try self.writeExpr(rest[1..close]);
+            try self.write("]");
+            rest = rest[close + 1 ..];
+        }
     }
 
     /// A `->`/produce: `return <value>;` — bare value only; named or fielded
@@ -2110,6 +2154,23 @@ const Emitter = struct {
     /// One arg's value against declared field `f`: slice-literal lowering
     /// when the field spells a `[]T` cell, else ordinary expression text.
     fn emitArgValue(self: *Emitter, value: []const u8, f: ast.Field) CEmitError!void {
+        // `[N]T` field — `.arr = v` is not a C initializer (arrays are
+        // not assignable). A `[N]T{…}` literal lowers its elements; any
+        // other value expands by the declared dims: `{ v[0], v[1], … }`.
+        if (codegen_utils.cArrayType(f.type)) |at| {
+            try self.write("{ ");
+            const vt = std.mem.trim(u8, value, " \t\n");
+            if (std.mem.indexOfScalar(u8, vt, '{')) |open| {
+                if (vt.len > 1 and vt[vt.len - 1] == '}') {
+                    try self.emitArrayInitText(vt[open + 1 .. vt.len - 1]);
+                    try self.write(" }");
+                    return;
+                }
+            }
+            try self.emitArrayElems(value, at.dims);
+            try self.write(" }");
+            return;
+        }
         const ct = self.cTypeOfResolved(f.type) orelse return self.writeExpr(value);
         // `{ f: v, ... }` into a record-typed field → the compound literal
         // `(<ct>){ .f = v }`. Payload, `_in`, `_ret` and proto structs all
@@ -2152,6 +2213,62 @@ const Emitter = struct {
             rest = rest[comma + 1 ..];
         }
         try self.writeFmt(" }}, .len = {d} }})", .{n});
+    }
+
+    /// `{ e0, e1, … }` — a `[N]T{…}` literal's elements lowered one per
+    /// brace slot; nested `.{…}` ranks recurse by dropping the `.`.
+    fn emitArrayInitText(self: *Emitter, interior: []const u8) CEmitError!void {
+        var rest = interior;
+        var n: usize = 0;
+        while (true) {
+            var depth: usize = 0;
+            var comma: usize = rest.len;
+            for (rest, 0..) |ch, i| {
+                switch (ch) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -= 1,
+                    ',' => if (depth == 0) {
+                        comma = i;
+                        break;
+                    },
+                    else => {},
+                }
+            }
+            const piece = std.mem.trim(u8, rest[0..comma], " \t\n");
+            if (piece.len == 0) break;
+            if (n > 0) try self.write(", ");
+            const inner = if (std.mem.startsWith(u8, piece, ".{")) piece[1..] else piece;
+            if (inner.len > 1 and inner[0] == '{' and inner[inner.len - 1] == '}') {
+                try self.write("{ ");
+                try self.emitArrayInitText(inner[1 .. inner.len - 1]);
+                try self.write(" }");
+            } else {
+                try self.writeExpr(inner);
+            }
+            n += 1;
+            if (comma == rest.len) break;
+            rest = rest[comma + 1 ..];
+        }
+    }
+
+    /// `{ v[0], v[1], … }` — a `[N]T` arg's braced init expanded by the
+    /// declared dims, recursing through nested `[N][M]` ranks.
+    fn emitArrayElems(self: *Emitter, value: []const u8, dims: []const u8) CEmitError!void {
+        const close = std.mem.indexOfScalar(u8, dims, ']') orelse return CEmitError.UnsupportedConstruct;
+        const n = std.fmt.parseInt(usize, dims[1..close], 10) catch return CEmitError.UnsupportedConstruct;
+        const rest = dims[close + 1 ..];
+        for (0..n) |i| {
+            if (i > 0) try self.write(", ");
+            const elem = try std.fmt.allocPrint(self.allocator, "{s}[{d}]", .{ value, i });
+            defer self.allocator.free(elem);
+            if (rest.len == 0) {
+                try self.writeExpr(elem);
+            } else {
+                try self.write("{ ");
+                try self.emitArrayElems(elem, rest);
+                try self.write(" }");
+            }
+        }
     }
 
     /// `<slice-cell>` → its `ptr` member's pointee C type —

@@ -67,6 +67,60 @@ const CC = struct {
         }
         return .{ .ty = "", .val = p.value };
     }
+
+    /// `[N]T{ … }` / `[N][M]T{ … }` seed → C declarator dims + brace-init
+    /// text, or null when the value is not a fixed-array literal. The type
+    /// text sits before the first top-level `{`; C puts the dims after the
+    /// member name, so the caller emits `<base> <mem><dims>` and the init
+    /// goes through cArrayInitText (`.{…}` ranks drop the `.`; elements
+    /// lower through the ordinary C expr path).
+    const ArraySeed = struct { at: @import("codegen_utils").CArrayType, init: []const u8 };
+    fn arraySeed(allocator: std.mem.Allocator, value: []const u8) !?ArraySeed {
+        const cgu = @import("codegen_utils");
+        const t = std.mem.trim(u8, value, " \t");
+        const open = std.mem.indexOfScalar(u8, t, '{') orelse return null;
+        if (t.len == 0 or t[t.len - 1] != '}') return null;
+        const at = cgu.cArrayType(t[0..open]) orelse return null;
+        return .{ .at = at, .init = try cArrayInitText(allocator, t[open + 1 .. t.len - 1]) };
+    }
+
+    fn cArrayInitText(allocator: std.mem.Allocator, interior: []const u8) ![]const u8 {
+        const cgu = @import("codegen_utils");
+        var out = std.ArrayList(u8).initCapacity(allocator, interior.len + 4) catch unreachable;
+        out.append(allocator, '{') catch unreachable;
+        var rest = interior;
+        var n: usize = 0;
+        while (true) {
+            var depth: usize = 0;
+            var comma: usize = rest.len;
+            for (rest, 0..) |ch, i| {
+                switch (ch) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -= 1,
+                    ',' => if (depth == 0) { comma = i; break; },
+                    else => {},
+                }
+            }
+            const piece = std.mem.trim(u8, rest[0..comma], " \t\n");
+            if (piece.len == 0) break;
+            if (n > 0) out.appendSlice(allocator, ", ") catch unreachable;
+            const inner = if (std.mem.startsWith(u8, piece, ".{"))
+                piece[1..]
+            else
+                piece;
+            if (inner.len > 1 and inner[0] == '{' and inner[inner.len - 1] == '}') {
+                out.appendSlice(allocator, try cArrayInitText(allocator, inner[1 .. inner.len - 1])) catch unreachable;
+            } else {
+                const cv = cgu.lowerKoruExpr(allocator, inner, .c, .koru_expr, null) catch return error.NoCLowering;
+                out.appendSlice(allocator, cv) catch unreachable;
+            }
+            n += 1;
+            if (comma == rest.len) break;
+            rest = rest[comma + 1 ..];
+        }
+        out.append(allocator, '}') catch unreachable;
+        return out.toOwnedSlice(allocator) catch unreachable;
+    }
 };
 
 ~[transform]proc capture|zig {
@@ -358,6 +412,25 @@ const CC = struct {
         p.appendSlice(allocator, cell_name) catch unreachable;
         p.appendSlice(allocator, " { ") catch unreachable;
         for (cell_fields, 0..) |cf, i| {
+            const mem0 = cgu.cMemberName(allocator, cf.name);
+            const seed_opt = $mod.CC.arraySeed(allocator, cf.value) catch {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "~capture seed `{s}` — array elements have no C lowering in the first fragment", .{cf.name}) } };
+            };
+            if (seed_opt) |seed| {
+                // `[N]T` seed — C declarator dims ride the member name;
+                // the braced init translates `.{}` ranks element-wise.
+                p.appendSlice(allocator, seed.at.base) catch unreachable;
+                p.appendSlice(allocator, " ") catch unreachable;
+                p.appendSlice(allocator, mem0) catch unreachable;
+                p.appendSlice(allocator, seed.at.dims) catch unreachable;
+                p.appendSlice(allocator, "; ") catch unreachable;
+                if (i > 0) inits.appendSlice(allocator, ", ") catch unreachable;
+                inits.appendSlice(allocator, ".") catch unreachable;
+                inits.appendSlice(allocator, mem0) catch unreachable;
+                inits.appendSlice(allocator, " = ") catch unreachable;
+                inits.appendSlice(allocator, seed.init) catch unreachable;
+                continue;
+            }
             const pv = $mod.CC.peelTyped(cf.value);
             const ct = cgu.cTypeOf(pv.ty) orelse {
                 return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "~capture seed `{s}` has no declared base type — the C cell needs `v[i64]` or `@as(i64, v)`", .{cf.name}) } };

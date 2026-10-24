@@ -100,6 +100,25 @@ check's base pattern already rules `)[` bases out as "indexing a temporary,
 not this defect", so the pointer spelling passes the gate on the gate's own
 reasoning, not by dodging it.
 
+## Evolved — on C the pointer binding is not a fix, it is the only spelling
+
+The C lane's array capture cells (rung: `[N]T` seeds, `320_045`/`320_057`)
+apply this belief one level stronger: where Zig's `(&store.col)[i]` was a
+*chosen* fix for an expression context, C offers no choice — a C array is
+not assignable at all, so `.arr = v` in a compound literal is not slow, it
+is ill-formed. The bindings therefore emit `int32_t * const arr` /
+`int32_t (* const g)[2]` against the `_in` member, which is the same "name
+the base through a pointer" move — the member never materialises and the
+`.kc` bodies index verbatim. Call arguments get the expression-context
+twin: `.arr = { v[0], v[1], … }` element expansion keeps the call an
+expression (no statement prologue exists inside `emitCallExpr`).
+
+The belief also gained its refusal boundary here: `320_046` binds an
+*existing* value (`capture { entity }`), which wants C `typeof` — measured
+absent from CompCert, so it refuses named rather than silently resolving
+the type text. "Bind through a pointer" is safe; "invent the cell's type"
+is the short reach this concept's methodological half warns against.
+
 ## Open
 
 None. Behavior pinned by 695_002 (cycle trap) and 690_005 (query read),

@@ -287,6 +287,37 @@ pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Koru fixed-array type `[N]T` / `[N][M]…T` — C declarator syntax puts
+/// the dims after the declarator name (`int32_t g[2][2]`), so this splits
+/// the base C type from the dims text instead of spelling one string.
+/// `[_]T`, non-literal bounds and non-typable bases return null — named
+/// refusals, not silent pointers.
+pub const CArrayType = struct { base: []const u8, dims: []const u8 };
+pub fn cArrayType(koru_type: []const u8) ?CArrayType {
+    const t = std.mem.trim(u8, koru_type, " \t");
+    var i: usize = 0;
+    while (i < t.len and t[i] == '[') {
+        const close = std.mem.indexOfScalarPos(u8, t, i, ']') orelse return null;
+        const n = std.mem.trim(u8, t[i + 1 .. close], " \t");
+        if (n.len == 0) return null;
+        for (n) |ch| if (ch < '0' or ch > '9') return null;
+        i = close + 1;
+    }
+    if (i == 0 or i >= t.len) return null;
+    const base = cTypeOf(t[i..]) orelse return null;
+    return .{ .base = base, .dims = t[0..i] };
+}
+
+/// The pointer binding an array member carries: `arr[i]` host text parses
+/// identically on `T *` (1-D) and `T (*)[M]` (N-D), so `.kc` bodies index
+/// verbatim and no copy is needed — C arrays are not assignable.
+pub fn cArrayPtrDecl(allocator: std.mem.Allocator, at: CArrayType, name: []const u8) []const u8 {
+    const rest = at.dims[std.mem.indexOfScalar(u8, at.dims, ']').? + 1 ..];
+    if (rest.len == 0)
+        return std.fmt.allocPrint(allocator, "{s} * const {s}", .{ at.base, name }) catch unreachable;
+    return std.fmt.allocPrint(allocator, "{s} (* const {s}){s}", .{ at.base, name, rest }) catch unreachable;
+}
+
 /// Koru member name -> C struct member spelling: every byte outside
 /// [A-Za-z0-9_] folds to `_` (a dotted union-folded column `a.b` -> `a_b`,
 /// matching the C# fold at the identifier level).

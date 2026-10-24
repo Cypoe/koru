@@ -1,0 +1,9 @@
+// C implementation facet. The Koru declarations live in the `input.kz`
+// companion (merged at import); this file holds the `|c` proc bodies
+// mirroring its `|zig` ones. `g` binds `int32_t (* const)[2]` — the
+// [N][M]T field's pointer-to-row convention; `g[a][b]` parses verbatim.
+
+~proc print-sum|c {
+    __koru_stdout_write_i64(g[0][0] + g[0][1] + g[1][0] + g[1][1]);
+    __koru_stdout_write("\n");
+}

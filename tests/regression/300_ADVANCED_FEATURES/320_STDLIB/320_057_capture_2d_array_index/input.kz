@@ -3,10 +3,10 @@
 // the AoC grid days (810_06x lights, 810_18x Conway). Green here ⇒ grids become
 // solution-writing, not a language build.
 ~import std/io
-const std = @import("std");
 
 ~tor print-sum { g: [2][2]i32 }
 ~proc print-sum|zig {
+    const std = @import("std");
     const sum = g[0][0] + g[0][1] + g[1][0] + g[1][1];
     std.debug.print("{d}\n", .{sum});
 }

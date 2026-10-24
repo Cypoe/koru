@@ -1,0 +1,9 @@
+// C implementation facet. The Koru declarations live in the `input.kz`
+// companion (merged at import); this file holds the `|c` proc bodies
+// mirroring its `|zig` ones. `arr` binds `int32_t * const` — the
+// [N]T field's pointer-binding convention (C arrays are not assignable).
+
+~proc print-sum|c {
+    __koru_stdout_write_i64(arr[0] + arr[1] + arr[2]);
+    __koru_stdout_write("\n");
+}
