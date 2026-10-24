@@ -484,6 +484,7 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
             .binding_annotations = anns,
             .binding_marks = marks,
             .destructure = try ast.copyDestructure(allocator, cont.destructure),
+            .produce = try ast.copyDestructure(allocator, cont.produce),
             .destructure_named = cont.destructure_named,
             .binding_type = cont.binding_type,
             // Preserve the branch axis (`|` vs `!`) and catch-all markers — a
@@ -492,6 +493,7 @@ fn cloneContinuations(allocator: std.mem.Allocator, continuations: []const ast.C
             .is_catchall = cont.is_catchall,
             .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
             .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
+            .post_condition = if (cont.post_condition) |c| try allocator.dupe(u8, c) else null,
             .condition_expr = null,
             .node = if (cont.node) |node| try cloneStep(allocator, node) else null,
             .indent = cont.indent,

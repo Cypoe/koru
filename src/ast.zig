@@ -1642,6 +1642,9 @@ pub const NamedBranch = struct {
     name: []const u8, // Branch name: "then", "else", "each", "done", "as", etc.
     body: []const Continuation, // The continuations in this branch
     binding: ?[]const u8 = null, // Optional binding for the branch (e.g., "item" in | each item |>)
+    /// `! each i { double: i * 2 }` — produce literal after the binding, same
+    /// grammar as `Continuation.produce` (name pun / name: expr).
+    produce: []const DestructureField = &.{},
     is_optional: bool = false, // Marks branches that don't need to be handled (like `for`'s `done`)
     annotations: []const []const u8 = &.{}, // Branch annotations (e.g., [mutable])
     /// Compiler-internal marks (`@scope`, ...) — pass-produced only, never
@@ -1653,6 +1656,7 @@ pub const NamedBranch = struct {
         allocator.free(self.name);
         deinitSliceItems(self.body, allocator);
         if (self.binding) |b| allocator.free(b);
+        freeDestructure(allocator, self.produce);
         for (self.annotations) |ann| allocator.free(ann);
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
         for (self.marks) |mark| allocator.free(@constCast(mark));
@@ -1853,6 +1857,16 @@ pub const Continuation = struct {
     /// the braces are a declared shape, not a projection — field-existence
     /// and unused-field checks do not apply to its entries.
     destructure_named: bool = false,
+    /// `! each i { double: i * 2 }` — a produce literal after the binding:
+    /// `name` pun / `name: expr` over the element scope. Replaces the
+    /// element as what the body sees — only listed names flow through.
+    produce: []const DestructureField = &.{},
+    /// `! each i { f } when f > 0` — a `when` that follows the produce
+    /// stage: a guard evaluated in the PRODUCED scope, emitted after the
+    /// produce consts wrap the arm body. `condition` stays the pre-stage
+    /// `when` (binding scope). One of each for now — the full stage list
+    /// `(when EXPR | { FIELDS })*` is the generalization.
+    post_condition: ?[]const u8 = null,
     binding_type: BindingType = .branch_payload,
     kind: BranchKind = .terminal, // `|` = terminal handler, `!` = effect handler
     is_catchall: bool = false, // True for |* or !* residual continuations
@@ -1896,7 +1910,9 @@ pub const Continuation = struct {
         }
         if (self.catchall_metatype) |m| allocator.free(m);
         if (self.condition) |c| allocator.free(c);
+        if (self.post_condition) |c| allocator.free(c);
         if (self.condition_expr) |e| e.deinit(allocator);
+        freeDestructure(allocator, self.produce);
         if (self.node) |*n| {
             var mutable_node = n.*;
             mutable_node.deinit(allocator);

@@ -508,6 +508,25 @@ fn indexOfTopLevelHeadArrow(s: []const u8) ?usize {
     return indexOfTopLevelOp(s, "=-", '>');
 }
 
+/// First `{` at paren depth 0 outside a string — the produce-stage
+/// delimiter in `when c { f }`: the braces are stage syntax, never part of
+/// the guard expression.
+fn indexOfTopLevelBrace(s: []const u8) ?usize {
+    var paren_depth: i32 = 0;
+    var in_string = false;
+    for (s, 0..) |c, i| {
+        if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '(') paren_depth += 1;
+        if (c == ')') paren_depth -= 1;
+        if (c == '{' and paren_depth == 0) return i;
+    }
+    return null;
+}
+
 /// Return `s` with a trailing `// ...` line comment removed (the `//` must be
 /// outside a string literal). Used so body-glyph detection never trips on a
 /// `->`/`|>`/`=>` that lives inside a trailing comment.
@@ -7658,6 +7677,7 @@ pub const Parser = struct {
         const line = self.lines[self.current];
         const trimmed = lexer.trim(line);
 
+
         // Skip the | prefix
         const after_bar = lexer.trim(trimmed[1..]);
 
@@ -8122,6 +8142,7 @@ pub const Parser = struct {
         var binding_annotations: [][]const u8 = &[_][]const u8{};
         var destructure: []const ast.DestructureField = &.{};
         var destructure_named: bool = false;
+        var produce: []const ast.DestructureField = &.{};
         var rest = parts.rest();
         var named_group = false;
         var fused_head: ?[]const u8 = null;
@@ -8200,6 +8221,9 @@ pub const Parser = struct {
         }
 
         if (destructure.len == 0) {
+            // `{` AFTER a binding is the produce literal — `! each i { f }`
+            // — schema-mode field list: `name` pun / `name: expr` in scope.
+            // Checked inside the binding branch below once `binding` is set.
             if (parts.peek()) |next| {
                 if (!std.mem.startsWith(u8, next, "|>") and !std.mem.startsWith(u8, next, "=>") and
                     !std.mem.startsWith(u8, next, "->") and
@@ -8272,27 +8296,90 @@ pub const Parser = struct {
             }
         }
 
-        // Check for when clause
+        // Stage chain: `! each BINDING (when EXPR | { FIELDS })*` — bind,
+        // then filter/project stages in text order. A `when` before the
+        // `{ }` guards the binding scope (`condition`); after, the produced
+        // scope (`post_condition`). One `{ }` stage per arm for now — the
+        // stage-list AST generalizes the chain.
         var condition: ?[]const u8 = null;
-        if (parts.peek()) |next| {
-            if (std.mem.eql(u8, next, "when")) {
+        var post_condition: ?[]const u8 = null;
+        while (parts.peek()) |stage_tok| {
+            if (stage_tok.len > 0 and stage_tok[0] == '{') {
+                // `{` after the binding is the produce literal —
+                // `! each i { f, g: e }` — a field list (`name` pun /
+                // `name: expr`), not a destructure.
+                if (produce.len > 0) {
+                    try self.reporter.addError(
+                        .PARSE001,
+                        self.current,
+                        indent + 2,
+                        "Second projection stage in one arm — one `{{ ... }}` produce per `! each` arm for now.",
+                        .{},
+                    );
+                    return error.InvalidBinding;
+                }
+                var collected = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+                defer collected.deinit(self.allocator);
+                var depth: i32 = 0;
+                var closed = false;
+                while (parts.peek() != null) {
+                    const tok = parts.next().?;
+                    if (collected.items.len > 0) try collected.append(self.allocator, ' ');
+                    try collected.appendSlice(self.allocator, tok);
+                    for (tok) |ch| {
+                        if (ch == '{') depth += 1;
+                        if (ch == '}') depth -= 1;
+                    }
+                    if (depth == 0) {
+                        closed = true;
+                        break;
+                    }
+                }
+                if (closed) {
+                    const text = collected.items;
+                    produce = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent, true);
+                    // Must-pun: a `name: name` self-rename has a shorter
+                    // spelling — `{ i }`. `:` is for renames and computations
+                    // (`{ i: i + 1 }`, `{ x: it.k }`), never the same name twice.
+                    for (produce) |pf| {
+                        if (pf.type_text) |t| {
+                            if (std.mem.eql(u8, pf.name, lexer.trim(t))) {
+                                try self.reporter.addError(
+                                    .PARSE001,
+                                    self.current,
+                                    indent + 2,
+                                    "Redundant rename '{s}: {s}' in a produce stage — write '{{ {s} }}' (the pun already means this).",
+                                    .{ pf.name, t, pf.name },
+                                );
+                                return error.InvalidBinding;
+                            }
+                        }
+                    }
+                    rest = parts.rest();
+                    parts = std.mem.tokenizeAny(u8, rest, " ");
+                    continue;
+                }
+                break;
+            } else if (std.mem.eql(u8, stage_tok, "when")) {
                 _ = parts.next(); // consume "when"
 
                 // Find where the condition ends: at the earliest arm-body
-                // delimiter — `|>` chain, `->` produce, or `=>` branch
-                // construct. A `when` guard can precede any of them
-                // (`when g |> body`, `when g -> value`, `when g => branch`);
-                // none of those glyphs is a legal expression operator, so the
-                // earliest top-level occurrence unambiguously ends the guard.
-                // (320_137: omitting `=>` swallowed `=> catalog` into the
-                // condition and emit pasted `if (p == 0 => catalog)`.)
+                // delimiter — `|>` chain, `->` produce, `=>` branch
+                // construct, or the produce stage's `{`. A `when` guard can
+                // precede any of them (`when g |> body`, `when g -> value`,
+                // `when g => branch`, `when g { f }`); none of those glyphs
+                // is a legal expression operator, so the earliest top-level
+                // occurrence unambiguously ends the guard. (320_137: omitting
+                // `=>` swallowed `=> catalog` into the condition and emit
+                // pasted `if (p == 0 => catalog)`.)
                 const remaining = parts.rest();
                 const pipe_idx = std.mem.indexOf(u8, remaining, "|>");
                 const arrow_idx = indexOfTopLevelHeadArrow(remaining); // `=>` or `->`
-                const end_idx: ?usize = if (pipe_idx) |p|
-                    (if (arrow_idx) |a| @min(p, a) else p)
-                else
-                    arrow_idx;
+                const brace_idx = indexOfTopLevelBrace(remaining); // `{` produce stage
+                var end_idx: ?usize = null;
+                for ([_]?usize{ pipe_idx, arrow_idx, brace_idx }) |cand| {
+                    if (cand) |c| end_idx = if (end_idx) |e| @min(e, c) else c;
+                }
 
                 const condition_str = if (end_idx) |idx|
                     lexer.trim(remaining[0..idx])
@@ -8343,16 +8430,43 @@ pub const Parser = struct {
                     }
                 }
 
-                condition = try self.allocator.dupe(u8, condition_str);
+                const cond_dupe = try self.allocator.dupe(u8, condition_str);
+                if (produce.len == 0) {
+                    if (condition != null) {
+                        self.allocator.free(cond_dupe);
+                        try self.reporter.addError(
+                            .PARSE001,
+                            self.current,
+                            indent + 2,
+                            "Second 'when' before any projection — combine the guards with 'and'.",
+                            .{},
+                        );
+                        return error.InvalidBinding;
+                    }
+                    condition = cond_dupe;
+                } else {
+                    if (post_condition != null) {
+                        self.allocator.free(cond_dupe);
+                        try self.reporter.addError(
+                            .PARSE001,
+                            self.current,
+                            indent + 2,
+                            "Second 'when' after the projection — combine the guards with 'and'.",
+                            .{},
+                        );
+                        return error.InvalidBinding;
+                    }
+                    post_condition = cond_dupe;
+                }
 
                 // Update rest to skip past the condition — preserving the
-                // delimiter (`|>` / `->` / `=>`) so the arm body parses downstream.
-                if (end_idx) |idx| {
-                    rest = remaining[idx..];
-                } else {
-                    rest = "";
-                }
+                // delimiter (`|>` / `->` / `=>` / `{`) so the arm body or the
+                // next stage parses downstream.
+                rest = if (end_idx) |idx| remaining[idx..] else "";
+                parts = std.mem.tokenizeAny(u8, rest, " ");
+                continue;
             }
+            break;
         }
 
         // Parse the condition expression if we have one
@@ -8596,9 +8710,11 @@ pub const Parser = struct {
                         .binding = binding,
                         .destructure = destructure,
                         .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = steps_inner[0],
                         .indent = indent,
@@ -8693,9 +8809,11 @@ pub const Parser = struct {
                 pipe_cont.binding = binding;
                 pipe_cont.destructure = destructure;
                 pipe_cont.destructure_named = destructure_named;
+                pipe_cont.produce = produce;
                 pipe_cont.binding_annotations = binding_annotations;
                 pipe_cont.binding_type = .branch_payload;
                 pipe_cont.condition = condition;
+                pipe_cont.post_condition = post_condition;
                 pipe_cont.condition_expr = condition_expr;
                 if (allocated_rest) |ar| self.allocator.free(ar);
                 return pipe_cont;
@@ -8745,9 +8863,11 @@ pub const Parser = struct {
                         .binding = binding,
                         .destructure = destructure,
                         .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = step,
                         .indent = indent,
@@ -8770,9 +8890,11 @@ pub const Parser = struct {
                         .binding = binding,
                         .destructure = destructure,
                         .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = step,
                         .indent = indent,
@@ -8788,9 +8910,11 @@ pub const Parser = struct {
             .binding = binding,
             .destructure = destructure,
             .destructure_named = destructure_named,
+            .produce = produce,
             .binding_annotations = binding_annotations,
             .binding_type = .branch_payload, // Parser always uses branch_payload; backend determines transition semantics
             .condition = condition,
+            .post_condition = post_condition,
             .condition_expr = condition_expr,
             .node = step,
             .indent = indent,

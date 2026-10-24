@@ -5740,15 +5740,76 @@ fn emitInlineCodeResolvingSplices(
                 try writeBranchName(emitter, binding);
                 try emitter.write("; ");
             }
-            const guarded = cont.condition != null;
+            // `! else` — exclusive dispatch continuing the contiguous
+            // each/else effect run above. An else arm fires iff no earlier
+            // arm's guard passed AND its own does — the else-if chain
+            // telescoped: every earlier raw guard negated, own appended.
+            // (An arm "fires" iff body runs — pre `when` and post-produce
+            // `when` both gate it, so both join the negated guard. An
+            // unguarded earlier arm contributes `!(true)` — a dead else,
+            // matching `else` after an unconditional `if`.) Earlier guards
+            // are rebound to THIS arm's binding name — every arm declares
+            // its own, but the payload is the same element. A `! else`
+            // with no `! each` head compiles to a compileError, not a guess.
+            var cond_text: ?[]const u8 = cont.condition;
+            var cond_owned: ?[]u8 = null;
+            defer if (cond_owned) |o| ctx.allocator.free(o);
+            if (cont.kind == .effect and std.mem.eql(u8, cont.branch, "else")) {
+                var g: usize = idx;
+                while (g > 0) {
+                    const prev = &continuations[g - 1];
+                    if (prev.kind != .effect) break;
+                    if (!std.mem.eql(u8, prev.branch, "each") and !std.mem.eql(u8, prev.branch, "else")) break;
+                    g -= 1;
+                }
+                var buf = try std.ArrayList(u8).initCapacity(ctx.allocator, 128);
+                if (g < idx and std.mem.eql(u8, continuations[g].branch, "each")) {
+                    for (continuations[g..idx]) |*prev| {
+                        var prev_full: []const u8 = "true";
+                        var pg_owned: ?[]u8 = null;
+                        defer if (pg_owned) |o| ctx.allocator.free(o);
+                        if (prev.condition != null and prev.post_condition != null) {
+                            prev_full = try std.fmt.allocPrint(ctx.allocator, "({s}) and ({s})", .{ prev.condition.?, prev.post_condition.? });
+                            pg_owned = @constCast(prev_full);
+                        } else if (prev.condition orelse prev.post_condition) |single| {
+                            prev_full = single;
+                        }
+                        if (prev.binding != null and cont.binding != null and
+                            !std.mem.eql(u8, prev.binding.?, cont.binding.?))
+                        {
+                            const rw = try codegen_utils.replaceIdentifier(ctx.allocator, prev_full, prev.binding.?, cont.binding.?);
+                            if (pg_owned) |o| ctx.allocator.free(o);
+                            pg_owned = @constCast(rw);
+                            prev_full = pg_owned.?;
+                        }
+                        try buf.appendSlice(ctx.allocator, "!(");
+                        try buf.appendSlice(ctx.allocator, prev_full);
+                        try buf.appendSlice(ctx.allocator, ") and ");
+                    }
+                    if (cont.condition) |own| {
+                        try buf.appendSlice(ctx.allocator, "(");
+                        try buf.appendSlice(ctx.allocator, own);
+                        try buf.appendSlice(ctx.allocator, ")");
+                    } else {
+                        buf.shrinkRetainingCapacity(buf.items.len - " and ".len);
+                    }
+                    cond_owned = try buf.toOwnedSlice(ctx.allocator);
+                    cond_text = cond_owned.?;
+                } else {
+                    buf.deinit(ctx.allocator);
+                    cond_owned = try ctx.allocator.dupe(u8, "@compileError(\"`! else` has no `! each` group — an else arm continues a contiguous each/else run, it cannot open one.\")");
+                    cond_text = cond_owned.?;
+                }
+            }
+            const guarded = cond_text != null;
             if (guarded) {
                 // Presence rewrite (400_147): `! each i when <optional arm>`
                 // — the guard is written here at splice time, so a bare
                 // optional-arm name becomes the comptime @hasDecl test.
                 const cond_out: []const u8 = blk: {
-                    const alloc = emitter.allocator orelse break :blk cont.condition.?;
-                    const ev = ctx.impl_event_decl orelse break :blk cont.condition.?;
-                    break :blk (try presenceConditionRewrite(alloc, cont.condition.?, ev, ctx.inline_fire_conts)) orelse cont.condition.?;
+                    const alloc = emitter.allocator orelse break :blk cond_text.?;
+                    const ev = ctx.impl_event_decl orelse break :blk cond_text.?;
+                    break :blk (try presenceConditionRewrite(alloc, cond_text.?, ev, ctx.inline_fire_conts)) orelse cond_text.?;
                 };
                 try emitter.write("if (");
                 if (bind_rename) |br| {
@@ -8411,6 +8472,30 @@ fn emitArmContBlock(
     else
         false;
     const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
+    // Produce stage `! each i { f, g: e }` — `const g = <expr>` for named
+    // exprs, `const f = i.f` for puns (the element's fields), `const i = i`
+    // for the element itself.
+    if (cont.produce.len > 0) {
+        for (cont.produce) |pf| {
+            if (std.mem.eql(u8, pf.name, "_")) continue;
+            try out.writeIndent();
+            try out.write("const ");
+            try writeBranchName(out, pf.name);
+            try out.write(" = ");
+            if (pf.type_text) |t| {
+                try out.write(lowerExprZig(out, ctx, t));
+            } else if (std.mem.eql(u8, pf.name, cont_binding)) {
+                try out.write(shared_param_name);
+            } else {
+                try out.write(shared_param_name);
+                try out.write(".");
+                try out.write(pf.name);
+            }
+            try out.write("; _ = &");
+            try writeBranchName(out, pf.name);
+            try out.write(";\n");
+        }
+    }
     if (cont.destructure.len > 0) {
         // Shape-destructure: per-field consts off the shared param.
         try out.writeIndent();
@@ -11101,6 +11186,30 @@ fn emitContinuationCase(
         try emitDestructureConsts(emitter, cont.destructure, dst);
         try emitter.write("\n");
     }
+    // Produce stage `! each i { f, g: e }` — emit `const f = i.f` for a pun,
+    // `const g = <expr>` for a named expr (`{ i }` pun emits `const i = i`).
+    if (cont.produce.len > 0 and cont.binding != null) {
+        for (cont.produce) |pf| {
+            if (std.mem.eql(u8, pf.name, "_")) continue;
+            try emitter.writeIndent();
+            try emitter.write("const ");
+            try writeBranchName(emitter, pf.name);
+            try emitter.write(" = ");
+            if (pf.type_text) |t| {
+                try emitter.write(lowerExprZig(emitter, ctx, t));
+            } else if (std.mem.eql(u8, pf.name, cont.binding.?)) {
+                try emitter.write(cont.binding.?);
+            } else {
+                try emitter.write(cont.binding.?);
+                try emitter.write(".");
+                try emitter.write(pf.name);
+            }
+            try emitter.write("; _ = &");
+            try writeBranchName(emitter, pf.name);
+            try emitter.write(";");
+        }
+        try emitter.write("\n");
+    }
 
     // Set current branch for tap matching (used by label_jump steps)
     const saved_branch = ctx.current_branch;
@@ -11505,6 +11614,76 @@ pub fn emitContinuationBody(
         }
     }
     try registerDestructureScopeNames(ctx, cont.destructure);
+    // Produce stage `! each i { f, g: expr }` — one `const` per field: a
+    // `name: expr` lowers the expr in the pre-stage scope, a bare `name`
+    // pun binds the element's field (`const f = i.f`). A pun on the bound
+    // element itself (`{ i }` where `i` is the binding) is a carry-through
+    // — the name is already bound, so nothing emits. A produced name that
+    // collides with a live binding (`{ i: i + 1 }` rebind) mints a
+    // site-unique const and renames its downstream reads via
+    // splice_binding_renames — the same mechanism the splice uses for
+    // producer/consumer collisions; the RHS text is emitted before the
+    // rename registers, so it still reads the pre-stage scope.
+    const produce_rename_depth = ctx.splice_binding_renames.items.len;
+    defer ctx.splice_binding_renames.shrinkRetainingCapacity(produce_rename_depth);
+    for (cont.produce) |pf| {
+        if (std.mem.eql(u8, pf.name, "_")) continue;
+        if (pf.type_text == null) {
+            if (cont.binding) |b| {
+                if (std.mem.eql(u8, pf.name, b)) continue;
+            }
+        }
+        var collides = false;
+        if (cont.binding) |b| collides = std.mem.eql(u8, pf.name, b);
+        if (!collides) {
+            for (ctx.zig_scope_bindings.items) |sb| {
+                if (std.mem.eql(u8, pf.name, sb)) {
+                    collides = true;
+                    break;
+                }
+            }
+        }
+        const emitted_name: []const u8 = if (collides) blk: {
+            const uniq = try std.fmt.allocPrint(ctx.allocator, "__koru_prod_{s}_{d}_{d}", .{ pf.name, cont.location.line, cont.location.column });
+            try ctx.splice_binding_renames.append(ctx.allocator, .{ .from = pf.name, .to = uniq });
+            break :blk uniq;
+        } else pf.name;
+        try emitter.writeIndent();
+        try emitter.write("const ");
+        try writeBranchName(emitter, emitted_name);
+        try emitter.write(" = ");
+        if (pf.type_text) |t| {
+            try emitter.write(lowerExprZig(emitter, ctx, t));
+        } else if (cont.binding) |b| {
+            try emitter.write(b);
+            try emitter.write(".");
+            try emitter.write(pf.name);
+        }
+        try emitter.write("; _ = &");
+        try writeBranchName(emitter, emitted_name);
+        try emitter.write(";\n");
+    }
+
+    // Post-produce `when` (`! each i { f } when f > 0`) — a guard in the
+    // PRODUCED scope, emitted after the consts and wrapping the arm body.
+    // (The pre-stage `when`, cont.condition, was already emitted by the
+    // splice before this body.) Produce-renamed names are rewritten so a
+    // rebind reads the new value (`{ i: i+1 } when i > 2` sees new `i`).
+    if (cont.post_condition) |pc| {
+        var cond_text: []const u8 = lowerExprZig(emitter, ctx, pc);
+        var cond_owned: ?[]u8 = null;
+        defer if (cond_owned) |o| ctx.allocator.free(o);
+        for (ctx.splice_binding_renames.items) |br| {
+            const rw = try codegen_utils.replaceIdentifier(ctx.allocator, cond_text, br.from, br.to);
+            if (cond_owned) |o| ctx.allocator.free(o);
+            cond_owned = @constCast(rw);
+            cond_text = cond_owned.?;
+        }
+        try emitter.write("if (");
+        try emitter.write(cond_text);
+        try emitter.write(") { ");
+    }
+    defer if (cont.post_condition != null) emitter.write("} ") catch {};
 
     // Zero-overhead control flow at depth: if a template transform set
     // inline_body on this continuation's invocation node (e.g. a nested `~for`
