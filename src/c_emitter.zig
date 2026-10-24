@@ -547,6 +547,13 @@ const Emitter = struct {
     needs_i128: bool = false,
     needs_u128: bool = false,
 
+    /// Capture cell names a `//@koru:stmt_scope` preamble declared —
+    /// `struct __koru_cap_<cell>` is the one named type the `.assignment`
+    /// lowering re-derives from `target` alone. A `.assignment` naming a
+    /// cell no preamble minted refuses rather than emitting a call into an
+    /// undeclared struct.
+    cap_cells: *std.StringHashMap(void),
+
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
     res_counter: usize = 0,
@@ -904,7 +911,14 @@ const Emitter = struct {
             // here too, and emitSite alone would miss it and call the [norun]
             // stub. Splice like emitFlow does, continuations resolved.
             const implf = flist.items[0];
-            if (implf.inline_body) |body| {
+            // A `//@koru:stmt_scope` preamble (~capture) is fn-local and the
+            // head call is consumed — emit it here, then walk only the
+            // dissolved continuations. A file-scope preamble on an impl is
+            // still dropped — const|c has no impl author today.
+            if (if (implf.preamble_code) |pre| stripStmtScopeMarker(pre) else null) |sp| {
+                try self.emitCapPreamble(sp, "    ");
+                try self.emitUnconsumedContinuations(implf.body.continuations, 0, "    ", .in_impl);
+            } else if (implf.inline_body) |body| {
                 if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
                     var consumed: u64 = 0;
                     try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), implf.body.continuations, "    ", .in_impl, &consumed);
@@ -1057,6 +1071,12 @@ const Emitter = struct {
 
     fn emitSite(self: *Emitter, site: *const ast.Continuation, indent: []const u8, ctx: SiteCtx) CEmitError!void {
         if (site.kind == .effect) return CEmitError.RefusedConstruct;
+        // A `.terminal` node on a named arm is the auto_discharge_inserter's
+        // synthesized NO-OP for a declared-but-absent optional branch
+        // (auto_discharge_inserter.zig:5444) — e.g. `| ?captured` after the
+        // ~capture transform consumed it. The arm fires nothing by
+        // construction; only an arm with a body is real tagged dispatch.
+        if (site.node != null and site.node.? == .terminal) return;
         if (site.branch.len != 0) {
             std.debug.print("error[KORU047]: C lane: branch arm `| {s}` — tagged dispatch is outside the first fragment\n", .{site.branch});
             return CEmitError.UnsupportedConstruct;
@@ -1626,6 +1646,38 @@ const Emitter = struct {
                 }
             },
             .inline_code => |text| try self.emitVerbatimLines(text, indent),
+            .assignment => |*asgn| {
+                // `captured { f: e, ... }` lowered by ~capture. Snapshot
+                // semantics (ruled 2026-07-02, pinned 320_102): every RHS
+                // reads the INCOMING cell, then all stores land — the
+                // temp-copy form keeps that ordering without needing a
+                // per-field C type: `__koru_snap` is the cell's own type,
+                // spelled by the `__koru_cap_<cell>` preamble convention.
+                if (!self.cap_cells.contains(asgn.target)) {
+                    std.debug.print("error[KORU047]: C lane: `.assignment` target `{s}` names no declared capture cell — a `//@koru:stmt_scope` preamble mints `struct __koru_cap_<cell>` first\n", .{asgn.target});
+                    return CEmitError.UnsupportedConstruct;
+                }
+                if (asgn.fields.len == 0) return 0;
+                if (asgn.fields.len == 1) {
+                    // Single field — no cross-field read is possible; the
+                    // direct store is the snapshot form.
+                    const f = asgn.fields[0];
+                    try self.writeFmt("{s}{s}.{s} = ", .{ indent, asgn.target, codegen_utils.cMemberName(self.allocator, f.name) });
+                    try self.writeExpr(f.expression_str orelse f.type);
+                    try self.write(";\n");
+                } else {
+                    const ind2 = try std.fmt.allocPrint(self.allocator, "{s}    ", .{indent});
+                    defer self.allocator.free(ind2);
+                    try self.writeFmt("{s}{{\n", .{indent});
+                    try self.writeFmt("{s}struct __koru_cap_{s} __koru_snap = {s};\n", .{ ind2, asgn.target, asgn.target });
+                    for (asgn.fields) |f| {
+                        try self.writeFmt("{s}__koru_snap.{s} = ", .{ ind2, codegen_utils.cMemberName(self.allocator, f.name) });
+                        try self.writeExpr(f.expression_str orelse f.type);
+                        try self.write(";\n");
+                    }
+                    try self.writeFmt("{s}{s} = __koru_snap;\n{s}}}\n", .{ ind2, asgn.target, indent });
+                }
+            },
             .terminal => {},
             .branch_constructor => |*bc| {
                 if (ctx != .in_impl) {
@@ -1790,6 +1842,23 @@ const Emitter = struct {
             try self.writeHostText(t);
             try self.write("\n");
         }
+    }
+
+    /// A stmt-scope preamble declares `struct __koru_cap_<cell> { … }
+    /// <cell> = { … };` — register each cell name so a later `.assignment`
+    /// node can prove its target was minted rather than emitting a store
+    /// into an undeclared struct.
+    fn emitCapPreamble(self: *Emitter, text: []const u8, indent: []const u8) CEmitError!void {
+        var it = std.mem.splitScalar(u8, text, '\n');
+        while (it.next()) |line| {
+            if (std.mem.indexOf(u8, line, "struct __koru_cap_")) |si| {
+                const rest = line[si + "struct __koru_cap_".len ..];
+                var end: usize = 0;
+                while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) end += 1;
+                try self.cap_cells.put(rest[0..end], {});
+            }
+        }
+        try self.emitVerbatimLines(text, indent);
     }
 
     /// Invocation → call statement. Args map to the event's declared input
@@ -2082,16 +2151,22 @@ const Emitter = struct {
     // -- flow emission ------------------------------------------------------
 
     fn emitFlow(self: *Emitter, flow: *const ast.Flow, flow_num: usize) CEmitError!void {
-        // Flow preamble at FILE scope: the only preamble a |c transform
-        // writes today is `const|c`'s `static const` declarations, which are
-        // module-scope values — inside the fn they would be invisible to
-        // sibling flows. A non-declaration preamble has no |c author yet
-        // (KORU121 guards the rest) and would fail loudly at the oracle.
+        // Flow preamble at FILE scope: `const|c`'s `static const`
+        // declarations are module-scope values — inside the fn they would be
+        // invisible to sibling flows. A `//@koru:stmt_scope` preamble is the
+        // other kind: a dissolving transform's (~capture's) per-call locals
+        // land at the head-call position INSIDE the fn, and the head call
+        // itself is consumed — the zig lane's `preamble replaces the call`
+        // (visitor_emitter.zig:3635). Only the dissolved continuations walk.
+        const stmt_pre = if (flow.preamble_code) |pre| stripStmtScopeMarker(pre) else null;
         if (flow.preamble_code) |pre| {
-            try self.emitVerbatimLines(pre, "");
+            if (stmt_pre == null) try self.emitVerbatimLines(pre, "");
         }
         try self.writeFmt("static void koru_flow_{d}(void) {{\n", .{flow_num});
-        if (flow.inline_body) |body| {
+        if (stmt_pre) |sp| {
+            try self.emitCapPreamble(sp, "    ");
+            try self.emitUnconsumedContinuations(flow.body.continuations, 0, "    ", .in_flow);
+        } else if (flow.inline_body) |body| {
             if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
                 var consumed: u64 = 0;
                 try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), flow.body.continuations, "    ", .in_flow, &consumed);
@@ -2121,6 +2196,18 @@ fn stripInlineStmtMarker(text: []const u8) []const u8 {
 /// flag is absent.
 fn stripFileScopeMarker(text: []const u8) ?[]const u8 {
     const marker = "//@koru:file_scope\n";
+    const t = std.mem.trimLeft(u8, text, " \t\r\n");
+    if (std.mem.startsWith(u8, t, marker)) return t[marker.len..];
+    return null;
+}
+
+/// `//@koru:stmt_scope` — the OTHER preamble scope: a dissolving transform
+/// (~capture) whose preamble is a per-call local, emitted at the head-call
+/// position inside the fn rather than at file scope, with the head call
+/// itself consumed (the zig lane's `preamble replaces the call` rule,
+/// visitor_emitter.zig:3635). Returns the text past the flag, or null.
+fn stripStmtScopeMarker(text: []const u8) ?[]const u8 {
+    const marker = "//@koru:stmt_scope\n";
     const t = std.mem.trimLeft(u8, text, " \t\r\n");
     if (std.mem.startsWith(u8, t, marker)) return t[marker.len..];
     return null;
@@ -2634,7 +2721,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     defer int_bindings.deinit();
     var slice_decls = std.StringArrayHashMap([]const u8).init(allocator);
     defer slice_decls.deinit();
+    var cap_cells = std.StringHashMap(void).init(allocator);
+    defer cap_cells.deinit();
     var em = Emitter{
+        .cap_cells = &cap_cells,
         .allocator = allocator,
         .buf = &buf,
         .events = &events,

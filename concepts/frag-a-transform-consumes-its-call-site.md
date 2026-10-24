@@ -53,3 +53,25 @@ transform consumed this call site": cheap, structural, and it asks the
 pipeline's own product rather than re-deriving which transform ran.
 Deliberately not inherited past the direct parent — a nested event's
 `!` arm inside a rendered arm is governed only by its own invocation.
+
+Evolved 2026-10-14 (session c-lane rung 12, ~capture): two more
+production-side facts.
+
+- `flow.preamble_code` is the dissolving transform's second marker —
+  the head invocation SURVIVES as an annotated husk (`@pass_ran`, same
+  path/args) while the preamble text is what the site lowers to. The
+  zig lane's contract is literal replacement (visitor_emitter.zig:3635);
+  the C lane needed the preamble split two ways — file-scope by default
+  (`const|c` static decls), statement-scope under `//@koru:stmt_scope`
+  (~capture's per-call cell). An emitter that emits the preamble AND
+  still walks the husk gets a `NoCProcBody` on a call that no longer
+  exists — the preamble check must come first.
+- Consumption is not total: `auto_discharge_inserter` grafts
+  `node == .terminal` tombstones for declared-but-absent OPTIONAL arms
+  (`| ?captured`) *after* the transform consumed them — a named arm
+  reappears on the dissolved site carrying a no-op node. A census
+  keyed on named arms over-reports; a dispatch emitter keyed on named
+  arms refuses a dispatch that by construction fires nothing. The
+  honest test is `node == .terminal`: the inserter's own marker for
+  "this arm is the absent-optional no-op" — skip it, and keep refusing
+  any named arm with a real body.

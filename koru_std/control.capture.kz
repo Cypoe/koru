@@ -37,6 +37,38 @@
 ! as *
 | ?captured *
 
+// C-lane helper — part-file top-level zig consts share the merged module's
+// scope, same convention as rings.new.kz's `R`.
+const CC = struct {
+
+    /// Seed value → (koru type, bare value). `v[T]` peels through
+    /// peelBaseType; `@as(T, v)` — the other typed spelling (320_027) —
+    /// splits on the first top-level comma. Untyped values return "" type:
+    /// a bare `0` has no width the C cell can promise.
+    fn peelTyped(value: []const u8) struct { ty: []const u8, val: []const u8 } {
+        const sl = @import("struct_literal");
+        const p = sl.peelBaseType(value);
+        if (p.type.len > 0) return .{ .ty = p.type, .val = p.value };
+        const t = std.mem.trim(u8, p.value, " \t");
+        if (std.mem.startsWith(u8, t, "@as(") and t[t.len - 1] == ')') {
+            const inner = t[4 .. t.len - 1];
+            var depth: usize = 0;
+            for (inner, 0..) |ch, i| {
+                switch (ch) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -= 1,
+                    ',' => if (depth == 0) return .{
+                        .ty = std.mem.trim(u8, inner[0..i], " \t"),
+                        .val = std.mem.trim(u8, inner[i + 1 ..], " \t"),
+                    },
+                    else => {},
+                }
+            }
+        }
+        return .{ .ty = "", .val = p.value };
+    }
+};
+
 ~[transform]proc capture|zig {
     const ast = @import("ast");
     const ast_functional = @import("ast_functional");
@@ -178,6 +210,9 @@
 
     // --- Assemble the new flow continuations: void chains so the REAL for / if
     //     templates run over the cell (no degradation). ---
+    // host_is_c is read twice: the `| captured` bind below and the cell
+    // preamble — one read of the build language, both spellings fall out.
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
     var new_conts = std.ArrayList(ast.Continuation).initCapacity(allocator, 2) catch unreachable;
 
     // (1) The `! as` body, flattened to a void chain. The cell is in scope from
@@ -196,9 +231,13 @@
     if (captured_cont) |cc| {
         // A `_` (or `_`-prefixed) read binding is a DISCARD: the user runs the
         // after-body without reading the cell — emit no binding at all
-        // (`const _ = cell;` is not legal Zig).
+        // (`const _ = cell;` is not legal Zig). The C twin spells the named
+        // cell type — `const` has no C equivalent and the cell is `struct
+        // __koru_cap_<cell>` by the preamble's convention.
         const bind_code = if (std.mem.startsWith(u8, result_name, "_"))
             allocator.dupe(u8, "") catch unreachable
+        else if (host_is_c)
+            std.fmt.allocPrint(allocator, "struct __koru_cap_{s} {s} = {s};", .{ cell_name, result_name, cell_name }) catch unreachable
         else
             std.fmt.allocPrint(allocator, "const {s} = {s};", .{ result_name, cell_name }) catch unreachable;
         const body_inner = allocator.alloc(ast.Continuation, 1) catch unreachable;
@@ -299,7 +338,51 @@
     // verbatim.
     const preamble = if (host_is_js)
         std.fmt.allocPrint(allocator, "let {s} = {s};", .{ cell_name, init_host }) catch unreachable
-    else if (is_struct_init) blk2: {
+    else if (host_is_c) blk_c: {
+        // The C cell is a per-call LOCAL — `//@koru:stmt_scope` lands it at
+        // the head-call position inside the fn (the file-scope default is
+        // const|c's static-decl home; a file-scope cell would share state
+        // across calls). `struct __koru_cap_<cell>` is the convention the
+        // .assignment lowering re-derives from `target` alone — one spelling,
+        // no registry, no ast change. The anonymous zig seed gets no C
+        // twin: every field needs a declared width, which means `v[T]` or
+        // `@as(T, v)` — a bare `0` is comptime_int, a promise the fragment
+        // cannot make.
+        if (!is_struct_init) {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "~capture of an existing binding (`capture {{ <var> }}`) names no C cell type — `typeof` is outside the first fragment", .{}) } };
+        }
+        const cgu = @import("codegen_utils");
+        var p = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+        var inits = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+        p.appendSlice(allocator, "//@koru:stmt_scope\nstruct __koru_cap_") catch unreachable;
+        p.appendSlice(allocator, cell_name) catch unreachable;
+        p.appendSlice(allocator, " { ") catch unreachable;
+        for (cell_fields, 0..) |cf, i| {
+            const pv = $mod.CC.peelTyped(cf.value);
+            const ct = cgu.cTypeOf(pv.ty) orelse {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "~capture seed `{s}` has no declared base type — the C cell needs `v[i64]` or `@as(i64, v)`", .{cf.name}) } };
+            };
+            const mem = cgu.cMemberName(allocator, cf.name);
+            p.appendSlice(allocator, ct) catch unreachable;
+            p.appendSlice(allocator, " ") catch unreachable;
+            p.appendSlice(allocator, mem) catch unreachable;
+            p.appendSlice(allocator, "; ") catch unreachable;
+            const cval = cgu.lowerKoruExpr(allocator, pv.val, .c, .koru_expr, null) catch {
+                return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "~capture seed `{s}` — value has no C lowering in the first fragment", .{cf.name}) } };
+            };
+            if (i > 0) inits.appendSlice(allocator, ", ") catch unreachable;
+            inits.appendSlice(allocator, ".") catch unreachable;
+            inits.appendSlice(allocator, mem) catch unreachable;
+            inits.appendSlice(allocator, " = ") catch unreachable;
+            inits.appendSlice(allocator, cval) catch unreachable;
+        }
+        p.appendSlice(allocator, "} ") catch unreachable;
+        p.appendSlice(allocator, cell_name) catch unreachable;
+        p.appendSlice(allocator, " = { ") catch unreachable;
+        p.appendSlice(allocator, inits.items) catch unreachable;
+        p.appendSlice(allocator, " };") catch unreachable;
+        break :blk_c p.toOwnedSlice(allocator) catch unreachable;
+    } else if (is_struct_init) blk2: {
         const type_name = std.fmt.allocPrint(allocator, "__KoruCaptureT_{s}", .{cell_name}) catch unreachable;
         var p = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
         p.appendSlice(allocator, "const ") catch unreachable;
