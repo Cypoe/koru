@@ -91,6 +91,20 @@ the emitter collapses `-`→`_`, so the spellings are one symbol. Same belief,
 read side: **any site crossing the declared↔emitted boundary translates, in
 either direction.**
 
+2026-10-24, the C lane repeated the partial-funnel defect on its own
+surface: `cMemberName` covered record fields, branch payloads, and
+capture-cell stores — every site that had *needed* it so far — while
+`struct <ev>_in` declarations, `__koru_in.<f>` bindings, and
+`.f =` call literals wrote `f.name` verbatim. `320_036`'s
+`{ outer-val: i32 }` emitted `int32_t outer-val;` — kebab→subtraction,
+a syntax error ccomp caught downstream in code the author never wrote.
+Same cross-product hole as the four injection copies: kebab names were
+exercised on this lane in decl positions that never crossed an input
+field, so the unmangled sites looked finished. The lane's rule now
+matches the parent's: a declared name reaching emitted text goes
+through the one spelling (`cMemberName` here), regardless of which
+struct kind carries it.
+
 Related:
 [[frag-the-safe-koru-identifier-surface-is-smaller-than-the-language-says]] —
 same wall seen from the author's side (keywords/primitives); this is the

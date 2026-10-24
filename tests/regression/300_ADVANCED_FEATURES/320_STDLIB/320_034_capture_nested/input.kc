@@ -1,0 +1,8 @@
+// C implementation facet. The Koru declarations live in the `input.kz`
+// companion (merged at import); this file holds the `|c` proc bodies
+// mirroring its `|zig` ones.
+
+~proc print-int|c {
+    __koru_stdout_write_i64(value);
+    __koru_stdout_write("\n");
+}

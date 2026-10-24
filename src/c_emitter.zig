@@ -782,7 +782,7 @@ const Emitter = struct {
                         std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
                         return CEmitError.UnsupportedConstruct;
                     };
-                    try self.writeFmt("    {s} {s};\n", .{ ct, f.name });
+                    try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
                 }
                 try self.write("};\n");
             }
@@ -810,7 +810,7 @@ const Emitter = struct {
                     std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
                     return CEmitError.UnsupportedConstruct;
                 };
-                try self.writeFmt("    {s} {s};\n", .{ ct, f.name });
+                try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
             }
             try self.write("};\n");
         }
@@ -1061,7 +1061,8 @@ const Emitter = struct {
                 return CEmitError.UnsupportedConstruct;
             };
             try self.int_bindings.put(f.name, ct);
-            try self.writeFmt("    {s} const {s} = {s}.{s};\n", .{ ct, f.name, INPUT_PARAM, f.name });
+            const cm = codegen_utils.cMemberName(self.allocator, f.name);
+            try self.writeFmt("    {s} const {s} = {s}.{s};\n", .{ ct, cm, INPUT_PARAM, cm });
         }
     }
 
@@ -1393,7 +1394,7 @@ const Emitter = struct {
                 return CEmitError.UnsupportedConstruct;
             };
             try self.int_bindings.put(f.name, ct);
-            try self.writeFmt("{s}{s} const {s} = ", .{ inner, ct, f.name });
+            try self.writeFmt("{s}{s} const {s} = ", .{ inner, ct, codegen_utils.cMemberName(self.allocator, f.name) });
             var argbuf: std.ArrayList(u8) = .empty;
             const saved_buf = self.buf;
             self.buf = &argbuf;
@@ -1645,7 +1646,19 @@ const Emitter = struct {
                     return 0;
                 }
             },
-            .inline_code => |text| try self.emitVerbatimLines(text, indent),
+            .inline_code => |text| {
+                // A nested-site preamble dissolves into an `.inline_code`
+                // node (transform_pass_runner's preamble→inline_code
+                // contract — the husk is already dropped). If it carries
+                // the stmt_scope marker it is a capture cell declaration:
+                // register the cell name or a later `.assignment` cannot
+                // prove its target was minted.
+                if (stripStmtScopeMarker(text)) |sp| {
+                    try self.emitCapPreamble(sp, indent);
+                } else {
+                    try self.emitVerbatimLines(text, indent);
+                }
+            },
             .assignment => |*asgn| {
                 // `captured { f: e, ... }` lowered by ~capture. Snapshot
                 // semantics (ruled 2026-07-02, pinned 320_102): every RHS
@@ -1913,7 +1926,7 @@ const Emitter = struct {
             try self.writeFmt("(struct {s}_in){{ ", .{name});
             for (event.input.fields, 0..) |f, fi| {
                 if (fi > 0) try self.write(", ");
-                try self.writeFmt(".{s} = ", .{f.name});
+                try self.writeFmt(".{s} = ", .{codegen_utils.cMemberName(self.allocator, f.name)});
                 try self.emitArgForField(inv, f, fi);
             }
             try self.write(" }");

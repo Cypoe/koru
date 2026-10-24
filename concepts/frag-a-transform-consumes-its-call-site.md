@@ -75,3 +75,18 @@ production-side facts.
   honest test is `node == .terminal`: the inserter's own marker for
   "this arm is the absent-optional no-op" — skip it, and keep refusing
   any named arm with a real body.
+
+Evolved 2026-10-24 (session c-lane rung 15, nested ~capture): the
+preamble-replaces-call contract has TWO channels, and the marker — not
+the channel — is the contract. At flow level a dissolving transform
+leaves `flow.preamble_code` beside the `@pass_ran` husk. At a NESTED
+site (capture inside `| _`'s arm, or inside an outer capture's `! as`),
+transform_pass_runner migrates the preamble onto an `.inline_code` node
+and drops the husk itself — same semantics, different envelope. An
+emitter that learned the flow-level shape alone emits the nested
+preamble verbatim and never registers the cell: `.assignment` targets
+fail "names no declared capture cell" even though the declaration text
+was emitted two lines above. The `//@koru:stmt_scope` marker is the
+production-side evidence both channels share — keying on it rather
+than on where the text arrived is what makes nested capture the same
+contract as top-level capture instead of a second implementation.
