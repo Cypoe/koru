@@ -162,6 +162,18 @@ const R = struct {
         };
     }
 
+    // C-identifier fold for transform-minted C text: the c emitter's
+    // `mangle` maps every byte outside [a-zA-Z0-9_] to '_'.
+    fn cFoldIdent(alloc: std.mem.Allocator, s: []const u8) []const u8 {
+        const out = alloc.dupe(u8, s) catch unreachable;
+        for (out) |*ch| {
+            const ok = (ch.* >= 'a' and ch.* <= 'z') or (ch.* >= 'A' and ch.* <= 'Z') or
+                (ch.* >= '0' and ch.* <= '9') or ch.* == '_';
+            if (!ok) ch.* = '_';
+        }
+        return out;
+    }
+
     fn synthOp(
         allocator: std.mem.Allocator,
         prog: *const ast.Program,
@@ -171,6 +183,7 @@ const R = struct {
         branches: []const ast.Branch,
         return_type: ?[]const u8,
         proc_body: []const u8,
+        c_body: ?[]const u8,
         appended: *std.ArrayList(ast.Item),
     ) void {
         const retain_ann = blk_ra: {
@@ -198,6 +211,16 @@ const R = struct {
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } }) catch unreachable;
+        if (c_body) |cb| {
+            appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = path,
+                .body = ast.Source{ .text = cb, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                .target = allocator.dupe(u8, "c") catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+        }
     }
 
     // ---- The module anchor ----------------------------------------------
@@ -245,9 +268,22 @@ const R = struct {
             .location = flow.location,
             .module = allocator.dupe(u8, module_name) catch unreachable,
         } };
-        const grown = allocator.alloc(ast.Item, mod.items.len + 1) catch unreachable;
+        // The anchor is [retain] — the c lane reaches it and demands a |c
+        // body. It's a marker, not a callable op: the body is an empty
+        // return, minted alongside so module retention doesn't read as a
+        // missing impl.
+        const c_item = ast.Item{ .proc_decl = ast.ProcDecl{
+            .path = mkPath(allocator, module_name, "__rings_anchor"),
+            .body = ast.Source{ .text = "return;", .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+            .annotations = &[_][]const u8{},
+            .target = allocator.dupe(u8, "c") catch unreachable,
+            .location = flow.location,
+            .module = allocator.dupe(u8, module_name) catch unreachable,
+        } };
+        const grown = allocator.alloc(ast.Item, mod.items.len + 2) catch unreachable;
         @memcpy(grown[0..mod.items.len], mod.items);
         grown[mod.items.len] = item;
+        grown[mod.items.len + 1] = c_item;
         @constCast(mod).items = grown;
     }
 };
@@ -420,9 +456,53 @@ const R = struct {
             "const __KoruRingT_{s} = koru_std.koru_rings.MpmcRing({s}, {d});\nvar __koru_ring_{s}: __KoruRingT_{s} = __KoruRingT_{s}.init();\n",
             .{ ring_name, RL.zigFieldType(allocator, elem_type), capacity, ring_name, ring_name, ring_name },
         ) catch unreachable) catch unreachable;
-        appended.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
-            .code = sb.toOwnedSlice(allocator) catch unreachable,
+        // A host_line, not inline_code: InlineCode has no target field and
+        // the c emitter prints top-level inline_code verbatim. The .k
+        // location keeps the dialect null — zig-only emission, invisible
+        // to every other lane's host-line pass.
+        appended.append(allocator, ast.Item{ .host_line = ast.HostLine{
+            .content = sb.toOwnedSlice(allocator) catch unreachable,
             .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        } }) catch unreachable;
+    }
+
+    // ---- The C lane's sequential cell + `|c` op bodies. The Vyukov MPMC
+    // cell is the native runtime's; what the ccomp oracle verifies is the
+    // sequential contract — a bounded FIFO with `full`/`none` at the edges —
+    // not the atomics. Only scalar elements have a C spelling; a proto
+    // element mints nothing here and the generated event's `value: Proto`
+    // field keeps its honest no-C-type refusal. ----
+    var c_cell: ?[]const u8 = null;
+    var cenq_body: ?[]const u8 = null;
+    var cdeq_body: ?[]const u8 = null;
+    if (!is_proto_elem) blk: {
+        const cgu = @import("codegen_utils");
+        const ect = cgu.cTypeOf(elem_type) orelse break :blk;
+        const rnf = R.cFoldIdent(allocator, ring_name);
+        const cmod = R.cFoldIdent(allocator, ast_functional.moduleHome(program, flow) orelse flow.module);
+        const cenq = std.fmt.allocPrint(allocator, "{s}___ring_{s}_enqueue", .{ cmod, rnf }) catch unreachable;
+        const cdeq = std.fmt.allocPrint(allocator, "{s}___ring_{s}_dequeue", .{ cmod, rnf }) catch unreachable;
+        c_cell = std.fmt.allocPrint(allocator,
+            "static {s} __koru_ring_{s}_buf[{d}];\nstatic uintptr_t __koru_ring_{s}_head = 0;\nstatic uintptr_t __koru_ring_{s}_tail = 0;\nstatic uintptr_t __koru_ring_{s}_count = 0;",
+            .{ ect, rnf, capacity, rnf, rnf, rnf },
+        ) catch unreachable;
+        cenq_body = std.fmt.allocPrint(allocator,
+            "if (__koru_ring_{s}_count >= {d}) return (struct {s}_res){{ .tag = {s}_tag_full }};\n__koru_ring_{s}_buf[__koru_ring_{s}_head] = value;\n__koru_ring_{s}_head = (__koru_ring_{s}_head + 1) & {d};\n__koru_ring_{s}_count += 1;\nreturn (struct {s}_res){{ .tag = {s}_tag_ok }};",
+            .{ rnf, capacity, cenq, cenq, rnf, rnf, rnf, rnf, capacity - 1, rnf, cenq, cenq },
+        ) catch unreachable;
+        cdeq_body = std.fmt.allocPrint(allocator,
+            "if (__koru_ring_{s}_count == 0) return (struct {s}_res){{ .tag = {s}_tag_none }};\n{s} __v = __koru_ring_{s}_buf[__koru_ring_{s}_tail];\n__koru_ring_{s}_tail = (__koru_ring_{s}_tail + 1) & {d};\n__koru_ring_{s}_count -= 1;\nreturn (struct {s}_res){{ .tag = {s}_tag_some, .some = __v }};",
+            .{ rnf, cdeq, cdeq, ect, rnf, rnf, rnf, rnf, capacity - 1, rnf, cdeq, cdeq },
+        ) catch unreachable;
+    }
+    if (c_cell) |cc| {
+        appended.append(allocator, ast.Item{ .host_line = ast.HostLine{
+            .content = cc,
+            // The `.kc` name routes this line to the c lane alone — the zig
+            // lane's hostLineRoutesToZig drops it, the c census treats it
+            // as authored-for-target text.
+            .location = .{ .file = "__koru_rings_gen.kc", .line = flow.location.line, .column = flow.location.column },
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } }) catch unreachable;
     }
@@ -442,7 +522,7 @@ const R = struct {
             "if (__koru_ring_{s}.tryEnqueue(value)) return .ok;\nreturn .full;",
             .{ring_name},
         ) catch unreachable;
-        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_enqueue", .{ring_name}) catch unreachable, in, brs, null, body, &appended);
+        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_enqueue", .{ring_name}) catch unreachable, in, brs, null, body, cenq_body, &appended);
     }
 
     // ---- `__ring_<n>_dequeue` {} | some Elem | none ----
@@ -454,7 +534,7 @@ const R = struct {
             "if (__koru_ring_{s}.tryDequeue()) |__v| return .{{ .some = __v }};\nreturn .none;",
             .{ring_name},
         ) catch unreachable;
-        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_dequeue", .{ring_name}) catch unreachable, &.{}, brs, null, body, &appended);
+        R.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__ring_{s}_dequeue", .{ring_name}) catch unreachable, &.{}, brs, null, body, cdeq_body, &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/rings: '{s}' declared ({s}: {s}, cap {d})", .{ ring_name, elem_label, elem_type, capacity }) catch unreachable;

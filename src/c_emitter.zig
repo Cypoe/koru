@@ -225,9 +225,11 @@ fn axisRefusalItems(
             .module_decl => |*m| {
                 // Transforms consume their invocations before emission (pump flows are
                 // rewritten wholesale), so the durable concurrency evidence is the
-                // merged module itself: importing std.pump / std.rings / std.threading
+                // merged module itself: importing std.pump / std.threading
                 // leaves a module_decl whose path names the family. Presence-scoped,
                 // not use-scoped — stricter than the axis but always sound.
+                // std.rings is absent — its transform mints sequential ops with
+                // |c bodies, so the import alone is not concurrency evidence.
                 if (isConcurrencyModule(m.logical_name) or isConcurrencyModule(m.canonical_path)) {
                     if (census.concurrency == null) census.concurrency = m.location;
                 }
@@ -315,8 +317,16 @@ fn axisRefusalBranches(branches: []const ast.NamedBranch, census: *AxisCensus, c
 
 /// pump / rings / worker.spawn — the concurrency axis. Matches the module
 /// qualifier (std.pump, std.rings) or a `worker`/`spawn` segment pair.
+/// std.rings' *import* is admitted (the transform mints sequential ops with
+/// |c bodies); the call-path check below stays — a rings-qualified call that
+/// survived the transform refused is better than an undefined symbol.
 fn isConcurrencyModule(name: []const u8) bool {
-    const families = [_][]const u8{ "pump", "rings", "threading", "worker" };
+    // `rings` is out of this family: std/rings is a comptime transform that
+    // synthesizes sequential ring ops (a `.kc`-routed bounded FIFO cell the
+    // oracle verifies — the Vyukov atomics are the native lane's). `pump`,
+    // `threading`, and `worker.spawn` remain real concurrency: no
+    // sequential C model exists for them.
+    const families = [_][]const u8{ "pump", "threading", "worker" };
     var it = std.mem.tokenizeAny(u8, name, "./:_\\");
     while (it.next()) |seg| {
         for (families) |fam| {

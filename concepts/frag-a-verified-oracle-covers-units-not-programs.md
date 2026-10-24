@@ -302,3 +302,44 @@ the same honest wall `140_019` landed on. `!`-bearing events whose
 procs are Koru-impls (templates) rather than `|c` bodies are the next
 adjacent surface, not a silent gap: `cProcOf` only returns `|c`
 bodies.
+
+## Evolve 2026-10-24 — std/rings: the concurrency axis was name-scoped; the transform's sequential ops are the C-fragment object
+
+The concurrency axis refused on the *import* — `isConcurrencyModule`
+matched the `rings` segment of `std.rings`'s module_decl, before the
+transform's rewrite was even considered. What survives the transform
+is not a concurrent program: `std/rings:new` mints two ordinary
+ternary events (`enqueue | ok | full`, `dequeue | some | none`) plus
+a storage cell. The C lane now sees exactly that — the family's name
+is gone from `isConcurrencyModule`, and the call-path check keeps a
+safety net for rings-qualified calls that escape the transform.
+
+The carve-out is real mechanism, not a flag flip. `InlineCode` has
+no target field and the c emitter prints top-level inline_code
+verbatim — the Vyukov MPMC cell would have landed in C output. The
+zig cell moved to a dialect-null `host_line` (zig-only by routing);
+the C cell is a `.kc`-routed `host_line` minted by the same
+transform: a sequential bounded FIFO (`buf[cap]`, head/tail/count,
+pow2 mask — the sequential contract the oracle verifies, not the
+atomics). `synthOp` now mints a `|c` proc beside each `|zig` one,
+gated on `codegen_utils.cTypeOf(elem_type)` — proto elements mint
+nothing and keep their honest no-C-type refusal. The `[retain]`
+anchor carries a `return;` `|c` body so module retention doesn't
+read as a missing impl. The module-name mangling is reproduced in
+the transform via a shared fold — `app_lib___ring_feed_enqueue`
+style names verify against `115_051`'s imported-module ring.
+
+Measured: 320_090/103/175 + 115_051 emit and print correctly through
+ccomp (`First: 42`, `none on empty`, `full at capacity`,
+`mod popped 7/8`). The supervised rows (320_110-113) moved to honest
+`label_jump`/KORU161 walls — supervision is still outside; 420_006
+keeps its concurrency refusal via pump/channel evidence;
+`std.threading` and `worker.spawn` still flag by name. One casualty
+worth naming: the axis had been doing accidental duty for
+non-concurrency tests importing `std/rings` transitively (699_*,
+020_064-adjacent) — they now fall through to their real walls
+(record returns, host lines), which is where they belonged.
+
+The zig lane's `a.out` is unchanged — same `First: 42`. The C cell
+is an oracle for the sequential contract only; nothing here claims
+the Vyukov atomics for CompCert.
