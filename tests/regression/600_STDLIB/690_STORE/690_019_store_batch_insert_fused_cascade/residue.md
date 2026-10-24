@@ -64,10 +64,18 @@ in one apply.
 
 ## Rulings this pin waits on
 
-- **O9 sibling (NEW):** does a batch fire per-row watches N times after the
-  fused apply, or once with a plural payload (`! inserted rows` — spelling
-  provisional)? Lean: plural arm, per-row as the degenerate case — the shape
-  that keeps the fused fast path honest. Genuine semantics call, Lars's.
+- **O9 sibling — RULED 2026-10-24:** once per apply, payload shaped like
+  the write. A batch insert is one apply → one event carrying the plural
+  delta; a scalar write degenerates to today's `{old, new}`. Rationale:
+  the apply is the atomicity unit, so per-row fires would let watchers
+  observe states that never existed — and the honest default is also the
+  fast path (no per-row dispatch inside a fused loop). Per-row access
+  lives in the handler (`rows |> each`), not in the event vocabulary.
+  **Deferred challenge (Lars):** granularity override via an annotation —
+  possibly a *binding* annotation lane (`r[mutable]` precedent: an arm
+  like `! persist[per_row]`), not only type annotations — whether tors
+  should express delivery conventions in binding annotations. Parked;
+  no consumer yet.
 - **Batch-insert surface spelling:** uninvented. Do not write it in a test
   until walked.
 - **Edge-classification rules** (parallel/fold/ordered) as part of the

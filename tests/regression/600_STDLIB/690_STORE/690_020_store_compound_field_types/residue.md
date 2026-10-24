@@ -53,10 +53,14 @@ not invention.
 
 A scalar column's watch fires on a value change with `{old, new}` scalars.
 What does a *vec3* column's watch observe — whole-vector change (one event,
-vector payload) or per-lane (three events)? Lean: whole-vector — a field is
-the unit of write (`stored { game[r].pos: ... }`), so it is the unit of
-observation; per-lane granularity is a query/projection concern, not an
-event-vocabulary concern. Genuine ruling, Lars's.
+vector payload) or per-lane (three events)? **RULED 2026-10-24: whole-vector,
+once per apply, payload shaped like the write** — a field is the unit of
+write, so it is the unit of observation; per-lane granularity is a
+query/projection concern, not an event-vocabulary concern. Reinforced by the
+tier-2/3 measurement below (compound fields flatten to leaf columns — there
+is no vec3 cell to watch). **Deferred challenge:** per-lane delivery as an
+optional annotation on the declaration (see 690_019's deferred note —
+binding-annotation lane is a candidate).
 
 ## Spelling — DO NOT INVENT
 
