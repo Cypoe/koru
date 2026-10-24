@@ -1,0 +1,93 @@
+// Koru Standard Library: target — the backend target catalog.
+//
+// Companion to `compiler:emission` (the overwritable coordinate tor): this
+// module owns the DECLARED half of a backend — the data rows its dispatch
+// arms consume. `std/emit` (the walker) owns the engine half; this file is
+// policy-free: it defines the row vocabulary and the catalog merge, never
+// which targets exist or what a spelling means.
+//
+// Mirrors std/realize: data lives in the AST as `[comptime|norun]` sites,
+// harvested after the parse by the command/emission consumer. A target is
+// a catalog entry, not a module — the ruling is
+// concepts/frag-a-target-is-a-catalog-entry-not-a-module.md and the shape
+// is docs/std-target.md.
+//
+// Declaration shape (the invariants idiom):
+//
+//   ~std/target:target(c) { "facet": ".kc", "artifact": "output_emitted.c",
+//                           "toolchain": "ccomp -fstruct-passing" }
+//   ~std/target:type(c)    { "i64": "long long", "u8": "uint8_t",
+//                            "string": "const char *" }
+//   ~std/target:name(c)    { "member": "kebab->_", "payload_tag": "__ktag" }
+//   ~std/target:builtin(c) { "@max": "__koru_max_ll", "@min": "__koru_min_ll" }
+//   ~std/target:prelude(c) { ...preamble text... }
+//   ~std/target:fragment(c){ "refuses": ["resumable-!", "host-lines", ...] }
+//
+// Each row verb is keyed on the target name in its site arg — the same
+// site-arg idiom `row` uses for `iface`. Rows with the same (verb, target)
+// MERGE; contradictory bindings on one key refuse loudly, never pick a
+// winner silently.
+
+~[comptime]
+
+// A backend target's identity — arm name, facet extension, emitted
+// artifact name, and the toolchain string the oracle runs. One row per
+// target; a duplicate `target(<name>)` site with a different value on the
+// same key is a contradiction refusal, not a merge.
+~[comptime|norun]pub tor target { name: Expression, source: Source }
+
+// The type table: Koru type text -> host spelling. Cell-minting schemes
+// live here too as entries whose value names a mint rule (`*X` ->
+// `struct X *`, `[]T` -> `__koru_slice_<tag>{ptr,len}`, `i128` ->
+// `{lo,hi}`) — a rule name, not expanded text; the walker owns expansion.
+~[comptime|norun]pub tor type { name: Expression, source: Source }
+
+// Naming scheme rows: mangle/member/payload conventions as key->rule
+// data. `kebab->_` means cMemberName's fold, `__ktag` means the payload
+// tag member's spelling — the walker names the convention; the catalog
+// names the lane's choice.
+~[comptime|norun]pub tor name { name: Expression, source: Source }
+
+// Builtin table: `@foo` -> spelling-or-rule, including refusal-shaped
+// entries (`"*%": "refuse-unless-declared-width"` — the boundary is data).
+~[comptime|norun]pub tor builtin { name: Expression, source: Source }
+
+// The preamble: includes + helper bodies, verbatim host text. One block
+// per target — a second `prelude(<name>)` site appends, order-declared.
+~[comptime|norun]pub tor prelude { name: Expression, source: Source }
+
+// The promise boundary: which constructs this target names as refusals.
+// The catalog keeps these explicit — a fragment row is the arm's honest
+// scope, and the walker's KORU047 diagnostics should read like them.
+~[comptime|norun]pub tor fragment { name: Expression, source: Source }
+
+const std = @import("std");
+const ast = @import("ast");
+
+// ============================================================================
+// CATALOG TYPES — the declared target vocabulary
+// ============================================================================
+
+pub const TargetDecl = struct {
+    name: []const u8 = "",        // arm key: "c", "cs", "js", "zig"
+    facet: []const u8 = "",       // ".kc"
+    artifact: []const u8 = "",    // "output_emitted.c"
+    toolchain: []const u8 = "",   // "ccomp -fstruct-passing"
+};
+
+// One row verb's bindings for one target — a string->string table because
+// every row is a lookup, and the lookup's VALUE is either literal spelling
+// or a rule name the walker interprets. Keeping values opaque strings is
+// the realize lesson: the catalog stays honest about what is data and
+// what is mechanism.
+pub const RowTable = struct {
+    target: []const u8,
+    verb: []const u8,   // "type" | "name" | "builtin" | "prelude" | "fragment"
+    entries: std.StringArrayHashMap([]const u8),
+    order: std.ArrayList([]const u8), // source order — prelude appends ride it
+};
+
+pub const Catalog = struct {
+    targets: std.StringArrayHashMap(TargetDecl),
+    rows: std.ArrayList(RowTable),
+};
