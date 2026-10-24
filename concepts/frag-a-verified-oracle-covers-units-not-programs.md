@@ -378,3 +378,36 @@ across three events), 241/242/210_025 (record produce + arg literals),
 320_101 (proto-element ring) — all emit, ccomp `-fstruct-passing`
 verifies byte-identical output, zig/cs lanes hold. 699_001 refuses
 honestly on `i128` — the next wall, not a record problem.
+
+## Evolve 2026-10-24 — the channel's sequential contract is its ring plus a close bit; `i128` is a two-word cell
+
+`std/channel` was never in the concurrency families — only `pump`,
+`threading`, `worker`, and the `rings`-path net. What a non-custodial
+channel's transform leaves behind is rings rung 9's shape at slightly
+larger scale: per-kind bounded FIFO (`buf[cap]`, head/tail/count, pow2
+mask — capacity is pow2-enforced at the decl), an `int` close bit, and
+five ops whose C bodies are the zig text transliterated — send checks
+closed-then-capacity, recv dequeues-then-checks-closed (a closed ring
+still drains), close sets the bit and fans out to the closed-arm units,
+step does the competing dequeue per kind arm, live asks closed-and-
+drained. The units are ordinary Koru impl flows — the C emitter lowers
+them natively; only the storage ops needed `|c` twins.
+
+Two traps the rung-9 pattern had already solved: zig storage rode
+`inline_code` (C prints it verbatim — moved to dialect-null host_line),
+and an `items[len-2]` decl lookup assumed decl-then-proc — now
+decl-then-two-procs, captured by index instead.
+
+`i128` is smaller than it looked: user-level spelling is nonexistent —
+the type is the pump wait contract (`-> i128` re-poll ns, the
+`{ fd, wait_ns }` record). CompCert refuses `__int128` outright, so the
+representation is a two-word cell `{ lo, hi }` — signatures and literal
+initializers work; genuine 128-bit arithmetic would produce ill-typed C
+and fail at ccomp, a loud boundary, never a silent i64 narrowing.
+
+Measured: 699_001–005 emit and verify byte-identical through ccomp —
+proto-element roundtrip, `| full` at capacity, `| none` on empty,
+`| closed` on send-after-close, and the drain-after-close edge. Pump-
+joined consumers (006/007/010/013/022–034) keep their concurrency-axis
+refusal — a custodial channel's delivery point IS a pump, which is real
+concurrency. KORU030/161 pins unchanged. Zig lane: 6/6 parity green.

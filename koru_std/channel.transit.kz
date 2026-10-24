@@ -28,8 +28,15 @@ const CT = struct {
             {
                 // take: whole-value param when a `<state!>` producer sent,
                 // plus one consuming param per owned leaf (channel.leaves).
+                // The |c twin is the same discards spelled `(void)x;` — the
+                // custody mint is a compile-time concern; at runtime the op
+                // is the identity it literally says.
                 const spec = CL.takeFields(alloc, k.proto, state, leaves);
-                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_take_{s}_{s}", .{ chan_name, k.name }) catch unreachable, spec.fields, &.{}, null, null, spec.body, appended);
+                var c_take = std.ArrayList(u8).initCapacity(alloc, 32) catch unreachable;
+                for (spec.fields) |f| {
+                    c_take.appendSlice(alloc, std.fmt.allocPrint(alloc, "(void){s};\n", .{f.name}) catch unreachable) catch unreachable;
+                }
+                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_take_{s}_{s}", .{ chan_name, k.name }) catch unreachable, spec.fields, &.{}, null, null, spec.body, c_take.items, appended);
             }
             {
                 const of = alloc.alloc(ast.Field, 1) catch unreachable;
@@ -46,18 +53,21 @@ const CT = struct {
                     std.fmt.allocPrint(alloc, "{s}!", .{st}) catch unreachable
                 else
                     null;
-                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_obligate_{s}_{s}", .{ chan_name, k.name }) catch unreachable, of, &.{}, k.proto, ret_ph, "return p;", appended);
+                const obligate_decl_idx = appended.items.len;
+                CH.synthOp(alloc, prog, flow, std.fmt.allocPrint(alloc, "__channel_obligate_{s}_{s}", .{ chan_name, k.name }) catch unreachable, of, &.{}, k.proto, ret_ph, "return p;", "return p;", appended);
                 // The obligate mint is the transit boundary's receiving
                 // edge: its `<state!>` return is custody, not a plain
                 // obligation — a consumer arm that drops it must refuse
                 // (KORU030), never auto-settle at the leaf (699_027). The
-                // `custody` annotation is how the inserter knows. synthOp
-                // appends decl-then-proc, so the decl is items[len-2].
+                // `custody` annotation is how the inserter knows. The decl
+                // index is captured before synthOp — it may append two or
+                // three items (zig proc + optional |c twin), so indexing
+                // from the end is wrong.
                 {
                     const anns = alloc.alloc([]const u8, 2) catch unreachable;
                     anns[0] = alloc.dupe(u8, "retain") catch unreachable;
                     anns[1] = alloc.dupe(u8, "custody") catch unreachable;
-                    appended.items[appended.items.len - 2].event_decl.annotations = anns;
+                    appended.items[obligate_decl_idx].event_decl.annotations = anns;
                 }
             }
         }

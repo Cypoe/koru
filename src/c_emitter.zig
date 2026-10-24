@@ -542,6 +542,10 @@ const Emitter = struct {
     /// graph (`A` holds `B`, `B` holds `A`) can never mint; the cap
     /// refuses it rather than recursing.
     proto_depth: usize = 0,
+    /// `i128`/`u128` named at least one type position — the two-word
+    /// cells mint once in the def block.
+    needs_i128: bool = false,
+    needs_u128: bool = false,
 
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
@@ -722,6 +726,22 @@ const Emitter = struct {
         // each other and can never collide with a proto-typedef'd name.
         if (std.mem.eql(u8, t, "Expression")) return "struct __koru_comptime_Expression";
         if (std.mem.eql(u8, t, "Source")) return "struct __koru_comptime_Source";
+        // `i128`/`u128` — the oracle's C has no `__int128` (CompCert refuses
+        // the keyword outright), so the representation is the honest
+        // two-word cell, two's-complement hi/lo. Only the *type* is
+        // promised: the pump wait contract (`-> i128` re-poll ns, the
+        // `{ fd, wait_ns }` record) needs a signature and a literal
+        // initializer, both of which this spells; genuine 128-bit
+        // arithmetic in program text produces ill-typed C and fails at
+        // ccomp — a loud boundary, never a silent narrowing to i64.
+        if (std.mem.eql(u8, t, "i128")) {
+            self.needs_i128 = true;
+            return "struct __koru_i128";
+        }
+        if (std.mem.eql(u8, t, "u128")) {
+            self.needs_u128 = true;
+            return "struct __koru_u128";
+        }
         return null;
     }
 
@@ -2700,6 +2720,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     for (slice_decls.keys(), slice_decls.values()) |tag, member| {
         try em.writeFmt("struct __koru_slice_{s} {{ {s} *ptr; uintptr_t len; }};\n", .{ tag, member });
     }
+    // The two-word 128-bit cells — leaf types, so they precede any
+    // proto/record def that might name one as a field.
+    if (em.needs_i128) try em.write("struct __koru_i128 { unsigned long long lo; long long hi; };\n");
+    if (em.needs_u128) try em.write("struct __koru_u128 { unsigned long long lo; unsigned long long hi; };\n");
     try emitCellStructDefs(&em);
 
     try emitCHostLines(&em, program.items);

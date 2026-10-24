@@ -123,6 +123,19 @@ const CH = struct {
         return std.fmt.allocPrint(alloc, "__channel_decl_{s}", .{name}) catch unreachable;
     }
 
+    // `a-b`/`a.b` → `a_b` — the C emitter's own identifier fold, reproduced
+    // so the generated |c bodies can spell the mangled fn/res/tag names
+    // (rings.new.kz's helper, restated: module-local consts are private).
+    fn cFoldIdent(alloc: std.mem.Allocator, s: []const u8) []const u8 {
+        const out = alloc.dupe(u8, s) catch unreachable;
+        for (out) |*ch| {
+            const ok = (ch.* >= 'a' and ch.* <= 'z') or (ch.* >= 'A' and ch.* <= 'Z') or
+                (ch.* >= '0' and ch.* <= '9') or ch.* == '_';
+            if (!ok) ch.* = '_';
+        }
+        return out;
+    }
+
     fn markerItem(alloc: std.mem.Allocator, flow: *const ast.Flow, text: []const u8) ast.Item {
         return ast.Item{ .host_line = ast.HostLine{
             .content = std.fmt.allocPrint(alloc, "// {s}", .{text}) catch unreachable,
@@ -383,7 +396,9 @@ const CH = struct {
     // Emission helpers.
     // ------------------------------------------------------------------
 
-    // A generated tor + `|zig` proc — list.free.kz's synthOp, restated.
+    // A generated tor + `|zig` proc — list.free.kz's synthOp, restated,
+    // plus an optional `|c` twin (rings.new.kz's convention: the sequential
+    // cell's contract spelled in C; null leaves the honest NoCProcBody).
     fn synthOp(
         allocator: std.mem.Allocator,
         prog: *const ast.Program,
@@ -394,6 +409,7 @@ const CH = struct {
         return_type: ?[]const u8,
         return_phantom: ?[]const u8,
         proc_body: []const u8,
+        c_body: ?[]const u8,
         appended: *std.ArrayList(ast.Item),
     ) void {
         const retain_ann = blk_ra: {
@@ -422,6 +438,16 @@ const CH = struct {
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } }) catch unreachable;
+        if (c_body) |cb| {
+            appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = path,
+                .body = ast.Source{ .text = cb, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                .target = allocator.dupe(u8, "c") catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+        }
     }
 
     fn emptyBranch(allocator: std.mem.Allocator, name: []const u8) ast.Branch {
@@ -499,9 +525,22 @@ const CH = struct {
             .location = flow.location,
             .module = allocator.dupe(u8, module_name) catch unreachable,
         } };
-        const grown = allocator.alloc(ast.Item, mod.items.len + 1) catch unreachable;
+        // The anchor is [retain] — the c lane reaches it and demands a |c
+        // body. It's a marker, not a callable op: the body is an empty
+        // return, minted alongside so module retention doesn't read as a
+        // missing impl (rings.new.kz's anchor, same fix).
+        const c_item = ast.Item{ .proc_decl = ast.ProcDecl{
+            .path = mkPath(allocator, module_name, "__channel_anchor"),
+            .body = ast.Source{ .text = "return;", .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+            .annotations = &[_][]const u8{},
+            .target = allocator.dupe(u8, "c") catch unreachable,
+            .location = flow.location,
+            .module = allocator.dupe(u8, module_name) catch unreachable,
+        } };
+        const grown = allocator.alloc(ast.Item, mod.items.len + 2) catch unreachable;
         @memcpy(grown[0..mod.items.len], mod.items);
         grown[mod.items.len] = anchor;
+        grown[mod.items.len + 1] = c_item;
         @constCast(mod).items = grown;
     }
 
@@ -780,14 +819,65 @@ const CH = struct {
             "var __koru_chan_{s}_closed = @import(\"std\").atomic.Value(bool).init(false);\n",
             .{chan_name},
         ) catch unreachable) catch unreachable;
-        appended.append(allocator, ast.Item{ .inline_code = ast.InlineCode{
-            .code = sb.toOwnedSlice(allocator) catch unreachable,
+        // host_line, not inline_code: `InlineCode` has no target field and
+        // the c emitter prints top-level inline_code verbatim — the Vyukov
+        // cells would land in C output. The .k location keeps the dialect
+        // null — zig-only emission, invisible to every other lane's
+        // host-line pass (rings.new.kz's channel, same shape).
+        appended.append(allocator, ast.Item{ .host_line = ast.HostLine{
+            .content = sb.toOwnedSlice(allocator) catch unreachable,
             .location = flow.location,
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } }) catch unreachable;
     }
 
+    // ---- The C lane's sequential cell + `|c` op bodies. Same contract as
+    // rings rung: a bounded FIFO per kind (buf[cap], head/tail/count, pow2
+    // mask — capacity is pow2-enforced above) plus a plain int close bit —
+    // the sequential channel the oracle verifies, not the atomics. A kind
+    // whose element has no C type mints no cell; its generated events keep
+    // their honest no-C-type refusal. ----
+    var c_chan_cells = std.StringHashMap([]const u8).init(allocator);
+    var c_cs = std.ArrayList(u8).initCapacity(allocator, 256 + kinds.items.len * 200) catch unreachable;
+    {
+        const cgu = @import("codegen_utils");
+        const cnf = CH.cFoldIdent(allocator, chan_name);
+        var ok_any = false;
+        for (kinds.items) |k| {
+            const c_elem: ?[]const u8 = blk: {
+                if (cgu.cTypeOf(std.mem.trim(u8, k.proto, " \t"))) |t| break :blk t;
+                const leaves = CL.protoFields(allocator, program, k.proto) orelse break :blk null;
+                for (leaves) |lf| {
+                    if (cgu.cTypeOf(std.mem.trim(u8, lf.ftype, " \t")) == null) break :blk null;
+                }
+                break :blk std.fmt.allocPrint(allocator, "struct {s}", .{k.proto}) catch unreachable;
+            };
+            const ect = c_elem orelse continue;
+            const ckf = CH.cFoldIdent(allocator, k.name);
+            c_cs.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                "static {s} __koru_chan_{s}_{s}_buf[{d}];\nstatic uintptr_t __koru_chan_{s}_{s}_head = 0;\nstatic uintptr_t __koru_chan_{s}_{s}_tail = 0;\nstatic uintptr_t __koru_chan_{s}_{s}_count = 0;\n",
+                .{ ect, cnf, ckf, capacity, cnf, ckf, cnf, ckf, cnf, ckf },
+            ) catch unreachable) catch unreachable;
+            c_chan_cells.put(k.name, ect) catch unreachable;
+            ok_any = true;
+        }
+        if (ok_any) {
+            c_cs.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                "static int __koru_chan_{s}_closed = 0;\n",
+                .{cnf},
+            ) catch unreachable) catch unreachable;
+            appended.append(allocator, ast.Item{ .host_line = ast.HostLine{
+                .content = c_cs.toOwnedSlice(allocator) catch unreachable,
+                // The `.kc` name routes this line to the c lane alone.
+                .location = .{ .file = "__koru_chan_gen.kc", .line = flow.location.line, .column = flow.location.column },
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } }) catch unreachable;
+        }
+    }
+
     const closed_flag = std.fmt.allocPrint(allocator, "__koru_chan_{s}_closed", .{chan_name}) catch unreachable;
+    const c_closed_flag = std.fmt.allocPrint(allocator, "__koru_chan_{s}_closed", .{CH.cFoldIdent(allocator, chan_name)}) catch unreachable;
+    const cmod = CH.cFoldIdent(allocator, ast_functional.moduleHome(program, flow) orelse flow.module);
 
     // ---- `__channel_send_<n>_<kind>` { value: Proto } | ok | full | closed ----
     for (kinds.items) |k| {
@@ -806,7 +896,18 @@ const CH = struct {
             "if ({s}.load(.acquire)) return .closed;\nif ({s}.tryEnqueue(value)) return .ok;\nreturn .full;",
             .{ closed_flag, ring },
         ) catch unreachable;
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable, in, brs, null, null, body, &appended);
+        const send_name = std.fmt.allocPrint(allocator, "__channel_send_{s}_{s}", .{ chan_name, k.name }) catch unreachable;
+        var csend: ?[]const u8 = null;
+        if (c_chan_cells.get(k.name) != null) {
+            const ckf = CH.cFoldIdent(allocator, k.name);
+            const cnf = CH.cFoldIdent(allocator, chan_name);
+            const cm = std.fmt.allocPrint(allocator, "{s}_{s}", .{ cmod, CH.cFoldIdent(allocator, send_name) }) catch unreachable;
+            csend = std.fmt.allocPrint(allocator,
+                "if ({s}) return (struct {s}_res){{ .tag = {s}_tag_closed }};\nif (__koru_chan_{s}_{s}_count >= {d}) return (struct {s}_res){{ .tag = {s}_tag_full }};\n__koru_chan_{s}_{s}_buf[__koru_chan_{s}_{s}_head] = value;\n__koru_chan_{s}_{s}_head = (__koru_chan_{s}_{s}_head + 1) & {d};\n__koru_chan_{s}_{s}_count += 1;\nreturn (struct {s}_res){{ .tag = {s}_tag_ok }};",
+                .{ c_closed_flag, cm, cm, cnf, ckf, capacity, cm, cm, cnf, ckf, cnf, ckf, cnf, ckf, cnf, ckf, capacity - 1, cnf, ckf, cm, cm },
+            ) catch unreachable;
+        }
+        CH.synthOp(allocator, program, flow, send_name, in, brs, null, null, body, csend, &appended);
     }
 
     // ---- Custody transit ops per custodial kind (channel.transit.kz):
@@ -831,7 +932,18 @@ const CH = struct {
             "if ({s}.tryDequeue()) |__v| return .{{ .some = __v }};\nif ({s}.load(.acquire)) return .closed;\nreturn .none;",
             .{ ring, closed_flag },
         ) catch unreachable;
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, body, &appended);
+        const recv_name = std.fmt.allocPrint(allocator, "__channel_recv_{s}", .{chan_name}) catch unreachable;
+        var crecv: ?[]const u8 = null;
+        if (c_chan_cells.get(k.name)) |ect| {
+            const ckf = CH.cFoldIdent(allocator, k.name);
+            const cnf = CH.cFoldIdent(allocator, chan_name);
+            const cm = std.fmt.allocPrint(allocator, "{s}_{s}", .{ cmod, CH.cFoldIdent(allocator, recv_name) }) catch unreachable;
+            crecv = std.fmt.allocPrint(allocator,
+                "if (__koru_chan_{s}_{s}_count > 0) {{\n    {s} __v = __koru_chan_{s}_{s}_buf[__koru_chan_{s}_{s}_tail];\n    __koru_chan_{s}_{s}_tail = (__koru_chan_{s}_{s}_tail + 1) & {d};\n    __koru_chan_{s}_{s}_count -= 1;\n    return (struct {s}_res){{ .tag = {s}_tag_some, .some = __v }};\n}}\nif ({s}) return (struct {s}_res){{ .tag = {s}_tag_closed }};\nreturn (struct {s}_res){{ .tag = {s}_tag_none }};",
+                .{ cnf, ckf, ect, cnf, ckf, cnf, ckf, cnf, ckf, cnf, ckf, capacity - 1, cnf, ckf, cm, cm, c_closed_flag, cm, cm, cm, cm },
+            ) catch unreachable;
+        }
+        CH.synthOp(allocator, program, flow, recv_name, &.{}, brs, null, null, body, crecv, &appended);
     }
 
     // ---- `__channel_close_<n>` {} | ok — sets the bit, then fires every
@@ -845,7 +957,20 @@ const CH = struct {
             cb.appendSlice(allocator, std.fmt.allocPrint(allocator, "__channel_{s}_closed_{d}_event.handler(.{{}});\n", .{ chan_name, ci }) catch unreachable) catch unreachable;
         }
         cb.appendSlice(allocator, "return .ok;") catch unreachable;
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable, &.{}, brs, null, null, cb.toOwnedSlice(allocator) catch unreachable, &appended);
+        const close_name = std.fmt.allocPrint(allocator, "__channel_close_{s}", .{chan_name}) catch unreachable;
+        var cclose: ?[]const u8 = null;
+        if (c_chan_cells.count() > 0) {
+            const cm = std.fmt.allocPrint(allocator, "{s}_{s}", .{ cmod, CH.cFoldIdent(allocator, close_name) }) catch unreachable;
+            var ccb = std.ArrayList(u8).initCapacity(allocator, 64 + closed_arms.items.len * 128) catch unreachable;
+            ccb.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s} = 1;\n", .{c_closed_flag}) catch unreachable) catch unreachable;
+            for (closed_arms.items, 0..) |_, ci| {
+                const uname = std.fmt.allocPrint(allocator, "__channel_{s}_closed_{d}", .{ chan_name, ci }) catch unreachable;
+                ccb.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}_{s}();\n", .{ cmod, CH.cFoldIdent(allocator, uname) }) catch unreachable) catch unreachable;
+            }
+            ccb.appendSlice(allocator, std.fmt.allocPrint(allocator, "return (struct {s}_res){{ .tag = {s}_tag_ok }};", .{ cm, cm }) catch unreachable) catch unreachable;
+            cclose = ccb.toOwnedSlice(allocator) catch unreachable;
+        }
+        CH.synthOp(allocator, program, flow, close_name, &.{}, brs, null, null, cb.toOwnedSlice(allocator) catch unreachable, cclose, &appended);
     }
 
     // ---- The `!` arms as generated units — kind arms carry the message,
@@ -872,7 +997,31 @@ const CH = struct {
             ) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, "return __moved;") catch unreachable;
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable, &.{}, &.{}, "i32", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        const step_name = std.fmt.allocPrint(allocator, "{s}-step", .{chan_name}) catch unreachable;
+        var cstep: ?[]const u8 = null;
+        {
+            const cnf = CH.cFoldIdent(allocator, chan_name);
+            var csb = std.ArrayList(u8).initCapacity(allocator, 128 + kind_arms.items.len * 320) catch unreachable;
+            csb.appendSlice(allocator, "int __moved = 0;\n") catch unreachable;
+            var all_ok = true;
+            for (kind_arms.items, 0..) |arm, ai| {
+                const ect = c_chan_cells.get(arm.kind) orelse {
+                    all_ok = false;
+                    break;
+                };
+                const ckf = CH.cFoldIdent(allocator, arm.kind);
+                const field_name = CT.stepFieldName(kinds.items, custody, kind_leaves, arm.kind, arm.cont.binding.?);
+                const uname = std.fmt.allocPrint(allocator, "__channel_{s}_{s}_{d}", .{ chan_name, arm.kind, ai }) catch unreachable;
+                const um = std.fmt.allocPrint(allocator, "{s}_{s}", .{ cmod, CH.cFoldIdent(allocator, uname) }) catch unreachable;
+                csb.appendSlice(allocator, std.fmt.allocPrint(allocator,
+                    "if (__koru_chan_{s}_{s}_count > 0) {{\n    {s} __v_{d} = __koru_chan_{s}_{s}_buf[__koru_chan_{s}_{s}_tail];\n    __koru_chan_{s}_{s}_tail = (__koru_chan_{s}_{s}_tail + 1) & {d};\n    __koru_chan_{s}_{s}_count -= 1;\n    {s}((struct {s}_in){{ .{s} = __v_{d} }});\n    __moved += 1;\n}}\n",
+                    .{ cnf, ckf, ect, ai, cnf, ckf, cnf, ckf, cnf, ckf, cnf, ckf, capacity - 1, cnf, ckf, um, um, field_name, ai },
+                ) catch unreachable) catch unreachable;
+            }
+            csb.appendSlice(allocator, "return __moved;") catch unreachable;
+            if (all_ok) cstep = csb.toOwnedSlice(allocator) catch unreachable;
+        }
+        CH.synthOp(allocator, program, flow, step_name, &.{}, &.{}, "i32", null, sb.toOwnedSlice(allocator) catch unreachable, cstep, &appended);
     }
     {
         var sb = std.ArrayList(u8).initCapacity(allocator, 96 + kinds.items.len * 80) catch unreachable;
@@ -889,7 +1038,24 @@ const CH = struct {
             sb.appendSlice(allocator, std.fmt.allocPrint(allocator, " and __drained_{d}", .{i}) catch unreachable) catch unreachable;
         }
         sb.appendSlice(allocator, ") 0 else 1;") catch unreachable;
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable, &.{}, &.{}, "i64", null, sb.toOwnedSlice(allocator) catch unreachable, &appended);
+        const live_name = std.fmt.allocPrint(allocator, "{s}-live", .{chan_name}) catch unreachable;
+        var clive: ?[]const u8 = null;
+        if (c_chan_cells.count() > 0) {
+            const cnf = CH.cFoldIdent(allocator, chan_name);
+            var csb = std.ArrayList(u8).initCapacity(allocator, 96 + kinds.items.len * 64) catch unreachable;
+            csb.appendSlice(allocator, std.fmt.allocPrint(allocator, "return ({s}", .{c_closed_flag}) catch unreachable) catch unreachable;
+            var all_ok = true;
+            for (kinds.items) |k| {
+                if (c_chan_cells.get(k.name) == null) {
+                    all_ok = false;
+                    break;
+                }
+                csb.appendSlice(allocator, std.fmt.allocPrint(allocator, " && __koru_chan_{s}_{s}_count == 0", .{ cnf, CH.cFoldIdent(allocator, k.name) }) catch unreachable) catch unreachable;
+            }
+            csb.appendSlice(allocator, ") ? 0 : 1;") catch unreachable;
+            if (all_ok) clive = csb.toOwnedSlice(allocator) catch unreachable;
+        }
+        CH.synthOp(allocator, program, flow, live_name, &.{}, &.{}, "i64", null, sb.toOwnedSlice(allocator) catch unreachable, clive, &appended);
     }
     {
         const wf = allocator.alloc(ast.Field, 1) catch unreachable;
@@ -898,7 +1064,7 @@ const CH = struct {
             .type = allocator.dupe(u8, "i64") catch unreachable,
             .phantom = null,
         };
-        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", null, "_ = i;\nreturn 1_000_000;", &appended);
+        CH.synthOp(allocator, program, flow, std.fmt.allocPrint(allocator, "{s}-wait", .{chan_name}) catch unreachable, wf, &.{}, "i128", null, "_ = i;\nreturn 1_000_000;", "(void)i;\nreturn (struct __koru_i128){ .lo = 1000000ULL, .hi = 0 };", &appended);
     }
 
     const marker = std.fmt.allocPrint(allocator, "// std/channel: '{s}' declared ({d} kinds, cap {d}; {d} consumers, {d} close arms)", .{ chan_name, kinds.items.len, capacity, kind_arms.items.len, closed_arms.items.len }) catch unreachable;
