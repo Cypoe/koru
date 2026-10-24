@@ -16,7 +16,7 @@
 }
 
 // Event that takes Source parameter for HTML rendering
-~tor renderHTML { source: Source<HTML> } -> string
+~tor renderHTML { source: Source[HTML] } -> string
 
 // Comptime proc that receives Source with captured scope
 ~proc renderHTML|zig {

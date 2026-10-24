@@ -1502,6 +1502,12 @@ pub const Field = struct {
     type: []const u8, // Zig type as string (phantom states/tags stripped)
     module_path: ?[]const u8 = null, // Module path for cross-module types (e.g., "test_lib.user" from "test_lib.user:User")
     phantom: ?[]const u8 = null, // Opaque phantom string - analyzers interpret
+    /// Compiler annotations on the type itself: `Type[text]` → "text",
+    /// `Type[a,b]` → {"a","b"}. Opaque strings — the annotation system's
+    /// directive channel to transforms, inert at runtime. Distinct lane from
+    /// `<>` (phantom = value-level obligation) and from binding `[ann]`
+    /// (`r[mutable]`). Always the outermost suffix: `Type<phantom>[ann]`.
+    type_annotations: []const []const u8 = &.{},
     is_source: bool = false, // For Source type - captures raw syntax
     is_file: bool = false, // For File type - compile-time file read (not embedded)
     is_embed_file: bool = false, // For EmbedFile type - embeds file contents in binary
@@ -1531,6 +1537,8 @@ pub const Field = struct {
         allocator.free(self.type);
         if (self.module_path) |mp| allocator.free(mp);
         if (self.phantom) |p| allocator.free(p);
+        for (self.type_annotations) |a| allocator.free(a);
+        allocator.free(self.type_annotations);
         if (self.expression) |expr| {
             if (self.owns_expression) {
                 expr.deinit(allocator);
@@ -1552,11 +1560,16 @@ pub const ResumeArm = struct {
     name: []const u8,
     type: ?[]const u8 = null, // null = arm carries no payload (`| timeout`)
     phantom: ?[]const u8 = null, // per-arm obligation; same discharge-only rule as resume_phantom
+    /// Compiler annotations on the arm's type — same `Type[ann]` lane as
+    /// Field.type_annotations.
+    type_annotations: []const []const u8 = &.{},
 
     pub fn deinit(self: *ResumeArm, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         if (self.type) |t| allocator.free(t);
         if (self.phantom) |p| allocator.free(p);
+        for (self.type_annotations) |a| allocator.free(a);
+        allocator.free(self.type_annotations);
     }
 };
 

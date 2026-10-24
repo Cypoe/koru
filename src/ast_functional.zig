@@ -1398,6 +1398,11 @@ fn cloneField(allocator: std.mem.Allocator, field: *const ast.Field) !ast.Field 
         .type = try allocator.dupe(u8, field.type),
         .module_path = if (field.module_path) |mp| try allocator.dupe(u8, mp) else null,
         .phantom = if (field.phantom) |p| try allocator.dupe(u8, p) else null,
+        .type_annotations = blk: {
+            const anns = try allocator.alloc([]const u8, field.type_annotations.len);
+            for (field.type_annotations, 0..) |a, i| anns[i] = try allocator.dupe(u8, a);
+            break :blk anns;
+        },
         .is_source = field.is_source,
         .is_file = field.is_file,
         .is_embed_file = field.is_embed_file,

@@ -5,13 +5,13 @@
 ~voidCall()
 
 // VALID: Zero params, source block → NO ()
-~tor renderSimple { source: Source<HTML> }
+~tor renderSimple { source: Source[HTML] }
 ~renderSimple {
     <h1>Hello!</h1>
 }
 
 // VALID: With params, source block → requires () for params
-~tor renderWithData { name: string, source: Source<HTML> }
+~tor renderWithData { name: string, source: Source[HTML] }
 ~renderWithData(name: "Alice") {
     <p>${name}</p>
 }

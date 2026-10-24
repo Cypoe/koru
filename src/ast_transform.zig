@@ -406,6 +406,11 @@ fn cloneFields(allocator: std.mem.Allocator, fields: []const ast.Field) ![]ast.F
             // `expression` is shared (not deep-cloned); the clone does not own it.
             .module_path = if (field.module_path) |mp| try allocator.dupe(u8, mp) else null,
             .phantom = if (field.phantom) |p| try allocator.dupe(u8, p) else null,
+            .type_annotations = blk: {
+                const anns = try allocator.alloc([]const u8, field.type_annotations.len);
+                for (field.type_annotations, 0..) |a, j| anns[j] = try allocator.dupe(u8, a);
+                break :blk anns;
+            },
             .is_source = field.is_source,
             .is_file = field.is_file,
             .is_embed_file = field.is_embed_file,

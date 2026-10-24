@@ -1,0 +1,9 @@
+// The typed source-block echo `ev <T>{` was removed 2026-10-24 — declare
+// the tag on the parameter (`source: Source[T]`) and invoke with a bare `{ }`.
+~import std/io
+
+~tor render { source: Source[HTML] } -> string
+~proc render|zig { return ""; }
+
+~render <HTML>{ <p>hi</p> }
+| rendered _ |> _

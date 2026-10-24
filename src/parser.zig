@@ -1098,20 +1098,13 @@ pub const Parser = struct {
         return result;
     }
 
-    /// Extract the scope type `[...]` and the path for a file-source closure at
-    /// `marker` whose text is `trimmed`. Returns the invocation text before the
-    /// closure and the phantom type (null for the bare `@"path"` form).
-    fn splitFileSource(self: *Parser, trimmed: []const u8, marker_idx: usize, typed: bool) anyerror!struct { invocation_str: []const u8, phantom_type: ?[]const u8 } {
-        var invocation_str = lexer.trim(trimmed[0..marker_idx]);
-        var phantom_type: ?[]const u8 = null;
-        if (typed) {
-            const angle_start = std.mem.lastIndexOf(u8, trimmed[0 .. marker_idx + 1], "<") orelse {
-                return self.fail(.PARSE001, self.current, 0, "File source syntax requires scope type: ~tor <type>\"path\"", .{});
-            };
-            phantom_type = try self.allocator.dupe(u8, trimmed[angle_start + 1 .. marker_idx]);
-            invocation_str = lexer.trim(trimmed[0..angle_start]);
-        }
-        return .{ .invocation_str = invocation_str, .phantom_type = phantom_type };
+    /// Split the invocation text off the front of a `@"path"` file-source
+    /// closure. The typed `<type>"path"` echo was removed (2026-10-24) — the
+    /// kind tag is declared once on the parameter (`source: Source[kind]`),
+    /// never repeated at the call site.
+    fn splitFileSource(self: *Parser, trimmed: []const u8, marker_idx: usize) []const u8 {
+        _ = self;
+        return lexer.trim(trimmed[0..marker_idx]);
     }
 
     /// Extract a `: bind` from the tail after a file-source closing quote.
@@ -4548,17 +4541,27 @@ pub const Parser = struct {
         var source_field_name: []const u8 = undefined;
         var found_source = false;
         var alternate_source_name: ?[]const u8 = null;
+        var declared_tag: ?[]const u8 = null;
 
         const input_shape = event_type.input_shape orelse return original;
         for (input_shape.fields) |field| {
-            if (std.mem.eql(u8, field.name, "source") and field.is_source) {
+            if (!field.is_source) continue;
+            // The kind tag is declared once, on the parameter:
+            // `source: Source[text]` → type_annotations; the legacy
+            // `Source<HTML>` phantom still supplies it too.
+            const field_tag = if (field.type_annotations.len > 0)
+                field.type_annotations[0]
+            else
+                field.phantom;
+            if (std.mem.eql(u8, field.name, "source")) {
                 source_field_name = field.name;
+                declared_tag = field_tag;
                 found_source = true;
                 break;
-            } else if (field.is_source) {
-                // Found a Source parameter with different name
-                alternate_source_name = field.name;
             }
+            // A Source parameter with a different name — tag fallback only.
+            if (declared_tag == null) declared_tag = field_tag;
+            alternate_source_name = field.name;
         }
 
         if (!found_source) {
@@ -4573,7 +4576,10 @@ pub const Parser = struct {
             return original;
         }
 
-        return self.withSourceArg(original, source_text, phantom_type, source_field_name);
+        // The call site carries no kind tag (`{ }` / `@"path"` are tagless by
+        // ruling) — the declaration's `Source[ann]` supplies it.
+        const tag = phantom_type orelse declared_tag;
+        return self.withSourceArg(original, source_text, tag, source_field_name);
     }
 
     /// Create implicit source invocation when event is not in registry
@@ -4867,7 +4873,13 @@ pub const Parser = struct {
         if (has_implicit_file_source) {
             const marker = file_source_marker.?;
 
-            // The file path runs from just after the `@"`/`>"` to the next quote.
+            // `<type>"path"` is removed — the call site echoed a tag the
+            // parameter already declares.
+            if (marker.typed) {
+                return self.fail(.PARSE001, self.current, 0, "a typed file source `<type>\"path\"` was removed — declare the tag on the parameter (`source: Source[kind]`) and invoke with `@\"path\"`", .{});
+            }
+
+            // The file path runs from just after the `@"` to the next quote.
             const path_start = marker.marker_idx + 2;
             const path_rel_end = std.mem.indexOf(u8, trimmed_after[path_start..], "\"") orelse {
                 return self.fail(.PARSE001, self.current, 0, "File source syntax requires a closing quote", .{});
@@ -4875,11 +4887,10 @@ pub const Parser = struct {
             const path_end = path_start + path_rel_end;
             const file_path = trimmed_after[path_start..path_end];
 
-            // Split the invocation text and scope type off the front, then a
-            // `: bind` and continuation tail off the back.
-            const front = try self.splitFileSource(trimmed_after, marker.marker_idx, marker.typed);
+            // Split the invocation text off the front, then a `: bind` and
+            // continuation tail off the back.
+            const invocation_str = self.splitFileSource(trimmed_after, marker.marker_idx);
             const back = try self.extractFileBindTail(lexer.trim(trimmed_after[path_end + 1 ..]), self.getCurrentLocation());
-            const invocation_str = front.invocation_str;
 
             // Detect inline chain: `head() |> ... |> terminal <file>"path"` — the
             // file-source twin of the `… |> terminal {` chain handled below. For
@@ -4898,7 +4909,6 @@ pub const Parser = struct {
                 const tail_full = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{ tail_str, closure_str });
                 defer self.allocator.free(tail_full);
                 if (back.bind) |bn| self.allocator.free(bn);
-                if (front.phantom_type) |pt| self.allocator.free(pt);
 
                 invocation = try self.parseEventInvocation(head_str);
                 errdefer invocation.deinit(self.allocator);
@@ -4925,7 +4935,6 @@ pub const Parser = struct {
 
                 uses_implicit_source = true;
                 implicit_source_text = file_content;
-                implicit_source_phantom_type = front.phantom_type;
                 implicit_source_bind_name = back.bind;
                 implicit_source_file_path = try self.allocator.dupe(u8, file_path);
 
@@ -5546,152 +5555,20 @@ pub const Parser = struct {
         log_debug("[DEBUG] parseEventInvocation: source_block_marker={?d} invocation_part='{s}'\n", .{ source_block_marker, invocation_part });
 
         if (source_block_marker) |marker_idx| {
-            // Find the opening < by searching backwards from >{
+            // `ev <T>{ … }` is removed — the call site echoed a tag the
+            // parameter already declares. Declare it once on the param
+            // (`source: Source[T]`) and invoke with a bare `{ }`.
             const angle_idx = std.mem.lastIndexOf(u8, invocation_part[0 .. marker_idx + 1], "<");
-
-            if (angle_idx) |a_idx| {
-                // This is a Source block invocation!
-                const before_angle = lexer.trim(invocation_part[0..a_idx]);
-
-                // Extract scope type from <Type> (we know > is at marker_idx)
-                const phantom_type = lexer.trim(invocation_part[a_idx + 1 .. marker_idx]);
-
-                // Extract block content from { ... } (marker_idx + 1 points to { position + 1)
-                const brace_start = marker_idx + 1; // Position of {
-                const close_brace_idx = lexer.findMatchingBrace(invocation_part, brace_start);
-                if (close_brace_idx == null) {
-                    return self.fail(
-                        .PARSE001,
-                        self.current,
-                        0,
-                        "Source block missing closing brace",
-                        .{},
-                    );
-                }
-
-                const source_text = lexer.trim(invocation_part[brace_start + 1 .. close_brace_idx.?]);
-
-                // A |variant tag on the name part (`~std/kernel:init(Body)|gpu
-                // <Type>{ ... }`) must ride onto the invocation, same as the
-                // bare-brace form (210_140's swallow covered both).
-                const angle_variant_pipe = findTopLevelVariantPipe(before_angle);
-                const before_angle_head = if (angle_variant_pipe) |vp| lexer.trim(before_angle[0..vp]) else before_angle;
-                var angle_variant: ?[]const u8 = null;
-                if (angle_variant_pipe) |vp| {
-                    const vs = lexer.trim(before_angle[vp + 1 ..]);
-                    if (vs.len > 0) angle_variant = try self.allocator.dupe(u8, vs);
-                }
-                errdefer if (angle_variant) |v| self.allocator.free(v);
-
-                // Check if before_angle has args: event(args)
-                // If so, parse path and args separately
-                var parsed_path: ast.DottedPath = undefined;
-                var existing_args: []const ast.Arg = &[_]ast.Arg{};
-
-                if (std.mem.indexOf(u8, before_angle_head, "(")) |paren_idx| {
-                    // Has args - extract path and parse args
-                    const event_name = lexer.trim(before_angle_head[0..paren_idx]);
-                    try self.rejectDotNamespace(event_name, self.current - 1);
-                    parsed_path = try lexer.parseQualifiedPath(self.allocator, event_name, ast);
-
-                    // Parse arguments from (...)
-                    const args_str = lexer.trim(before_angle_head[paren_idx..]);
-                    var args_list = try std.ArrayList(ast.Arg).initCapacity(self.allocator, 4);
-                    defer args_list.deinit(self.allocator);
-
-                    // Find content between ( and )
-                    if (args_str.len > 2 and args_str[0] == '(' and args_str[args_str.len - 1] == ')') {
-                        const args_content = args_str[1 .. args_str.len - 1];
-                        // Same paren-hug rule as parseArgsReported — this path
-                        // tokenizes args itself instead of going through
-                        // lexer.parseArgs.
-                        if (std.ascii.isWhitespace(args_content[0]) or
-                            std.ascii.isWhitespace(args_content[args_content.len - 1]))
-                        {
-                            return self.fail(
-                                .PARSE003,
-                                self.current,
-                                1,
-                                "call parens hug their arguments — write 'f(x)', not 'f( x' or 'f(x )'",
-                                .{},
-                            );
-                        }
-                        // Simple arg parsing: split by comma, then by colon
-                        var arg_iter = std.mem.tokenizeScalar(u8, args_content, ',');
-                        while (arg_iter.next()) |arg_part| {
-                            const trimmed_arg = lexer.trim(arg_part);
-                            if (std.mem.indexOf(u8, trimmed_arg, ":")) |colon_idx| {
-                                const name = lexer.trim(trimmed_arg[0..colon_idx]);
-                                const value = lexer.trim(trimmed_arg[colon_idx + 1 ..]);
-                                try args_list.append(self.allocator, ast.Arg{
-                                    .name = try self.allocator.dupe(u8, name),
-                                    .value = try self.allocator.dupe(u8, value),
-                                });
-                            }
-                        }
-                    }
-                    existing_args = try args_list.toOwnedSlice(self.allocator);
-                } else {
-                    // No args - just parse the path
-                    try self.rejectDotNamespace(before_angle_head, self.current - 1);
-                    parsed_path = try lexer.parseQualifiedPath(self.allocator, before_angle_head, ast);
-                }
-
-                // Build path string for registry lookup
-                const path_str = try self.pathToString(parsed_path);
-                defer self.allocator.free(path_str);
-
-                // Look up event type
-                log_debug("[DEBUG] parseEventInvocation: path_str='{s}' existing_args.len={d} source_text='{s}'\n", .{ path_str, existing_args.len, source_text });
-                if (self.registry.getEventType(path_str)) |event_type| {
-                    log_debug("[DEBUG] parseEventInvocation: event found in registry, calling createImplicitSourceInvocation\n", .{});
-                    // Create base invocation with existing args
-                    const base_invocation = ast.Invocation{
-                        .path = parsed_path,
-                        .args = existing_args,
-                        .variant = angle_variant,
-                    };
-
-                    // Create invocation with implicit Source parameter added
-                    return try self.createImplicitSourceInvocation(base_invocation, source_text, phantom_type, event_type);
-                } else {
-                    // Event not found in registry - use default source param name "source"
-                    log_debug("[DEBUG] parseEventInvocation: event NOT in registry, adding source with default name\n", .{});
-
-                    // Create new args with source
-                    var new_args = try std.ArrayList(ast.Arg).initCapacity(self.allocator, existing_args.len + 1);
-                    defer new_args.deinit(self.allocator);
-
-                    // Copy existing args
-                    for (existing_args) |arg| {
-                        try new_args.append(self.allocator, arg);
-                    }
-
-                    // Create Source value
-                    const source_value = try self.allocator.create(ast.Source);
-                    const duped_phantom = if (phantom_type.len > 0) try self.allocator.dupe(u8, phantom_type) else null;
-                    source_value.* = ast.Source{
-                        .text = try self.allocator.dupe(u8, source_text),
-                        .location = self.getCurrentLocation(),
-                        .scope = ast.CapturedScope{ .bindings = &[_]ast.ScopeBinding{} },
-                        .phantom_type = duped_phantom,
-                    };
-
-                    // Add source arg
-                    try new_args.append(self.allocator, ast.Arg{
-                        .name = try self.allocator.dupe(u8, "source"),
-                        .value = try self.allocator.dupe(u8, source_text),
-                        .source_value = source_value,
-                    });
-
-                    return ast.Invocation{
-                        .path = parsed_path,
-                        .args = try new_args.toOwnedSlice(self.allocator),
-                        .variant = angle_variant,
-                    };
-                }
-            }
+            const tag = if (angle_idx) |a| lexer.trim(invocation_part[a + 1 .. marker_idx]) else "?";
+            return self.fail(
+                .PARSE001,
+                self.current,
+                0,
+                "a typed source block `<{s}>{{` was removed — the tag is declared on the parameter (`source: Source[{s}]`); invoke with a bare `{{ }}`",
+                .{ tag, tag },
+            );
         }
+
 
         // Check for bare source block: eventName { ... } (no type annotation)
         // Must check BEFORE regular invocation parsing
@@ -8889,8 +8766,11 @@ pub const Parser = struct {
 
         const file_marker = findFileSourceMarker(content);
         if (file_marker) |marker| {
-            // File-source step: the terminal carries a file closure (`<type>"path"`
-            // or `@"path"`) — the file twin of the `… {` source block handled below.
+            if (marker.typed) {
+                return self.fail(.PARSE005, location.line - 1, 0, "a typed file source `<type>\"path\"` was removed — declare the tag on the parameter (`source: Source[kind]`) and invoke with `@\"path\"`", .{});
+            }
+            // File-source step: the terminal carries a file closure `@"path"` —
+            // the file twin of the `… {` source block handled below.
             // The step may itself contain further `|>` steps (`info(): i |> … |>
             // fmt.blk <file>"t.txt"`), which parseEventInvocation resolves; the file
             // source attaches to the terminal, and a `: bind`/`|>` tail after the
@@ -8902,9 +8782,9 @@ pub const Parser = struct {
             const path_end = path_start + path_rel_end;
             const file_path = content[path_start..path_end];
 
-            const front = try self.splitFileSource(content, marker.marker_idx, marker.typed);
+            const front = self.splitFileSource(content, marker.marker_idx);
             const back = try self.extractFileBindTail(lexer.trim(content[path_end + 1 ..]), location);
-            const temp_invocation = try self.parseEventInvocation(front.invocation_str);
+            const temp_invocation = try self.parseEventInvocation(front);
             const path_str = try self.pathToString(temp_invocation.path);
             defer self.allocator.free(path_str);
 
@@ -8914,9 +8794,9 @@ pub const Parser = struct {
 
             var final_invocation: ast.Invocation = undefined;
             if (self.registry.getEventType(path_str)) |event_type| {
-                final_invocation = try self.createImplicitSourceInvocation(temp_invocation, file_content, front.phantom_type, event_type);
+                final_invocation = try self.createImplicitSourceInvocation(temp_invocation, file_content, null, event_type);
             } else {
-                final_invocation = try self.createImplicitSourceInvocationDefault(temp_invocation, file_content, front.phantom_type);
+                final_invocation = try self.createImplicitSourceInvocationDefault(temp_invocation, file_content, null);
             }
             if (back.bind) |rb| final_invocation.return_binding = rb;
             self.allocator.free(file_content);
@@ -10271,65 +10151,75 @@ pub const Parser = struct {
         }
     }
 
-    /// Phantom state in a type position must use ANGLE brackets: `Type<state>`.
-    /// The square-bracket form `Type[state]` is otherwise silently swallowed
-    /// into the type string (phantom stays null → no obligation checking, false
-    /// safety; AST shows `*Resource[active!]` keeps the brackets in `type` and
-    /// reports `phantom: null`). Reject it loudly with a fix hint. No-op unless
-    /// `s` ends with a phantom-shaped `[...]`.
-    fn rejectSquareBracketPhantom(self: *Parser, s: []const u8) !void {
-        if (s.len == 0 or s[s.len - 1] != ']') return;
-        var depth: i32 = 0;
-        var j: usize = s.len - 1;
-        var open: ?usize = null;
-        while (true) : (j -= 1) {
-            if (s[j] == ']') {
-                depth += 1;
-            } else if (s[j] == '[') {
-                depth -= 1;
-                if (depth == 0) {
-                    open = j;
-                    break;
+    /// Peel trailing `[…]` groups off a declaration type: `T[a]` → `T` with
+    /// annotation "a"; `T[a,b]` → "a","b". Compiler annotations are opaque
+    /// strings — ANY content is legal (digits, `!`, regexes), the `[]` lane
+    /// owns the bracket on type positions unconditionally (ruled 2026-10-24).
+    /// Peeled groups prepend, so `T[a][b]` reads in declaration order.
+    fn splitTrailingAnnotationsOwned(
+        self: *Parser,
+        type_str_in: []const u8,
+        anns_out: *std.ArrayList([]const u8),
+    ) ![]const u8 {
+        var s = type_str_in;
+        while (s.len > 0 and s[s.len - 1] == ']') {
+            var depth: i32 = 0;
+            var j: usize = s.len;
+            var open: ?usize = null;
+            while (j > 0) {
+                j -= 1;
+                if (s[j] == ']') {
+                    depth += 1;
+                } else if (s[j] == '[') {
+                    depth -= 1;
+                    if (depth == 0) {
+                        open = j;
+                        break;
+                    }
                 }
             }
-            if (j == 0) break;
-        }
-        const at = open orelse return;
-        if (at == 0) return; // leading `[..]` = slice/array prefix, not phantom
-        const content = s[at + 1 .. s.len - 1];
-        if (content.len == 0) return;
-        // Phantom-shaped content carries a state name (letter) or obligation
-        // marker `!`, distinguishing it from a numeric array size like `[3]`.
-        var looks_phantom = false;
-        for (content) |c| {
-            if (std.ascii.isAlphabetic(c) or c == '!') {
-                looks_phantom = true;
-                break;
+            const at = open orelse break;
+            if (at == 0) break; // `[]`-led type — a slice, not a suffix
+            const content = s[at + 1 .. s.len - 1];
+            var insert_at: usize = 0;
+            var it = std.mem.splitScalar(u8, content, ',');
+            while (it.next()) |piece| {
+                const t = lexer.trim(piece);
+                if (t.len == 0) continue;
+                try anns_out.insert(self.allocator, insert_at, try self.allocator.dupe(u8, t));
+                insert_at += 1;
             }
+            s = s[0..at];
         }
-        if (!looks_phantom) return;
-        // `self.current` has usually drifted past the declaration by the time a
-        // shape is parsed, so locate the source line that actually contains the
-        // offending `[state]` rather than blaming wherever the cursor landed.
-        const bracket_expr = s[at..]; // e.g. "[active!]"
-        var report_line: usize = self.current + 1;
-        var report_col: usize = 1;
-        for (self.lines, 0..) |line_text, idx| {
-            if (std.mem.indexOf(u8, line_text, bracket_expr)) |col| {
-                report_line = idx + 1;
-                report_col = col + 1;
-                break;
+        return s;
+    }
+
+    /// Combined trailing-suffix split for declaration type positions:
+    /// `Type<phantom>[ann]` — phantom inner on the type name, annotations
+    /// outermost. Loops so a reversed `Type[ann]<phantom>` also resolves.
+    /// Returns the base type (borrowed); outputs are owned.
+    fn splitTypeSuffixesOwned(
+        self: *Parser,
+        type_str_in: []const u8,
+        phantom_out: *?[]const u8,
+        anns_out: *std.ArrayList([]const u8),
+        allow_phantom: bool,
+    ) ![]const u8 {
+        var s = type_str_in;
+        while (s.len > 0) {
+            const before = s;
+            s = try self.splitTrailingAnnotationsOwned(s, anns_out);
+            if (allow_phantom) {
+                var p: ?[]const u8 = null;
+                s = try self.splitTrailingPhantomOwned(s, &p);
+                if (p) |tag| {
+                    if (phantom_out.*) |old| self.allocator.free(old);
+                    phantom_out.* = tag;
+                }
             }
+            if (s.len == before.len and s.ptr == before.ptr) break;
         }
-        return self.failWithHint(
-            .KORU033,
-            report_line,
-            report_col,
-            "invalid phantom-state syntax",
-            .{},
-            "phantom state uses angle brackets — write `{s}<{s}>`",
-            .{ s[0..at], content },
-        );
+        return s;
     }
 
     const HostStructParse = struct { decl: ast.HostTypeDecl, next: usize };
@@ -10826,7 +10716,8 @@ pub const Parser = struct {
         try self.rejectSnakeName(arm_name, line_index, "resume arm");
 
         var phantom: ?[]const u8 = null;
-        const type_src = try self.splitTrailingPhantomOwned(lexer.trim(trimmed[name_end..]), &phantom);
+        var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+        const type_src = try self.splitTypeSuffixesOwned(lexer.trim(trimmed[name_end..]), &phantom, &type_annotations, true);
 
         // A `{`-led arm type is a record field list — the same text a record
         // return or record resume carries; validate it before the emitter
@@ -10851,6 +10742,7 @@ pub const Parser = struct {
             .name = try self.allocator.dupe(u8, arm_name),
             .type = if (type_src.len > 0) try self.allocator.dupe(u8, type_src) else null,
             .phantom = phantom,
+            .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
         };
     }
 
@@ -11286,23 +11178,14 @@ pub const Parser = struct {
             // braced payload fields).
             try self.rejectIdentityBranchDefault(type_and_annotation, self.current, 1, branch_name);
 
-            // Identity branches carry the full type string (including any phantom
-            // type suffix).  Phantom extraction happens below; we no longer strip
-            // trailing [identifier] as a "branch annotation" because bare phantom
-            // state literals (e.g. [celsius], [open]) were incorrectly swallowed
-            // here.  The only annotation historically used on identity branches
-            // ([mutable]) is unused in current code and is better handled as a
-            // phantom type or binding annotation in the continuation.
+            // Identity branches carry the full type string. Suffixes peel
+            // here: `[…]` groups are compiler annotations (`u64[\d+]` →
+            // "u64" + annotation), `<…>` is the phantom — `T<state>[ann]`.
             var type_str = type_and_annotation;
 
-            // Phantom labels: Type<tag>. Angle brackets have no Zig
-            // type-position meaning, so any `<...>` at type end is
-            // unambiguously phantom.
             var phantom: ?[]const u8 = null;
-            type_str = try self.splitTrailingPhantomOwned(type_str, &phantom);
-
-            // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
-            try self.rejectSquareBracketPhantom(type_str);
+            var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+            type_str = try self.splitTypeSuffixesOwned(type_str, &phantom, &type_annotations, true);
 
             // Canonical text type — same rule as a braced payload field
             // (parseShape), on the phantom-stripped BASE. Reject the raw Zig
@@ -11366,6 +11249,7 @@ pub const Parser = struct {
                 .type = actual_type,
                 .module_path = module_path,
                 .phantom = phantom,
+                .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
             };
 
             return ast.Branch{
@@ -11736,7 +11620,9 @@ pub const Parser = struct {
             var is_expression = false;
             var is_invocation_meta = false;
             if (std.mem.eql(u8, field_type, "Source") or std.mem.startsWith(u8, field_type, "Source<") or
-                std.mem.eql(u8, field_type, "?Source") or std.mem.startsWith(u8, field_type, "?Source<"))
+                std.mem.startsWith(u8, field_type, "Source[") or
+                std.mem.eql(u8, field_type, "?Source") or std.mem.startsWith(u8, field_type, "?Source<") or
+                std.mem.startsWith(u8, field_type, "?Source["))
             {
                 // `source: ?Source` is the blockless-declaring form: the block
                 // binds when present and the handler still fires without one —
@@ -11777,16 +11663,20 @@ pub const Parser = struct {
             // with no positional at the call site is KORU080's business, and
             // that is the wall that was actually missing (400_183/184/187).
 
-            // Phantom labels: Type<tag>. Angle brackets have no Zig
-            // type-position meaning, so any `<...>` at type end is
-            // unambiguously phantom. Opaque capture — analyzers interpret.
+            // Type suffixes: trailing `[…]` groups are compiler annotations —
+            // opaque, any content, peeled unconditionally (`Type[text]`,
+            // `u64[\d+]`). Trailing `<…>` is the phantom — peeled for every
+            // field kind but File/EmbedFile/Expression, whose `<T>` tail is
+            // part of their own spelling, not obligation state. Stacking is
+            // `Type<phantom>[ann]` — annotations outermost.
             var phantom: ?[]const u8 = null;
-            if (!is_source and !is_file and !is_embed_file and !is_expression) {
-                field_type = try self.splitTrailingPhantomOwned(field_type, &phantom);
-
-                // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
-                try self.rejectSquareBracketPhantom(field_type);
-            }
+            var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+            field_type = try self.splitTypeSuffixesOwned(
+                field_type,
+                &phantom,
+                &type_annotations,
+                !(is_file or is_embed_file or is_expression),
+            );
 
             // Canonical text type, checked on the phantom-stripped BASE so
             // `[]const u8` and `[]const u8<!tag>` are both caught: the raw Zig
@@ -11866,6 +11756,7 @@ pub const Parser = struct {
                 .type = owned_type,
                 .module_path = module_path,
                 .phantom = phantom,
+                .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
                 .is_source = is_source,
                 .is_file = is_file,
                 .is_embed_file = is_embed_file,

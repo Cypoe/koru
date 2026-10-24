@@ -1,7 +1,8 @@
 // Test 210_039: File Source Syntax
-// Validates the [type]"path" syntax for reading files as Source at compile time
+// Validates the @"path" syntax for reading files as Source at compile time
 //
-// Syntax: event [type]"path"
+// Syntax: event @"path" — the kind tag is declared once on the
+// parameter (`source: Source[text]`), never echoed at the call site.
 
 const std = @import("std");
 
@@ -23,5 +24,5 @@ const std = @import("std");
 }
 
 // Test: Read file content using [type]"path" syntax
-~render.file [text]"hello.txt"
+~render.file @"hello.txt"
 | transformed _ |> _

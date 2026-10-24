@@ -280,6 +280,14 @@ const Printer = struct {
         }
         try self.write(f.type);
         if (f.phantom) |ph| try self.print("<{s}>", .{ph});
+        if (f.type_annotations.len > 0) {
+            try self.write("[");
+            for (f.type_annotations, 0..) |a, i| {
+                if (i > 0) try self.write(",");
+                try self.write(a);
+            }
+            try self.write("]");
+        }
     }
 
     /// A payload of exactly one field named `__type_ref` is the parse of a
@@ -327,6 +335,7 @@ const Printer = struct {
                 try self.print(" | {s}", .{arm.name});
                 if (arm.type) |t| try self.print(" {s}", .{t});
                 if (arm.phantom) |ph| try self.print("<{s}>", .{ph});
+                for (arm.type_annotations) |a| try self.print("[{s}]", .{a});
             }
         }
 
