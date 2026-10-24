@@ -76,8 +76,12 @@ catalog rows name each lane's representatives.
 | cs    |> std/compiler:emit-cs-artifact(ctx: c2)
 
 | <arm> |> std/compiler:emit(ctx: c2,
-         target: std/target:of(ctx.target))        (after)
+         target: std/target(ctx.target))           (after)
 ```
+
+`std/target(name)` — Lars's spelling: `pub tor default` on the
+module makes the module name itself callable; the catalog IS the
+lookup, no `:of` helper needed.
 
 `emit|zig`/`emit|c`/`emit|cs` are already proc variants in the
 `std/build:variants` sense — `--lang=c` is morally
@@ -110,6 +114,8 @@ FlowDialect rung needs to exist before it can be proven over.
   rather than duplicating them.
 - Where do rows live physically: `std/target` facet files
   (`index.kz` + `arms.kz`?), or `koru_std/targets/`?
+- Walker's name: `std/emit` vs `std/emitter` — both floated,
+  unresolved. `std/emit` reads as the verb it performs.
 - `std/target:zig` rows describe what `visitor_emitter` does —
   declared after the fact; the default arm is just the one
   `target-of` returns without `--lang`.

@@ -39,10 +39,15 @@ solver/policy split.**
   promise boundary). `std/target:c` is data; the zig lane is arm `zig`,
   not a privileged default — `target-of` resolving to `zig` is the same
   lookup as resolving to `c`.
-- `std/emitter` — the generic walker. Target-blind machinery reading
-  rows; it does not know C exists. Not a `std/compiler` part:
-  `compiler:emission` owns the coordinate flow (when, in what order —
-  already an overwritable tor); the emitter is the engine it calls.
+- `std/emitter` (or `std/emit` — name open) — the generic walker.
+  Target-blind machinery reading rows; it does not know C exists.
+  Not a `std/compiler` part: `compiler:emission` owns the coordinate
+  flow (when, in what order — already an overwritable tor); the
+  emitter is the engine it calls.
+
+Lookup spelling ruled 2026-10-24: `std/target(name)` — `pub tor
+default` makes the module name itself callable; the catalog IS the
+lookup, no `std/target:of` helper.
 
 Two parts rather than one because the differences are real: catalog rows
 are data that changes per target and per added arm; the walker is
