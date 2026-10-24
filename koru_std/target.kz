@@ -91,3 +91,62 @@ pub const Catalog = struct {
     targets: std.StringArrayHashMap(TargetDecl),
     rows: std.ArrayList(RowTable),
 };
+
+// ============================================================================
+// THE c ARM — the first declared target, mirroring c_emitter.zig
+// ============================================================================
+//
+// These rows are the c lane declared as data. The emitter still answers
+// from its own tables — the catalog currently DUAL-ANSWERS beside it
+// (drift prints, the emitter wins) until the corpus proves the rows, at
+// which point the flip rung makes the catalog the sole source.
+
+~std/target:target(c) {
+    "facet": ".kc",
+    "artifact": "output_emitted.c",
+    "toolchain": "ccomp -fstruct-passing"
+}
+
+// The flat spelling table — codegen_utils.cTypeOf verbatim. Constructive
+// spellings (`*X`, `[]T`, `{...}` records, proto `struct Name`) are rule
+// names a later row declares; this table is only the literal map.
+~std/target:type(c) {
+    "string": "const char *",
+    "[]const u8": "const char *",
+    "[:0]u8": "const char *",
+    "i64": "long long",
+    "int": "long long",
+    "number": "long long",
+    "i32": "int32_t",
+    "i16": "int16_t",
+    "i8": "int8_t",
+    "u64": "uint64_t",
+    "u32": "uint32_t",
+    "u16": "uint16_t",
+    "u8": "uint8_t",
+    "u6": "uint8_t",
+    "usize": "uintptr_t",
+    "isize": "intptr_t",
+    "f64": "double",
+    "f32": "double",
+    "float": "double",
+    "bool": "int"
+}
+
+// The fragment boundary the c lane already names — keep refusing, keep
+// naming. `i128` spells a two-word cell but its arithmetic is refused;
+// store watches lower since f74a16bcf while interceptors and the
+// tree/index/entity/owned/ref column families stay out (690_386-392).
+~std/target:fragment(c) {
+    "refuses": [
+        "resumable-!",
+        "raw-host-lines",
+        "destructure",
+        "missing-target-proc-body",
+        "unregistered-assignment-target",
+        "i128-arithmetic",
+        "concurrency-runtime",
+        "store-interceptors",
+        "store-tree-index-entity-owned-ref-columns"
+    ]
+}

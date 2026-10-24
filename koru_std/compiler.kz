@@ -543,6 +543,8 @@ const Allocator = std.mem.Allocator;
     c_emitter_module.addImport("file_types", file_types_module);
     c_emitter_module.addImport("codegen_utils", codegen_utils_module);
     c_emitter_module.addImport("struct_literal", struct_literal_module);
+    c_emitter_module.addImport("parser", parser_module);
+    c_emitter_module.addImport("compiler_env", compiler_env_module);
     // Build.zig emission
     const emit_build_zig_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_build_zig.zig" },

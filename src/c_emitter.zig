@@ -32,6 +32,8 @@ const errors = @import("errors");
 const file_types = @import("file_types");
 const codegen_utils = @import("codegen_utils");
 const struct_literal = @import("struct_literal");
+const parser = @import("parser");
+const compiler_env = @import("compiler_env");
 
 pub const CEmitError = error{
     OutOfMemory,
@@ -117,6 +119,76 @@ fn mangleOpaqueName(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 
         return null;
     }
     return buf[0..n];
+}
+
+// ---------------------------------------------------------------------------
+// std/target catalog — the declared `c` rows, harvested at emit time
+// ---------------------------------------------------------------------------
+
+/// Harvest `~std/target:<verb>(c)` site rows out of `koru_std/target.kz`.
+/// The catalog is compiler-owned data, not user content — the backend
+/// parses the file directly rather than demanding a program import.
+/// Returns null when the file or env is absent: dual-answer is advisory,
+/// a missing catalog never breaks emission. Rows are JSON-shaped objects
+/// (`{ "i64": "long long", ... }`); non-string values are skipped.
+fn loadTargetRows(
+    allocator: std.mem.Allocator,
+    verb: []const u8,
+) ?std.StringHashMap([]const u8) {
+    const home = compiler_env.CompilerEnv.koru_home;
+    if (home.len == 0) {
+        std.debug.print("std/target catalog: koru_home empty\n", .{});
+        return null;
+    }
+    const path = std.fs.path.join(allocator, &.{ home, "koru_std", "target.kz" }) catch return null;
+    const file = std.fs.cwd().openFile(path, .{}) catch |e| {
+        std.debug.print("std/target catalog: open {s}: {s}\n", .{ path, @errorName(e) });
+        return null;
+    };
+    defer file.close();
+    const source = file.readToEndAlloc(allocator, 1 << 20) catch return null;
+    var p = parser.Parser.init(allocator, source, path, &.{}, null) catch |e| {
+        std.debug.print("std/target catalog: parser init: {s}\n", .{@errorName(e)});
+        return null;
+    };
+    const result = p.parse() catch |e| {
+        std.debug.print("std/target catalog: parse {s}: {s}\n", .{ path, @errorName(e) });
+        return null;
+    };
+    var table = std.StringHashMap([]const u8).init(allocator);
+    for (result.source_file.items) |*item| {
+        if (item.* != .flow) continue;
+        const inv = item.flow.inv();
+        const mq = inv.path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq, "std.target") and !std.mem.eql(u8, mq, "std/target")) continue;
+        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], verb)) continue;
+        // The site-arg target name — positional `(c)` serializes with
+        // name == value; only `c` rows feed this lane.
+        var is_c = false;
+        var source_text: ?[]const u8 = null;
+        for (inv.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "source")) {
+                source_text = arg.value;
+            } else if (std.mem.eql(u8, std.mem.trim(u8, arg.value, " \t\n\""), "c")) {
+                is_c = true;
+            }
+        }
+        if (!is_c) continue;
+        const src = source_text orelse continue;
+        const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return table;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch continue;
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        var it = parsed.value.object.iterator();
+        while (it.next()) |e| {
+            if (e.value_ptr.* != .string) continue;
+            const key = allocator.dupe(u8, e.key_ptr.*) catch continue;
+            const val = allocator.dupe(u8, e.value_ptr.string) catch continue;
+            table.put(key, val) catch {};
+        }
+    }
+    std.debug.print("std/target catalog: `{s}` rows harvested: {d}\n", .{ verb, table.count() });
+    return table;
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +629,14 @@ const Emitter = struct {
     /// Monotonic result-temp counter — `__koru_res_N` at tagged-dispatch
     /// call sites.
     res_counter: usize = 0,
+
+    /// `std/target:type(c)` rows harvested from `koru_std/target.kz` —
+    /// dual-answer mode: `cTypeOfResolved` checks its flat-table answer
+    /// against the catalog and prints drift on stderr; the emitter's own
+    /// answer still wins until the corpus proves the rows and the flip
+    /// rung makes the catalog the sole source.
+    catalog_types: ?std.StringHashMap([]const u8) = null,
+    catalog_loaded: bool = false,
     /// The event whose handler body is emitting — `=> name` produce nodes
     /// build its `struct <name>_res` literal.
     cur_event: ?*const ast.EventDecl = null,
@@ -604,11 +684,34 @@ const Emitter = struct {
         try self.write(text);
     }
 
+    /// Dual-answer against the declared `std/target:type(c)` rows — drift
+    /// on stderr, never silently: a missing catalog file is fine at the
+    /// advisory stage, but a row disagreeing with the emitter table (or a
+    /// key the table answers and the catalog lacks) is exactly the defect
+    /// the congruence rungs exist to expose.
+    fn checkCatalogType(self: *Emitter, koru_type: []const u8, emitted: []const u8) void {
+        if (!self.catalog_loaded) {
+            self.catalog_loaded = true;
+            self.catalog_types = loadTargetRows(self.allocator, "type");
+        }
+        const table = self.catalog_types orelse return;
+        const declared = table.get(koru_type) orelse {
+            std.debug.print("std/target drift: type row missing for `{s}` (emitter answers `{s}`)\n", .{ koru_type, emitted });
+            return;
+        };
+        if (!std.mem.eql(u8, declared, emitted)) {
+            std.debug.print("std/target drift: `{s}` emitter=`{s}` catalog=`{s}`\n", .{ koru_type, emitted, declared });
+        }
+    }
+
     /// Primitives map directly; a declared proto terminal IS its C spelling
     /// (the minted `typedef` binds it). Everything else stays refused.
     fn cTypeOfResolved(self: *Emitter, koru_type: []const u8) ?[]const u8 {
         const t = std.mem.trim(u8, koru_type, " \t");
-        if (cTypeOf(t)) |ct| return ct;
+        if (cTypeOf(t)) |ct| {
+            self.checkCatalogType(t, ct);
+            return ct;
+        }
         if (self.aliases.contains(t)) return t;
         // `*X` — a pointer cell. A proto terminal's typedef already binds
         // `X`, so `X *` points at the alias's own spelling; a primitive
