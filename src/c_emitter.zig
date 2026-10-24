@@ -897,14 +897,13 @@ const Emitter = struct {
             return;
         }
         if (self.impls.get(key)) |ii| {
-            const v = ii.value;
-            if (!v.is_bare_return or v.branch_name.len != 0 or v.fields.len != 0 or v.plain_value == null) {
-                std.debug.print("error[KORU047]: C lane: {s} immediate impl is a named/fielded branch — outside the first fragment\n", .{key});
-                return CEmitError.UnsupportedConstruct;
-            }
+            // An immediate impl's value is a BranchConstructor — the same
+            // produce a continuation body emits, so it routes through the
+            // same lowering: `-> expr` returns, `=> name {…}` / `=> name v`
+            // build the tagged `struct <name>_res`, and what emitProduce
+            // cannot carry it refuses named.
             try self.emitFieldBindings(event);
-            try self.write("    ");
-            try self.emitReturnExpr(v.plain_value.?);
+            try self.emitProduce(&ii.value, "    ");
             try self.write("}\n\n");
             return;
         }
@@ -2175,8 +2174,12 @@ const Emitter = struct {
         // `{ f: v, ... }` into a record-typed field → the compound literal
         // `(<ct>){ .f = v }`. Payload, `_in`, `_ret` and proto structs all
         // spell `struct <name>`; `__koru_` cells take their own arms below.
+        // `__koru_rec_<tag>` is a minted record cell — it takes the same
+        // compound literal as a nominal struct; only the other `__koru_`
+        // cells (slice, comptime holes) keep their own arms below.
         if (std.mem.startsWith(u8, ct, "struct ") and
-            !std.mem.startsWith(u8, ct, "struct __koru_"))
+            (!std.mem.startsWith(u8, ct, "struct __koru_") or
+                std.mem.startsWith(u8, ct, "struct __koru_rec_")))
         {
             const vt = std.mem.trim(u8, value, " \t\n\r");
             if (vt.len > 1 and vt[0] == '{' and vt[vt.len - 1] == '}') {

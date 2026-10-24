@@ -29,6 +29,17 @@ Three instances, and the third is the one that named the pattern:
   pointer and a length, for reasons that were about *C*, not about text — C has
   exactly one way to hand over a run of values it does not own. Numbers are the
   same case. The refusal was a type check that matched one spelling.
+- A named branch needed no new result machinery. `pick => ok { a: x, b: 2 }`
+  refused as "immediate impl is a named/fielded branch — outside the first
+  fragment", while the identical produce inside a continuation body had been
+  emitting the tagged `struct _res` literal all along: `emitProduce` already
+  handled `=> name {…}`/`=> name v`, and `ImmediateImpl.value` *is* a
+  `BranchConstructor`. The wall was a call site that checked one spelling —
+  `is_bare_return && plain_value` — not a missing lowering. Rerouting the impl
+  path through `emitProduce` moved two tests (210_252, 210_297) with eleven
+  lines, and the same narrow-match shape bit twice more in the same rung:
+  `struct __koru_rec_` was excluded from the record-literal arg arm by a
+  `__koru_` prefix check written for slice/comptime cells.
 
 ## The tell, and why it is hard to see from inside
 
