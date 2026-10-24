@@ -109,3 +109,26 @@ through `lowerKoruExpr`, so the whole Zig-spelled vocabulary — inline ifs,
 keyed render. The standing claim is now weaker and still cheap to falsify:
 expression-bearing splices are covered in `for|js`; other per-call templates
 that splice `{{ expr }}`-shaped text were not audited in this pass.
+
+## Evolution — the bake can also MASK, not just misspell (2026-10-24)
+
+The original claim was direction one: text baked at Stage C commits a spelling
+before the emitter can fix it. 690_250 shows direction two: a host-targeted
+RESPELLING baked early can hide a construct from a LATER text-rewriting pass
+that would have recognized the un-spelled form.
+
+`if|c`'s template freezes `c_lower(expr)` into `inline_body` before any
+`store:new` transform runs, and `c_lower` respells `x[i]` as the deferred
+marker `__koru_idx(x, i)`. The store's whole-program indexed-read pass does
+visit `inline_body` — the position was covered — but its matcher looks for a
+literal `cells[` and the marker had already eaten it. The emitter's own
+marker pass then unwrapped `__koru_idx(cells, h)` to `(cells)[h]` and the
+oracle named `cells` undeclared. `head.h` inside the index lowered fine —
+the cell-path pass's pattern (`name.field`) survives the marker.
+
+So "does the walk reach the slot" is only half the reach question; the other
+half is "does anything respell the construct before the walk reads it." A
+deferred-resolution marker is a second pass's pattern space leaking into the
+first pass's input — the fix was teaching the indexed rewriter the marker
+spelling too (`__koru_idx(<store>, <idx>).<field>`), because the un-spelled
+form no longer exists by the time it looks.

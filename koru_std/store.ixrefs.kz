@@ -16,61 +16,87 @@ fn storeIndexedRefs(alloc: std.mem.Allocator, prog: *const ast_find.Program, tex
     var i: usize = 0;
     while (i < text.len) {
         const at_boundary = ast_find.identBoundaryBefore(text, i);
-        if (at_boundary and !ast_find.precededByMemberDot(text, i) and i + store.len < text.len and
-            std.mem.startsWith(u8, text[i..], store) and text[i + store.len] == '[')
-        {
-            const idx_start = i + store.len + 1;
-            var depth: usize = 1;
-            var j = idx_start;
-            while (j < text.len and depth > 0) : (j += 1) {
-                if (text[j] == '[') depth += 1;
-                if (text[j] == ']') {
-                    depth -= 1;
-                    if (depth == 0) break;
-                }
+        if (at_boundary and !ast_find.precededByMemberDot(text, i)) {
+            // `<store>[<idx>].<field>` — the direct spelling.
+            var idx_start: usize = 0;
+            var close: u8 = 0;
+            var open: u8 = 0;
+            if (i + store.len < text.len and
+                std.mem.startsWith(u8, text[i..], store) and text[i + store.len] == '[')
+            {
+                idx_start = i + store.len + 1;
+                open = '[';
+                close = ']';
+            } else if (std.mem.startsWith(u8, text[i..], "__koru_idx(") and
+                i + "__koru_idx(".len + store.len + 1 < text.len and
+                std.mem.startsWith(u8, text[i + "__koru_idx(".len ..], store) and
+                text[i + "__koru_idx(".len + store.len] == ',')
+            {
+                // `__koru_idx(<store>, <idx>).<field>` — the c_lower marker
+                // spelling of the same read. `|c` templates freeze
+                // `c_lower(expr)` BEFORE any store transform runs, so a
+                // `cells[h].v` baked into inline_body arrives here already
+                // re-spelled; without this arm the emitter's marker pass
+                // unwraps it to `(cells)[h]` — an undeclared identifier in
+                // C (690_250). The `store,` pin inside the call keeps a
+                // real array's `__koru_idx(arr, i)` untouched.
+                idx_start = i + "__koru_idx(".len + store.len + 1;
+                open = '(';
+                close = ')';
             }
-            if (depth == 0 and j + 1 < text.len and text[j + 1] == '.') {
-                const index = std.mem.trim(u8, text[idx_start..j], " ");
-                const fstart = j + 2;
-                var fend = fstart;
-                while (fend < text.len and storeIdentChar(text[fend])) fend += 1;
-                const fname = text[fstart..fend];
-                var known = false;
-                for (fields) |f| {
-                    if (std.mem.eql(u8, f, fname)) {
-                        known = true;
-                        break;
+            if (idx_start != 0) {
+                var depth: usize = 1;
+                var j = idx_start;
+                while (j < text.len and depth > 0) : (j += 1) {
+                    if (text[j] == open) depth += 1;
+                    if (text[j] == close) {
+                        depth -= 1;
+                        if (depth == 0) break;
                     }
                 }
-                if (known and index.len > 0) {
-                    const inner = storeIndexedRefsIn(alloc, prog, index, scope);
-                    // Pointer-named base (`&`) — see colRead: a by-value base
-                    // copies the whole column before the resolve. C# arrays
-                    // index directly — and the resolve rides inside the
-                    // cell's __koru_read_<field> method so no call sits in
-                    // index position in the emitted text.
-                    const piece = if (storeHostTarget() == .cs)
-                        std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__koru_read_{s}({s})", .{ prefix, store, codegen_utils_store.HostShape.csFolded(alloc, fname), inner }) catch unreachable
-                    else if (storeHostTarget() == .c)
-                        // C globals are flat — no module prefix — and the
-                        // resolve helper traps like the zig method does
-                        // (stale-gen vs not-a-handle are distinct messages).
-                        std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[__koru_resolve_{s}({s})]", .{ store, codegen_utils_store.cMemberName(alloc, fname), store, inner }) catch unreachable
-                    else if (charCap(alloc, prog, store, fname) != null)
-                        // A char column reads as the string slice up to the
-                        // first NUL — the same shape the qrow projection
-                        // binds and entityRefs (prewrite) emits. The bare
-                        // `(&col)[idx]` form is a `[N]u8` array, which the
-                        // expression rewrites cannot read (`&` inside parens
-                        // is NoParse in ZigExprParser) and `==` on which Zig
-                        // refuses outright — the slice form is what lets a
-                        // downstream parseEq wrap `spec[h].dir == "ttb"`.
-                        std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})], 0)", .{ prefix, store, fname, prefix, store, inner }) catch unreachable
-                    else
-                        std.fmt.allocPrint(alloc, "(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})]", .{ prefix, store, fname, prefix, store, inner }) catch unreachable;
-                    out.appendSlice(alloc, piece) catch unreachable;
-                    i = fend;
-                    continue;
+                if (depth == 0 and j + 1 < text.len and text[j + 1] == '.') {
+                    const index = std.mem.trim(u8, text[idx_start..j], " ");
+                    const fstart = j + 2;
+                    var fend = fstart;
+                    while (fend < text.len and storeIdentChar(text[fend])) fend += 1;
+                    const fname = text[fstart..fend];
+                    var known = false;
+                    for (fields) |f| {
+                        if (std.mem.eql(u8, f, fname)) {
+                            known = true;
+                            break;
+                        }
+                    }
+                    if (known and index.len > 0) {
+                        const inner = storeIndexedRefsIn(alloc, prog, index, scope);
+                        // Pointer-named base (`&`) — see colRead: a by-value base
+                        // copies the whole column before the resolve. C# arrays
+                        // index directly — and the resolve rides inside the
+                        // cell's __koru_read_<field> method so no call sits in
+                        // index position in the emitted text.
+                        const piece = if (storeHostTarget() == .cs)
+                            std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__koru_read_{s}({s})", .{ prefix, store, codegen_utils_store.HostShape.csFolded(alloc, fname), inner }) catch unreachable
+                        else if (storeHostTarget() == .c)
+                            // C globals are flat — no module prefix — and the
+                            // resolve helper traps like the zig method does
+                            // (stale-gen vs not-a-handle are distinct messages).
+                            std.fmt.allocPrint(alloc, "__koru_store_{s}.{s}[__koru_resolve_{s}({s})]", .{ store, codegen_utils_store.cMemberName(alloc, fname), store, inner }) catch unreachable
+                        else if (charCap(alloc, prog, store, fname) != null)
+                            // A char column reads as the string slice up to the
+                            // first NUL — the same shape the qrow projection
+                            // binds and entityRefs (prewrite) emits. The bare
+                            // `(&col)[idx]` form is a `[N]u8` array, which the
+                            // expression rewrites cannot read (`&` inside parens
+                            // is NoParse in ZigExprParser) and `==` on which Zig
+                            // refuses outright — the slice form is what lets a
+                            // downstream parseEq wrap `spec[h].dir == "ttb"`.
+                            std.fmt.allocPrint(alloc, "@import(\"std\").mem.sliceTo(&(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})], 0)", .{ prefix, store, fname, prefix, store, inner }) catch unreachable
+                        else
+                            std.fmt.allocPrint(alloc, "(&{s}__koru_store_{s}.{s})[{s}__koru_store_{s}.__koru_resolve({s})]", .{ prefix, store, fname, prefix, store, inner }) catch unreachable;
+                        out.appendSlice(alloc, piece) catch unreachable;
+                        i = fend;
+                        continue;
+                    }
                 }
             }
         }
