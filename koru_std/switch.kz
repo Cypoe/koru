@@ -43,18 +43,29 @@ const std = @import("std");
     const value_expr: []const u8 = invocation.args[0].value;
 
     // The dispatch text is host code spliced into the emitted program — zig
-    // gets a `switch` prong table; cs gets the semantically identical
+    // gets a `switch` prong table; cs AND C get the semantically identical
     // if/else-if chain (first match wins, same contract). C# pattern syntax
-    // would carry `and`/`when` words that the host-text lowerer rewrites; the
-    // chain needs neither.
+    // would carry `and`/`when` words that the host-text lowerer rewrites,
+    // and CompCert has no GNU `case 'a' ... 'z'` range prong — the chain is
+    // the honest spelling on both hosts.
     const host_is_cs = std.mem.eql(u8, CompilerEnv.lang, "cs");
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
 
     // Site-unique name for the dispatched value, so nested switches do not shadow
     // each other's binding.
     const value_name = std.fmt.allocPrint(allocator, "__koru_switch_value_{d}_{d}", .{ flow.location.line, flow.location.column }) catch unreachable;
 
+    // The value expression is host code: zig/cs splice the surface text
+    // (`ch`), C lowers it first — `line[i]` is not C the way it is Koru.
+    const dispatch_value = if (host_is_c) blk: {
+        const cgu = @import("codegen_utils");
+        break :blk cgu.lowerKoruExpr(allocator, value_expr, .c, .koru_expr, null) catch {
+            return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU047, flow.location, flow.module, "std/switch:char: dispatch expression has no C lowering in the first fragment", .{}) } };
+        };
+    } else value_expr;
+
     var dispatch = std.ArrayList(u8){};
-    appendSwitchHead(allocator, &dispatch, value_expr, value_name, host_is_cs);
+    appendSwitchHead(allocator, &dispatch, dispatch_value, value_name, host_is_cs, host_is_c);
 
     var nomatch_idx: ?usize = null;
     var first_arm = true;
@@ -74,8 +85,8 @@ const std = @import("std");
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU167, flow.location, flow.module, "std/switch:char: invalid range `{s}` (low > high)", .{name}) } };
         }
 
-        if (host_is_cs) {
-            appendCsArm(allocator, &dispatch, name, i, value_name, &first_arm);
+        if (host_is_cs or host_is_c) {
+            appendChainArm(allocator, &dispatch, name, i, value_name, &first_arm);
             continue;
         }
 
@@ -109,8 +120,8 @@ const std = @import("std");
 
     // Zig switch requires an else prong. Route to the `no-match` continuation if
     // the user supplied one, otherwise fall through with an empty else.
-    if (host_is_cs) {
-        appendCsTail(allocator, &dispatch, nomatch_idx, first_arm);
+    if (host_is_cs or host_is_c) {
+        appendChainTail(allocator, &dispatch, nomatch_idx, first_arm);
     } else {
         if (nomatch_idx) |ni| {
             const tail = std.fmt.allocPrint(allocator, "else => __koru_continue_{d}, ", .{ni}) catch unreachable;

@@ -66,3 +66,20 @@ emitted a call to the [norun] stub and aborted at runtime, not compile
 time. Third path, same contract: an emit path that honours inline_body on
 one item kind and walks the body raw on another is a broken emitter for
 every program that routes through the unhonoured kind.
+
+**Evolved 2026-10-24 — the contract is two-sided, and switch proved the
+transform side.** Until this rung every violation was an emitter failing
+to resolve markers. `std/switch:char` produced the mirror defect: markers
+that resolved perfectly (`__koru_inline_N(v)`, `__koru_continue_N` —
+the C emitter needed zero new machinery to honour them) inside
+scaffolding that was *zig text*. The C lane emitted
+`const __koru_switch_value_16_12: u8 = ch;` — valid marker positions,
+invalid host text — and only CompCert downstream caught it. The contract
+obligates both parties: the emitter must resolve every marker family it
+knows, AND the transform must ensure the text *between* markers is the
+target host's. C joined the contract by reusing cs's entire if/else-if
+chain — the chain shape is host-neutral; only the declaration head
+(`var` vs `const uint8_t` vs `const : u8`) and the value expression's
+lowering differ. A `switch` prong table was never required: first-match
+chain semantics are the contract, and CompCert lacks GNU
+`case 'a' ... 'z'` anyway.
