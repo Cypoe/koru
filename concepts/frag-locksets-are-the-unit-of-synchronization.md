@@ -78,13 +78,23 @@ Two consequences are part of the ruling, not implementation detail:
   mutex mid-flight deadlocks (`is_threaded_recursive`, checker-flagged);
   a recursive proc that also writes shared state is a deferred ruling.
 
-Measured: `koru/primes` (fold kernel, `expected.txt` oracle) runs
-checksum-identical under `[parallel]` — 20M range: 3.99s serial vs 1.42s
-parallel wall on a 4-way split. Known gap: the dirty flood only walks
-`proc_decl` items — an event impl written `name = <flow>` never enters
-the call graph, so a shared-state write inside that shape would take no
-lock. The partitioned-capture surface never produces one; the gap matters
-when shared-cell writes arrive.
+Measured: 9 Osprey fold kernels run checksum-identical under
+`[parallel]` — primes, digitsum, gcdsum, collatz, mutual, isqrt, powmod,
+factorial, binarytrees (20M primes: 3.99s serial → 0.62s parallel on
+8 cores). The refusal surface is three classes, ordered by teaching
+quality: non-monoid writes refuse at the site with the legal spelling
+(`400_218`); an item-bound `@rem` modulus refuses the same way — the join
+replays the wrap after workers finish, so `i` in `@rem(acc+7, i)` would
+bind nothing (`400_219`); a body reading an OUTER binding (`r.seed`,
+`sr.seed`, a sibling cell) hits Zig's namespace boundary — loud and
+binding-named, but not yet teaching-formatted: partition is per-cell,
+and reads of other cells are a different shape awaiting a ruling.
+Non-range iterables materialize as `usize` only; other item types refuse
+with a comptime check naming the type. Known gap: the dirty flood only
+walks `proc_decl` items — an event impl written `name = <flow>` never
+enters the call graph, so a shared-state write inside that shape would
+take no lock. The partitioned-capture surface never produces one; the
+gap matters when shared-cell writes arrive.
 
 - nothing declared → module mutex (process-lifetime static, coarse, safe —
   state that races usually lives in the same module's internals);

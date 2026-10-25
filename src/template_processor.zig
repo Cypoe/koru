@@ -1005,6 +1005,48 @@ fn splitFoldOp(inner: []const u8, cellRef: []const u8) ?u8 {
     return null;
 }
 
+/// The `@rem` modulus must be loop-invariant — the join replays it after
+/// the workers finish, where item bindings don't exist. Peel `@as(<ty>,
+/// <x>)` / `@intCast(<x>)` shells and require the leaf to be a numeric
+/// literal (`1000000007` qualifies; `i` or any bound name refuses —
+/// josephus's `@rem(acc+7, i)` is a per-item modulus, not a fold wrap).
+fn wrapLeafIsLiteral(wrap: []const u8) bool {
+    var t = std.mem.trim(u8, wrap, " \t");
+    while (true) {
+        var shell: ?[]const u8 = null;
+        if (std.mem.startsWith(u8, t, "@as(")) {
+            shell = t[4 .. t.len - 1];
+            // `@as(<ty>, <x>)` — leaf is after the last top-level comma.
+            var depth: usize = 1;
+            var comma: usize = 0;
+            var i: usize = 0;
+            while (i < shell.?.len) : (i += 1) {
+                switch (shell.?[i]) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -|= 1,
+                    ',' => {
+                        if (depth == 1) comma = i;
+                    },
+                    else => {},
+                }
+            }
+            t = std.mem.trim(u8, shell.?[comma + 1 ..], " \t");
+            continue;
+        }
+        if (std.mem.startsWith(u8, t, "@intCast(")) {
+            shell = t[9 .. t.len - 1];
+            t = std.mem.trim(u8, shell.?, " \t");
+            continue;
+        }
+        break;
+    }
+    if (t.len == 0) return false;
+    for (t) |ch| {
+        if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+
 /// Classify `cell.f = <expr>`: peel an optional outer `@rem(<x>, <K>)`
 /// wrapper, then require the remaining text to be a `<cell.f> <op> rest`
 /// (or mirrored) top-level fold. Anything else gets `op == 0` — the
@@ -1038,6 +1080,7 @@ fn classifyCellWrite(allocator: std.mem.Allocator, expr: []const u8, target: []c
         if (close != null and close.? == t.len - 1 and comma != null) {
             inner = std.mem.trim(u8, t[5 .. comma.?], " \t");
             wrap = std.mem.trim(u8, t[comma.? + 1 .. close.?], " \t");
+            if (!wrapLeafIsLiteral(wrap)) return .{};
         } else {
             return .{};
         }

@@ -67,6 +67,7 @@
         {% else %}var __koru_par_buf{{ __site }}: [8192]usize = undefined;
         var __koru_par_n{{ __site }}: usize = 0;
         for ({{ expr }}) |__koru_par_it| {
+            if (@TypeOf(__koru_par_it) != usize) @compileError("[parallel]for materializes non-range iterables as usize — item type '" ++ @typeName(@TypeOf(__koru_par_it)) ++ "' isn't lowered yet. Split a usize range (lo..hi), or drop [parallel]");
             __koru_par_buf{{ __site }}[__koru_par_n{{ __site }}] = __koru_par_it;
             __koru_par_n{{ __site }} += 1;
         }

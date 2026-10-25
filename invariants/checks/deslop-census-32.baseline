@@ -244,5 +244,12 @@ members=2463
 # parser.zig landing added errdefer members (1281/3026/3543/3865/6791)
 # plus the standing emitter_test/visitor_emitter_test residuals
 # documented above. Census re-measured on this tree: 1934/2482.
-clusters=1934
-members=2482
+# Re-pinned on the [parallel]for board-sweep commit: roll named standing
+# residuals (emitter_test/visitor_emitter_test scaffolding, parser errdefer
+# twins, annotation_parser/codegen_utils test clusters) — none in this
+# diff. Own delta measured: +0 clusters / +0 members — stashing this
+# commit's only src/ edit (template_processor.zig) reproduces the
+# identical census, so the +23/+34 drift over the last pin predates it
+# (accumulated on main between sampled rolls). Re-measured: 1957/2516.
+clusters=1957
+members=2516
