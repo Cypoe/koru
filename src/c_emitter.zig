@@ -674,6 +674,7 @@ const Emitter = struct {
     catalog_builtins: ?std.StringHashMap([]const u8) = null,
     catalog_prelude: ?std.StringHashMap([]const u8) = null,
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
+    catalog_constructs: ?std.StringHashMap([]const u8) = null,
     catalog_loaded: bool = false,
     /// The event whose handler body is emitting — `=> name` produce nodes
     /// build its `struct <name>_res` literal.
@@ -736,6 +737,7 @@ const Emitter = struct {
         self.catalog_builtins = loadTargetRows(self.allocator, "builtin");
         self.catalog_prelude = loadTargetRows(self.allocator, "prelude");
         self.catalog_fragment = loadTargetRows(self.allocator, "fragment");
+        self.catalog_constructs = loadTargetRows(self.allocator, "construct");
     }
 
     /// The flat type table, catalog-sole-source: the declared
@@ -804,6 +806,19 @@ const Emitter = struct {
         const table = self.catalog_fragment orelse return;
         if (!table.contains(key)) {
             std.debug.print("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
+        }
+    }
+
+    /// The construct boundary — called where a proc has no |c body.
+    /// A catalog-claimed construct (`supported`) refusing is overpromise;
+    /// unclaimed and refused is consistent silence.
+    fn checkCatalogConstruct(self: *Emitter, key: []const u8) void {
+        self.ensureCatalog();
+        const table = self.catalog_constructs orelse return;
+        if (table.get(key)) |decl| {
+            if (std.mem.eql(u8, decl, "supported")) {
+                std.debug.print("std/target drift: construct `{s}` catalog=`supported` but emitter refuses\n", .{key});
+            }
         }
     }
 
@@ -1115,6 +1130,7 @@ const Emitter = struct {
             if (self.cProcOf(key) == null) {
                 std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
 self.checkCatalogFragment("missing-target-proc-body");
+            self.checkCatalogConstruct(key);
                 return CEmitError.NoCProcBody;
             }
             return;
@@ -1190,6 +1206,7 @@ self.checkCatalogFragment("missing-target-proc-body");
         }
         std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
         self.checkCatalogFragment("missing-target-proc-body");
+            self.checkCatalogConstruct(key);
         return CEmitError.NoCProcBody;
     }
 
@@ -1593,6 +1610,7 @@ self.checkCatalogFragment("destructure");
         const cproc = self.cProcOf(key) orelse {
             std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
             self.checkCatalogFragment("missing-target-proc-body");
+            self.checkCatalogConstruct(key);
             return CEmitError.NoCProcBody;
         };
         if (inv.return_destructure.len != 0) {

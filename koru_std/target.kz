@@ -249,3 +249,24 @@ pub const Catalog = struct {
         "__koru_comptime_Source"
     ]
 }
+
+// ============================================================================
+// CONSTRUCT INDEX — which std surfaces the c arm covers
+// ============================================================================
+//
+// A construct row names a capability the lane claims. Checked one way at
+// the NoCProcBody refusal: a claimed construct that refuses is catalog
+// overpromise (drift). The reverse — an unclaimed construct that lowers —
+// is invisible to refusal hooks; the walker owns that direction when it
+// arrives.
+
+~[comptime|norun]pub tor construct { name: Expression, source: Source }
+
+~std/target:construct(c) {
+    "std/io:print.ln": "supported",
+    "std/io:eprint.ln": "supported",
+    "std/store:new": "supported",
+    "std/store:stored": "supported",
+    "std/store:watch": "supported",
+    "std/switch:char": "supported",
+}
