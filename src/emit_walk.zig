@@ -117,12 +117,36 @@ fn constructKey(path: *const ast.DottedPath) ![]const u8 {
 /// surface-vocabulary names are compiled OUT by transforms (the store watch
 /// becomes minted `__store_*` sites), so a nonzero query count is itself
 /// informative — it means a surface construct survived to a site.
-fn siteQuery(stats: *Stats, constructs: ?*const CatalogTypes, module: []const u8, path: *const ast.DottedPath) void {
-    const mq = path.module_qualifier orelse return;
-    if (!std.mem.startsWith(u8, mq, "std.") and !std.mem.startsWith(u8, mq, "std/")) return;
+/// A transform-stamped surface provenance: `@from_construct("std/store:stored")`
+/// on a minted site's marks names the surface verb it lowers — the post-
+/// transform name is minted (`__store_write_game`) but the catalog row is the
+/// surface vocabulary, so the mark is the only honest key. Marks are
+/// pass-internal (never parsed from surface syntax) — an author cannot
+/// counterfeit one.
+fn markedConstruct(marks: []const []const u8) ?[]const u8 {
+    const prefix = "@from_construct(\"";
+    for (marks) |m| {
+        if (std.mem.startsWith(u8, m, prefix) and m.len > prefix.len + 1 and
+            m[m.len - 1] == ')' and m[m.len - 2] == '"')
+        {
+            return m[prefix.len .. m.len - 2];
+        }
+    }
+    return null;
+}
+
+fn siteQuery(stats: *Stats, constructs: ?*const CatalogTypes, module: []const u8, iv: *const ast.Invocation) void {
     const table = constructs orelse return;
+    const path = &iv.path;
+    var key: []const u8 = "";
+    if (markedConstruct(iv.marks)) |mk| {
+        key = mk;
+    } else {
+        const mq = path.module_qualifier orelse return;
+        if (!std.mem.startsWith(u8, mq, "std.") and !std.mem.startsWith(u8, mq, "std/")) return;
+        key = constructKey(path) catch return;
+    }
     stats.construct_queries += 1;
-    const key = constructKey(path) catch return;
     if (table.get(key)) |_| {
         stats.construct_answered += 1;
     } else {
@@ -138,11 +162,11 @@ fn walkNode(n: *const ast.Node, stats: *Stats, cat: *const Catalog, module: []co
     switch (n.*) {
         .invocation => |*iv| {
             stats.sites += 1;
-            siteQuery(stats, cat.constructs, module, &iv.path);
+            siteQuery(stats, cat.constructs, module, iv);
         },
         .label_with_invocation => |*lwi| {
             stats.sites += 1;
-            siteQuery(stats, cat.constructs, module, &lwi.invocation.path);
+            siteQuery(stats, cat.constructs, module, &lwi.invocation);
         },
         .terminal => stats.terminals += 1,
         .conditional_block => |*cb| {

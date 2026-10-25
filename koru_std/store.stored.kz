@@ -706,8 +706,14 @@
     // user-facing case to paper over.
     const write_home = H.storeHomeModule(allocator, program, target_store) orelse
         std.debug.panic("std/store: store '{s}' resolved a field order but no declaring module", .{target_store});
-    const write_wmark = allocator.alloc([]const u8, 1) catch unreachable;
+    // Two marks: the write-verdict witness (the obligation the emitters
+    // check) and the surface-construct provenance — `@from_construct`
+    // records that this minted site lowers `std/store:stored`, so a
+    // post-transform walk can still ask the catalog's construct row for
+    // the surface verb rather than the minted name.
+    const write_wmark = allocator.alloc([]const u8, 2) catch unreachable;
     write_wmark[0] = storedWriteWitnessMark(allocator, write_check);
+    write_wmark[1] = "@from_construct(\"std/store:stored\")";
     const write_inv = ast.Invocation{
         .path = ast.DottedPath{
             .module_qualifier = allocator.dupe(u8, write_home) catch unreachable,
