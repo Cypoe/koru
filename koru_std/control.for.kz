@@ -29,6 +29,12 @@
                 {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
+            fn runTask(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
+                __koru_par_depth += 1;
+                defer __koru_par_depth -= 1;
+                run(__koru_par_lo, __koru_par_hi{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %});
+                _ = __koru_par_tasks.fetchSub(1, .monotonic);
+            }
             {% else %}fn run(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
                 {% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
                 {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
@@ -41,12 +47,17 @@
                 {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
+            fn runTask(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
+                __koru_par_depth += 1;
+                defer __koru_par_depth -= 1;
+                run(__koru_par_slice{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %});
+                _ = __koru_par_tasks.fetchSub(1, .monotonic);
+            }
             {% endif %}
         };
         const __koru_par_CAP{{ __site }} = 64;
         const __koru_par_C{{ __site }} = @min(@import("std").Thread.getCpuCount() catch 4, __koru_par_CAP{{ __site }});
-        var __koru_par_threads{{ __site }}: [__koru_par_CAP{{ __site }}]@import("std").Thread = undefined;
-        var __koru_par_spawned{{ __site }}: usize = 0;
+        var __koru_par_wg{{ __site }}: @import("std").Thread.WaitGroup = .{};
         {% if __cells %}var __koru_par_caps{{ __site }}: [__koru_par_CAP{{ __site }}]@TypeOf(.{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }) = undefined;
         var __koru_par_ok{{ __site }}: [__koru_par_CAP{{ __site }}]bool = @splat(false);
         {% endif %}{% if __range_lo != "" %}const __koru_par_rlo{{ __site }}: usize = {{ __range_lo }};
@@ -56,10 +67,10 @@
             const __koru_par_hi = __koru_par_rlo{{ __site }} + (__koru_par_c + 1) * (__koru_par_rhi{{ __site }} - __koru_par_rlo{{ __site }}) / __koru_par_C{{ __site }};
             if (__koru_par_lo < __koru_par_hi) {
                 {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
-                {% endif %}if (@import("std").Thread.spawn(.{}, __koru_par_body{{ __site }}.run, .{ __koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} })) |__koru_par_t| {
-                    __koru_par_threads{{ __site }}[__koru_par_spawned{{ __site }}] = __koru_par_t;
-                    __koru_par_spawned{{ __site }} += 1;
-                } else |_| {
+                {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
+                    _ = __koru_par_tasks.fetchAdd(1, .monotonic);
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} });
+                } else {
                     __koru_par_body{{ __site }}.run(__koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %});
                 }
             }
@@ -77,15 +88,15 @@
             const __koru_par_hi = (__koru_par_c + 1) * __koru_par_items{{ __site }}.len / __koru_par_C{{ __site }};
             if (__koru_par_lo < __koru_par_hi) {
                 {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
-                {% endif %}if (@import("std").Thread.spawn(.{}, __koru_par_body{{ __site }}.run, .{ __koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} })) |__koru_par_t| {
-                    __koru_par_threads{{ __site }}[__koru_par_spawned{{ __site }}] = __koru_par_t;
-                    __koru_par_spawned{{ __site }} += 1;
-                } else |_| {
+                {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
+                    _ = __koru_par_tasks.fetchAdd(1, .monotonic);
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} });
+                } else {
                     __koru_par_body{{ __site }}.run(__koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %});
                 }
             }
         }
-        {% endif %}for (__koru_par_threads{{ __site }}[0..__koru_par_spawned{{ __site }}]) |__koru_par_t| __koru_par_t.join();
+        {% endif %}if (__koru_par_pool_ready) __koru_par_pool.waitAndWork(&__koru_par_wg{{ __site }});
         {% if __cells %}for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
             if (__koru_par_ok{{ __site }}[__koru_par_c]) {
                 {% for c in __cells %}{% for f in c.fields %}{% if f.ok != "" %}{% if f.wrap != "" %}{{ c.real }}.{{ f.name }} = @rem({{ c.real }}.{{ f.name }} {{ f.op }} __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }}, {{ f.wrap }});
