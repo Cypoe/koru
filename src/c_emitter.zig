@@ -181,10 +181,25 @@ fn loadTargetRows(
         if (parsed.value != .object) continue;
         var it = parsed.value.object.iterator();
         while (it.next()) |e| {
-            if (e.value_ptr.* != .string) continue;
             const key = allocator.dupe(u8, e.key_ptr.*) catch continue;
-            const val = allocator.dupe(u8, e.value_ptr.string) catch continue;
-            table.put(key, val) catch {};
+            switch (e.value_ptr.*) {
+                .string => |s| {
+                    const val = allocator.dupe(u8, s) catch continue;
+                    table.put(key, val) catch {};
+                },
+                // List rows (prelude's includes/helpers): each element
+                // registers itself as `element -> <list key>` — a
+                // membership lookup, which is all the coverage checks ask.
+                .array => |arr| {
+                    for (arr.items) |elem| {
+                        if (elem != .string) continue;
+                        const elem_key = allocator.dupe(u8, elem.string) catch continue;
+                        const key_val = allocator.dupe(u8, key) catch continue;
+                        table.put(elem_key, key_val) catch {};
+                    }
+                },
+                else => {},
+            }
         }
     }
     std.debug.print("std/target catalog: `{s}` rows harvested: {d}\n", .{ verb, table.count() });
@@ -630,12 +645,16 @@ const Emitter = struct {
     /// call sites.
     res_counter: usize = 0,
 
-    /// `std/target:type(c)` rows harvested from `koru_std/target.kz` —
-    /// dual-answer mode: `cTypeOfResolved` checks its flat-table answer
-    /// against the catalog and prints drift on stderr; the emitter's own
-    /// answer still wins until the corpus proves the rows and the flip
-    /// rung makes the catalog the sole source.
+    /// `std/target:*(c)` rows harvested from `koru_std/target.kz` —
+    /// dual-answer mode: type spellings, minted names, the builtin
+    /// refusal boundary, and the prelude include/helper surface all check
+    /// against the declared rows and print drift on stderr; the emitter's
+    /// own answer still wins until the corpus proves the rows and the
+    /// flip rung makes the catalog the sole source.
     catalog_types: ?std.StringHashMap([]const u8) = null,
+    catalog_names: ?std.StringHashMap([]const u8) = null,
+    catalog_builtins: ?std.StringHashMap([]const u8) = null,
+    catalog_prelude: ?std.StringHashMap([]const u8) = null,
     catalog_loaded: bool = false,
     /// The event whose handler body is emitting — `=> name` produce nodes
     /// build its `struct <name>_res` literal.
@@ -669,6 +688,7 @@ const Emitter = struct {
                     std.debug.print("error[KORU047]: C lane: wrapping operator `{s}` in expression `{s}` — wrap width is the operand's declared int width, which neither operand resolves to in this scope\n", .{ diag.unsupported_op, text });
                 } else {
                     std.debug.print("error[KORU047]: C lane: unsupported builtin {s} in expression `{s}`\n", .{ diag.unknown_builtin, text });
+                    self.checkCatalogBuiltinRefusal(diag.unknown_builtin);
                 }
                 return CEmitError.UnsupportedConstruct;
             }
@@ -684,16 +704,25 @@ const Emitter = struct {
         try self.write(text);
     }
 
+    /// Lazy-load all declared `(c)` rows once — `null` maps mean absent
+    /// catalog/env (advisory stage: silent) while present maps are
+    /// authoritative on coverage.
+    fn ensureCatalog(self: *Emitter) void {
+        if (self.catalog_loaded) return;
+        self.catalog_loaded = true;
+        self.catalog_types = loadTargetRows(self.allocator, "type");
+        self.catalog_names = loadTargetRows(self.allocator, "name");
+        self.catalog_builtins = loadTargetRows(self.allocator, "builtin");
+        self.catalog_prelude = loadTargetRows(self.allocator, "prelude");
+    }
+
     /// Dual-answer against the declared `std/target:type(c)` rows — drift
     /// on stderr, never silently: a missing catalog file is fine at the
     /// advisory stage, but a row disagreeing with the emitter table (or a
     /// key the table answers and the catalog lacks) is exactly the defect
     /// the congruence rungs exist to expose.
     fn checkCatalogType(self: *Emitter, koru_type: []const u8, emitted: []const u8) void {
-        if (!self.catalog_loaded) {
-            self.catalog_loaded = true;
-            self.catalog_types = loadTargetRows(self.allocator, "type");
-        }
+        self.ensureCatalog();
         const table = self.catalog_types orelse return;
         const declared = table.get(koru_type) orelse {
             std.debug.print("std/target drift: type row missing for `{s}` (emitter answers `{s}`)\n", .{ koru_type, emitted });
@@ -701,6 +730,78 @@ const Emitter = struct {
         };
         if (!std.mem.eql(u8, declared, emitted)) {
             std.debug.print("std/target drift: `{s}` emitter=`{s}` catalog=`{s}`\n", .{ koru_type, emitted, declared });
+        }
+    }
+
+    /// A minted constant against its declared `name` row — called at the
+    /// mint sites whose spellings are ABI between declaration and use
+    /// (slice/rec/cap struct tags). Same drift contract as the types.
+    fn checkCatalogName(self: *Emitter, key: []const u8, literal: []const u8) void {
+        self.ensureCatalog();
+        const table = self.catalog_names orelse return;
+        const declared = table.get(key) orelse {
+            std.debug.print("std/target drift: name row missing for `{s}` (emitter mints `{s}`)\n", .{ key, literal });
+            return;
+        };
+        if (!std.mem.eql(u8, declared, literal)) {
+            std.debug.print("std/target drift: name `{s}` emitter=`{s}` catalog=`{s}`\n", .{ key, literal, declared });
+        }
+    }
+
+    /// The builtin refusal boundary — called where a builtin refuses.
+    /// `lowered` in the row but refused here is an overpromise; a refusal
+    /// the row does not name at all keeps the boundary from being data.
+    fn checkCatalogBuiltinRefusal(self: *Emitter, name: []const u8) void {
+        self.ensureCatalog();
+        const table = self.catalog_builtins orelse return;
+        const key = std.fmt.allocPrint(self.allocator, "@{s}", .{name}) catch return;
+        const declared = table.get(key) orelse {
+            std.debug.print("std/target drift: builtin refusal `{s}` not catalog-declared\n", .{key});
+            return;
+        };
+        if (std.mem.eql(u8, declared, "lowered")) {
+            std.debug.print("std/target drift: builtin `{s}` catalog=`lowered` but emitter refuses\n", .{key});
+        }
+    }
+
+    /// Post-emit prelude coverage — every `#include <x>` and
+    /// `static … __koru_<name>(` definition reaching output must be
+    /// catalog-declared (emitted ⊆ declared). |c-body-authored `__koru_`
+    /// locals inside function bodies are out of scope — the row names
+    /// the static prelude surface, not stdlib internals.
+    fn checkCatalogPrelude(self: *Emitter, buf: *const std.ArrayList(u8)) void {
+        self.ensureCatalog();
+        const table = self.catalog_prelude orelse return;
+        var rest = buf.items;
+        while (std.mem.indexOf(u8, rest, "#include <")) |at| {
+            const after = rest[at + "#include <".len ..];
+            const end = std.mem.indexOfScalar(u8, after, '>') orelse break;
+            const inc = after[0..end];
+            if (!table.contains(inc)) {
+                std.debug.print("std/target drift: include `<{s}>` emitted but not catalog-declared\n", .{inc});
+            }
+            rest = after[end..];
+        }
+        rest = buf.items;
+        while (std.mem.indexOf(u8, rest, " __koru_")) |at| {
+            const after = rest[at + " __koru_".len ..];
+            var n: usize = 0;
+            while (n < after.len and (std.ascii.isAlphanumeric(after[n]) or after[n] == '_')) n += 1;
+            const ident = after[0..n];
+            // Only prelude definitions count — a `__koru_x(` call site or
+            // an indented local is the caller/author's text, not the
+            // emitted surface. Definitions are the `static … __koru_N(`
+            // shape, so require the line to carry `static` before the id.
+            const line_start = if (std.mem.lastIndexOfScalar(u8, rest[0..at], '\n')) |nl| nl + 1 else 0;
+            const line_head = rest[line_start..at];
+            const is_def = std.mem.indexOf(u8, line_head, "static") != null and n < after.len and after[n] == '(';
+            rest = after[n..];
+            if (is_def) {
+                const full = std.fmt.allocPrint(self.allocator, "__koru_{s}", .{ident}) catch continue;
+                if (!table.contains(full)) {
+                    std.debug.print("std/target drift: helper `{s}` emitted but not catalog-declared\n", .{full});
+                }
+            }
         }
     }
 
@@ -779,6 +880,7 @@ const Emitter = struct {
                 ct;
             const tag = mangleOpaqueName(self.allocator, member) orelse return null;
             self.slice_decls.put(tag, member) catch return null;
+            self.checkCatalogName("slice_prefix", "__koru_slice_");
             return std.fmt.allocPrint(self.allocator, "struct __koru_slice_{s}", .{tag}) catch null;
         }
         // `{ f: T, g: U }` — an anonymous record. Koru records are
@@ -805,6 +907,7 @@ const Emitter = struct {
                 }
                 self.record_decls.put(self.allocator.dupe(u8, tag) catch return null, pfields.toOwnedSlice(self.allocator) catch return null) catch return null;
             }
+            self.checkCatalogName("rec_prefix", "__koru_rec_");
             return std.fmt.allocPrint(self.allocator, "struct __koru_rec_{s}", .{tag}) catch null;
         }
         // `T<...>` — a phantom-qualified scalar: the obligation marks the
@@ -1803,6 +1906,8 @@ const Emitter = struct {
                     const ind2 = try std.fmt.allocPrint(self.allocator, "{s}    ", .{indent});
                     defer self.allocator.free(ind2);
                     try self.writeFmt("{s}{{\n", .{indent});
+                    self.checkCatalogName("cap_prefix", "__koru_cap_");
+                    self.checkCatalogName("snap_name", "__koru_snap");
                     try self.writeFmt("{s}struct __koru_cap_{s} __koru_snap = {s};\n", .{ ind2, asgn.target, asgn.target });
                     for (asgn.fields) |f| {
                         try self.write(ind2);
@@ -2704,7 +2809,7 @@ const ZIG_TOKENS = [_][]const u8{
     ".{ .",           "orelse ",       "catch |",   "errdefer",
 };
 
-fn validateNoZigInC(buf: *const std.ArrayList(u8)) CEmitError!void {
+fn validateNoZigInC(em: *Emitter, buf: *const std.ArrayList(u8)) CEmitError!void {
     const text = buf.items;
     var i: usize = 0;
     var in_str: ?u8 = null;
@@ -2744,6 +2849,19 @@ fn validateNoZigInC(buf: *const std.ArrayList(u8)) CEmitError!void {
             in_block_comment = true;
             i += 1;
             continue;
+        }
+        // `@`-builtins are never valid C — any `@name` reaching output is
+        // an un-lowered builtin. The fixed ZIG_TOKENS list can only name
+        // builtins already seen; this covers the whole alphabet (and is
+        // what catches a swallowed lowerKoruExpr refusal, e.g. the
+        // ioLowerCExpr `catch text` fallback in print-arg text).
+        if (c == '@' and i + 1 < text.len and codegen_utils.exprIdentChar(text[i + 1])) {
+            var e = i + 1;
+            while (e < text.len and codegen_utils.exprIdentChar(text[e])) e += 1;
+            const name = text[i + 1 .. e];
+            std.debug.print("error[KORU047]: C lane: un-lowered builtin `@{s}` reached output line {d}\n", .{ name, line });
+            em.checkCatalogBuiltinRefusal(name);
+            return CEmitError.ZigTextInOutput;
         }
         for (ZIG_TOKENS) |tok| {
             if (i + tok.len <= text.len and std.mem.eql(u8, text[i .. i + tok.len], tok)) {
@@ -3122,6 +3240,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     try rewriteSliceAccessors(&rewritten, allocator, buf.items, &int_bindings);
     buf.deinit(allocator);
     buf = .empty;
-    try validateNoZigInC(&rewritten);
+    em.checkCatalogPrelude(&rewritten);
+    try validateNoZigInC(&em, &rewritten);
     return rewritten.toOwnedSlice(allocator);
 }

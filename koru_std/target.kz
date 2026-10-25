@@ -150,3 +150,102 @@ pub const Catalog = struct {
         "store-tree-index-entity-owned-ref-columns"
     ]
 }
+
+// Naming conventions — logical name -> emitted constant. Generative
+// families carry their prefix (`__koru_slice_` mints `__koru_slice_<tag>`);
+// helper spellings are literals. The emitter dual-answers each at its
+// mint site — a renamed constant that never updated the row drifts loud.
+~std/target:name(c) {
+    "slice_prefix": "__koru_slice_",
+    "rec_prefix": "__koru_rec_",
+    "cap_prefix": "__koru_cap_",
+    "res_prefix": "__koru_res_",
+    "raise_prefix": "__koru_raise_",
+    "inline_prefix": "__koru_inline_",
+    "continue_prefix": "__koru_continue_",
+    "comptime_prefix": "__koru_comptime_",
+    "store_prefix": "__koru_store_",
+    "snap_name": "__koru_snap",
+    "idx_marker": "__koru_idx",
+    "i128_cell": "__koru_i128",
+    "u128_cell": "__koru_u128"
+}
+
+// The builtin boundary — `@name` -> lowered | refused. The check lives
+// at the UnsupportedBuiltin refusal: a refusal the catalog calls
+// "lowered" is drift (overpromise), a refusal the catalog does not name
+// at all is drift too (the boundary stays declared, fragment-style).
+~std/target:builtin(c) {
+    "@as": "lowered",
+    "@intCast": "lowered",
+    "@floatFromInt": "lowered",
+    "@intFromFloat": "lowered",
+    "@floatCast": "lowered",
+    "@intFromBool": "lowered",
+    "@divTrunc": "lowered",
+    "@rem": "lowered",
+    "@mod": "lowered",
+    "@max": "lowered",
+    "@min": "lowered",
+    "@panic": "refused",
+    "@ptrCast": "refused",
+    "@bitCast": "refused",
+    "@embedFile": "refused",
+    "@compileError": "refused",
+    "@import": "refused",
+    "@enumFromInt": "refused",
+    "@intFromEnum": "refused",
+    "@truncate": "refused",
+    "@divExact": "refused",
+    "@divFloor": "refused",
+    "@popCount": "refused",
+    "@exp2": "refused",
+    "@sqrt": "refused",
+    "@sin": "refused",
+    "@cos": "refused",
+    "@tan": "refused",
+    "@exp": "refused",
+    "@log": "refused",
+    "@log2": "refused",
+    "@log10": "refused",
+    "@floor": "refused",
+    "@ceil": "refused",
+    "@trunc": "refused",
+    "@abs": "refused"
+}
+
+// The preamble — includes and the static helper surface the lowering
+// and |c transforms write against, as lists (the text itself stays in
+// the emitter until the walker owns expansion). Post-emit, every
+// `#include <x>` and `static ... __koru_<name>(` definition reaching
+// output must appear here — the emitted set is a subset of the
+// declared set, never the other way.
+~std/target:prelude(c) {
+    "includes": ["stdio.h", "stdlib.h", "string.h", "stdint.h", "stdbool.h", "errno.h"],
+    "helpers": [
+        "__koru_concat",
+        "__koru_stdout_write",
+        "__koru_stderr_write",
+        "__koru_len_str",
+        "__koru_streq",
+        "__koru_str_i64",
+        "__koru_stdout_write_i64",
+        "__koru_stderr_write_i64",
+        "__koru_stdout_write_f64",
+        "__koru_stderr_write_f64",
+        "__koru_stdout_write_f64_prec",
+        "__koru_stderr_write_f64_prec",
+        "__koru_unreachable",
+        "__koru_intcast",
+        "__koru_intcast_u",
+        "__koru_max_ll",
+        "__koru_min_ll"
+    ],
+    "state": [
+        "__koru_argc",
+        "__koru_argv",
+        "__koru_readln_buf",
+        "__koru_comptime_Expression",
+        "__koru_comptime_Source"
+    ]
+}
