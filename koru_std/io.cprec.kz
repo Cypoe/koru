@@ -23,7 +23,7 @@
 /// Return codes: 0 ok; 2 — `:S` handle form, REFUSED (pointer machinery is
 /// outside the first fragment). Anything else falls back to the string
 /// write, where a wrong-typed operand fails loudly at the oracle's typecheck.
-fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, raw: []const u8, write_suffix: *[]const u8) u8 {
+fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, raw: []const u8, write_suffix: *[]const u8, diag_out: ?*codegen_utils_io.LowerDiag) codegen_utils_io.LowerError!u8 {
     var ws_start: usize = 0;
     while (ws_start < raw.len and (raw[ws_start] == ' ' or raw[ws_start] == '\t')) : (ws_start += 1) {}
     var ws_end = raw.len;
@@ -50,7 +50,8 @@ fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, 
     if (precision) |p| {
         write_suffix.* = "_f64_prec";
         buf.append(allocator, '(') catch unreachable;
-        buf.appendSlice(allocator, ioLowerCExpr(allocator, var_name)) catch unreachable;
+        const lowered_p = ioLowerCExpr(allocator, var_name, diag_out) catch |e| return e;
+        buf.appendSlice(allocator, lowered_p) catch unreachable;
         buf.appendSlice(allocator, "), ") catch unreachable;
         buf.appendSlice(allocator, p) catch unreachable;
         return 0;
@@ -67,7 +68,8 @@ fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, 
     }
 
     buf.append(allocator, '(') catch unreachable;
-    buf.appendSlice(allocator, ioLowerCExpr(allocator, var_name)) catch unreachable;
+    const lowered_v = ioLowerCExpr(allocator, var_name, diag_out) catch |e| return e;
+    buf.appendSlice(allocator, lowered_v) catch unreachable;
     buf.append(allocator, ')') catch unreachable;
     return 0;
 }
@@ -77,6 +79,18 @@ fn ioCPlaceholderOperand(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, 
 // surface, same reroute-to-print.impl surgery; what differs is the emitted
 // text shape (a statement LIST of write calls, not one concatenated arg).
 // ============================================================================
+
+/// The interpolation refusal — ioLowerCExpr propagates the .c arm's
+/// failure with its diag; this names it at the flow's location instead of
+/// splicing raw text the oracle names later and worse.
+fn ioRefuseC(allocator: std.mem.Allocator, reporter: anytype, flow: *const @import("ast").Flow, diag: *const codegen_utils_io.LowerDiag) @import("ast").SiteResult {
+    const ast = @import("ast");
+    if (diag.unsupported_op.len != 0) {
+        return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print|c: wrapping operator `{s}` in interpolation — wrap width is the operand's declared int width, which nothing in this scope resolves to", .{diag.unsupported_op});
+    }
+    return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print|c: unsupported builtin `{s}` in interpolation — the C arm has no lowering for it", .{diag.unknown_builtin});
+}
+
 fn __printInterpolateC(
     expr: []const u8,
     item: anytype,
@@ -101,6 +115,7 @@ fn __printInterpolateC(
 
     var buf = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
     var chunk = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
+    var diag = codegen_utils_io.LowerDiag{};
 
     const flush = struct {
         fn call(b: *std.ArrayList(u8), ch: *std.ArrayList(u8), a: std.mem.Allocator, w: []const u8) void {
@@ -147,7 +162,8 @@ fn __printInterpolateC(
                             flush(&buf, &chunk, allocator, write_fn);
                             buf.appendSlice(allocator, write_fn) catch unreachable;
                             buf.appendSlice(allocator, "((") catch unreachable;
-                            buf.appendSlice(allocator, ioLowerCExpr(allocator, cond_var)) catch unreachable;
+                            const cond_lowered = ioLowerCExpr(allocator, cond_var, &diag) catch return ioRefuseC(allocator, reporter, flow, &diag);
+                            buf.appendSlice(allocator, cond_lowered) catch unreachable;
                             buf.appendSlice(allocator, ") ? \"") catch unreachable;
                             buf.appendSlice(allocator, body_content) catch unreachable; // verbatim — already escaped
                             buf.appendSlice(allocator, "\" : \"\"); ") catch unreachable;
@@ -177,7 +193,7 @@ fn __printInterpolateC(
                     flush(&buf, &chunk, allocator, write_fn);
                     var operand = std.ArrayList(u8).initCapacity(allocator, 32) catch unreachable;
                     var write_suffix: []const u8 = "";
-                    const op_rc = ioCPlaceholderOperand(&operand, allocator, content[ws_start..ws_end], &write_suffix);
+                    const op_rc = ioCPlaceholderOperand(&operand, allocator, content[ws_start..ws_end], &write_suffix, &diag) catch return ioRefuseC(allocator, reporter, flow, &diag);
                     if (op_rc == 2) {
                         return ast.refuse(allocator, reporter, .KORU047, flow.location, flow.module, "std/io:print.ln|c: `{{ :S }}` handle form is outside the first fragment — *String pointer machinery has no C lowering", .{});
                     }
@@ -206,7 +222,8 @@ fn __printInterpolateC(
         // fragment's typed gate, see header).
         buf.appendSlice(allocator, write_fn) catch unreachable;
         buf.appendSlice(allocator, "((") catch unreachable;
-        buf.appendSlice(allocator, ioLowerCExpr(allocator, expr)) catch unreachable;
+        const bare_lowered = ioLowerCExpr(allocator, expr, &diag) catch return ioRefuseC(allocator, reporter, flow, &diag);
+        buf.appendSlice(allocator, bare_lowered) catch unreachable;
         buf.appendSlice(allocator, ")); ") catch unreachable;
         wrote_any = true;
     }

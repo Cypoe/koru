@@ -36,10 +36,11 @@ fn ioLowerCsExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
 }
 
 /// The third door's c twin: a `{{ … }}` interpolation is a Koru expression,
-/// lowered through the `.c` vocabulary arm. Same swallowed-refusal contract
-/// as ioLowerJsExpr — an unmodelled operation falls back to raw text, and
-/// the emitted C refusing at the oracle is the fragment's honest gate.
-fn ioLowerCExpr(alloc: std.mem.Allocator, text: []const u8) []const u8 {
-    var d = codegen_utils_io.LowerDiag{};
-    return codegen_utils_io.lowerKoruExpr(alloc, text, .c, .koru_expr, &d) catch text;
+/// lowered through the `.c` vocabulary arm. Unlike the js/cs twins the
+/// refusal PROPAGATES with its diag — on the oracle lane raw text is not a
+/// fallback, it is an un-lowered construct escaping; the callers refuse it
+/// by name through ast.refuse. (validateNoZigInC's `@`-builtin wall remains
+/// the net for splice paths that bypass this door.)
+fn ioLowerCExpr(alloc: std.mem.Allocator, text: []const u8, diag_out: ?*codegen_utils_io.LowerDiag) codegen_utils_io.LowerError![]const u8 {
+    return codegen_utils_io.lowerKoruExpr(alloc, text, .c, .koru_expr, diag_out);
 }
