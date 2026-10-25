@@ -19,26 +19,26 @@
         const __koru_par_body{{ __site }} = struct {
             {% if __range_lo != "" %}fn run(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
                 {% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
-                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = 0;
+                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
                 {% endif %}{% endfor %}{% endfor %}for (__koru_par_lo..__koru_par_hi) |__koru_item{{ __site }}| {
                     {% if keep != "" %}if (!({{ keep }})) break;
                     {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
                     {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
                 }
                 {% for c in __cells %}__koru_par_cap_out.{{ c.name }} = {{ c.name }};
-                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law; write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` or drop [parallel]");
+                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
             {% else %}fn run(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
                 {% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
-                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = 0;
+                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
                 {% endif %}{% endfor %}{% endfor %}for (__koru_par_slice) |__koru_item{{ __site }}| {
                     {% if keep != "" %}if (!({{ keep }})) break;
                     {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
                     {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
                 }
                 {% for c in __cells %}__koru_par_cap_out.{{ c.name }} = {{ c.name }};
-                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law; write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` or drop [parallel]");
+                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
             {% endif %}
@@ -86,8 +86,9 @@
         {% endif %}for (__koru_par_threads{{ __site }}[0..__koru_par_spawned{{ __site }}]) |__koru_par_t| __koru_par_t.join();
         {% if __cells %}for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
             if (__koru_par_ok{{ __site }}[__koru_par_c]) {
-                {% for c in __cells %}{% for f in c.fields %}{% if f.ok != "" %}{{ c.real }}.{{ f.name }} += __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }};
-                {% endif %}{% endfor %}{% endfor %}
+                {% for c in __cells %}{% for f in c.fields %}{% if f.ok != "" %}{% if f.wrap != "" %}{{ c.real }}.{{ f.name }} = @rem({{ c.real }}.{{ f.name }} {{ f.op }} __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }}, {{ f.wrap }});
+                {% else %}{{ c.real }}.{{ f.name }} {{ f.op }}= __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }};
+                {% endif %}{% endif %}{% endfor %}{% endfor %}
             }
         }
         {% endif %}

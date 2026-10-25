@@ -60,10 +60,14 @@ Two consequences are part of the ruling, not implementation detail:
 
 - *Combine legality is proved, not assumed.* A `captured` write is legal
   under `[parallel]` only when the field's own cell value is an operand of
-  the write's outermost `+` (`acc: a.acc + <expr>` or `<expr> + a.acc`).
-  Anything else — `max`, `*`, last-wins — emits a `@compileError` naming
-  the field and the additive spelling. Partition without a combine law is
-  a wrong answer, not a missing feature. Pin: `400_218`.
+  a provable monoid fold — `<cell>.<f> <op> <expr>` (or mirrored) with
+  `op ∈ {+, *}`, optionally wrapped in `@rem(<x>, <K>)` (mod-add and
+  mod-mul are associative; the join replays the wrap on the combine and
+  the partial inits to the op's identity, 0 or 1). Anything else —
+  `max`, last-wins, anything the check can't see — emits a
+  `@compileError` naming the field and a legal spelling. Partition
+  without a combine law is a wrong answer, not a missing feature.
+  Pin: `400_218`.
 - *The worker name is synthesized, never the user's.* Zig's no-shadow rule
   forbids redeclaring `a` inside a worker fn lexically nested in the flow
   fn, so `template_processor`'s partition collection retargets the

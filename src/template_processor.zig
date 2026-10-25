@@ -946,12 +946,18 @@ fn collectParallelCells(
                 if (dup) continue;
                 const fc = try allocator.create(liquid.Context);
                 fc.* = liquid.Context.init(allocator);
+                // The fold law is classified against whatever name the
+                // expression references NOW — the user's cell name on first
+                // render, the worker name on a re-render of an
+                // already-retargeted node. `op == 0` means no provable
+                // combine: the field refuses rather than miscombines.
+                const law = classifyCellWrite(allocator, expr, asgn.target, f.name);
                 try fc.put("name", .{ .string = f.name });
                 try fc.put("expr", .{ .string = expr });
-                // Legality is proved against whatever name the expression
-                // references NOW — the user's cell name on first render, the
-                // worker name on a re-render of an already-retargeted node.
-                try fc.put("ok", .{ .string = if (isAdditiveCellWrite(expr, asgn.target, f.name)) "1" else "" });
+                try fc.put("ok", .{ .string = if (law.op != 0) "1" else "" });
+                try fc.put("init", .{ .string = law.init });
+                try fc.put("op", .{ .string = if (law.op == '*') "*" else if (law.op == '+') "+" else "" });
+                try fc.put("wrap", .{ .string = law.wrap });
                 try gop.value_ptr.fields.append(allocator, fc);
             }
             // Retarget the node's target and cell references so the emitted
@@ -969,26 +975,76 @@ fn collectParallelCells(
     for (cont.continuations) |*nested| try collectParallelCells(allocator, nested, cells);
 }
 
-/// The write `cell.f = <expr>` counts as a provably additive fold iff the
-/// field's own cell value is an operand of the OUTERMOST `+`: the text
-/// `<cell>.<f> + …` or `… + <cell>.<f>`. `a.acc + p` qualifies; `a.acc * p`,
-/// `max(a.acc, p)`, and bare `p` do not — `+=`-combining them at the join
-/// would produce a silently wrong cell. Conservative by design: it is a text
-/// check, so anything it cannot see is refused and the refusal teaches the
-/// additive spelling.
-fn isAdditiveCellWrite(expr: []const u8, target: []const u8, field: []const u8) bool {
+/// The monoid combine law a `cell.f = <expr>` write proves, or none.
+/// `op` is the join operator, `init` the identity the worker's partial
+/// starts from, `wrap` an optional `@rem(<modulus>)` tail — `@rem` around
+/// a `+`/`*` fold is still a monoid (mod-add / mod-mul are associative),
+/// so `a.acc = @rem(a.acc + p, M)` partitions as `rem`-modulated `+=` and
+/// `a.acc = @rem(a.acc * i, M)` as rem-modulated `*=`.
+const FoldLaw = struct {
+    op: u8 = 0,
+    init: []const u8 = "0",
+    wrap: []const u8 = "",
+};
+
+/// Is `inner` shaped `cellRef <op> rest` or `rest <op> cellRef` at the top
+/// level? Returns the op byte, or null. The cell's own field must be a
+/// direct operand of the OUTERMOST op in the remaining text — `a.acc + p`
+/// and `p + a.acc` qualify, `a.acc * (x + y)` and bare `p` do not.
+fn splitFoldOp(inner: []const u8, cellRef: []const u8) ?u8 {
+    if (std.mem.startsWith(u8, inner, cellRef)) {
+        const rest = std.mem.trimLeft(u8, inner[cellRef.len..], " \t");
+        if (rest.len >= 2 and rest[0] == '+' and rest[1] != '+' and rest[1] != '=') return '+';
+        if (rest.len >= 2 and rest[0] == '*' and rest[1] != '*') return '*';
+    }
+    if (std.mem.endsWith(u8, inner, cellRef)) {
+        const pre = std.mem.trimRight(u8, inner[0 .. inner.len - cellRef.len], " \t");
+        if (pre.len >= 2 and pre[pre.len - 1] == '+' and pre[pre.len - 2] != '+' and pre[pre.len - 2] != '=') return '+';
+        if (pre.len >= 2 and pre[pre.len - 1] == '*' and pre[pre.len - 2] != '*') return '*';
+    }
+    return null;
+}
+
+/// Classify `cell.f = <expr>`: peel an optional outer `@rem(<x>, <K>)`
+/// wrapper, then require the remaining text to be a `<cell.f> <op> rest`
+/// (or mirrored) top-level fold. Anything else gets `op == 0` — the
+/// refusal the template turns into a @compileError. Conservative by
+/// design: a shape the check can't see is refused, not miscombined.
+fn classifyCellWrite(allocator: std.mem.Allocator, expr: []const u8, target: []const u8, field: []const u8) FoldLaw {
     const t = std.mem.trim(u8, expr, " \t\n\r");
-    var head_buf: [256]u8 = undefined;
-    const head = std.fmt.bufPrint(&head_buf, "{s}.{s}", .{ target, field }) catch return false;
-    if (std.mem.startsWith(u8, t, head)) {
-        const rest = std.mem.trimLeft(u8, t[head.len..], " \t");
-        if (rest.len >= 2 and rest[0] == '+' and rest[1] != '+' and rest[1] != '=') return true;
+    var inner = t;
+    var wrap: []const u8 = "";
+    if (std.mem.startsWith(u8, t, "@rem(")) {
+        var depth: usize = 1;
+        var comma: ?usize = null;
+        var close: ?usize = null;
+        var i: usize = 5;
+        while (i < t.len) : (i += 1) {
+            switch (t[i]) {
+                '(', '[', '{' => depth += 1,
+                ')', ']', '}' => {
+                    depth -|= 1;
+                    if (depth == 0) {
+                        close = i;
+                        break;
+                    }
+                },
+                ',' => {
+                    if (depth == 1) comma = i;
+                },
+                else => {},
+            }
+        }
+        if (close != null and close.? == t.len - 1 and comma != null) {
+            inner = std.mem.trim(u8, t[5 .. comma.?], " \t");
+            wrap = std.mem.trim(u8, t[comma.? + 1 .. close.?], " \t");
+        } else {
+            return .{};
+        }
     }
-    if (std.mem.endsWith(u8, t, head)) {
-        const pre = std.mem.trimRight(u8, t[0 .. t.len - head.len], " \t");
-        if (pre.len >= 2 and pre[pre.len - 1] == '+' and pre[pre.len - 2] != '+' and pre[pre.len - 2] != '=') return true;
-    }
-    return false;
+    const cell_ref = std.fmt.allocPrint(allocator, "{s}.{s}", .{ target, field }) catch return .{};
+    const op = splitFoldOp(inner, cell_ref) orelse return .{};
+    return .{ .op = op, .init = if (op == '*') "1" else "0", .wrap = wrap };
 }
 
 /// `for(lo..hi)` under `[parallel]` splits the range arithmetically — a
