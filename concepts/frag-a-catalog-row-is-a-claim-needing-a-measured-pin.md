@@ -130,6 +130,15 @@ oracle renderers are deleted outright. The honest next cut is per-pass:
 delete an oracle renderer only after its walk pass is measured clean
 across the regression set, and the audit module shrinks with it.
 
+First measured delete: the decl oracle (emitEventDeclaration +
+emitTaggedResultDecl + the decl audit leg in sessionDeclPass) went out
+after its dual-answer ran clean across the corpus — byte-identical
+output (the audit had already proven walk==oracle), and the census
+folded the predicted migration twins (-48: 904/1031 vs pin 913/1035;
+-32: 2071/2676 vs 2087/2687). The remaining oracles — emitEventDecl in
+sessionDefPass, emitDriverFns in sessionDriverPass — delete by the same
+rule, each in its own measured pass.
+
 The emit.kz port taught the reachability rule that governs the whole
 idiom: a koru_std module lands in backend_output.koru_std only when the
 pipeline *invokes* one of its comptime-marked tors — `~import` makes a

@@ -1244,78 +1244,6 @@ const Emitter = struct {
             event.hasAnnotation("norun") or event.hasAnnotation("keyword");
     }
 
-    /// `struct <name>_in { <ct> <f>; ... };` + prototype, ahead of the
-    /// definitions so handlers may call each other in any order.
-    fn emitEventDeclaration(self: *Emitter, event: *const ast.EventDecl) CEmitError!void {
-        const key = try pathKey(self.allocator, event.path);
-        defer self.allocator.free(key);
-        const name = try mangle(self.allocator, event.path);
-        defer self.allocator.free(name);
-
-        if (eventIsStub(event)) {
-            try self.writeFmt("static void {s}(void);\n", .{name});
-            return;
-        }
-        if (event.input.is_wildcard) return;
-
-        if (event.branches.len > 0) {
-            try self.emitTaggedResultDecl(event, name, key);
-            if (event.input.fields.len > 0) {
-                try self.writeFmt("struct {s}_in {{\n", .{name});
-                for (event.input.fields) |f| {
-                    if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
-                        try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
-                        continue;
-                    }
-                    const ct = self.cTypeOfResolved(f.type) orelse {
-                        std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
-                        return CEmitError.UnsupportedConstruct;
-                    };
-                    try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
-                }
-                try self.write("};\n");
-            }
-            // An event declaring `!` arms has no standalone function — its
-            // `|c` body is per-call-site inline text (raise markers splice
-            // the consumer's arms), so no prototype exists either. The zig
-            // lane's `handler(input, comptime __H)` is the same shape: the
-            // decl exists, the call never does.
-            if (eventHasEffectBranch(event)) return;
-            try self.writeFmt("static struct {s}_res {s}(", .{ name, name });
-            if (event.input.fields.len == 0) {
-                try self.write("void");
-            } else {
-                try self.writeFmt("struct {s}_in {s}", .{ name, INPUT_PARAM });
-            }
-            try self.write(");\n");
-            return;
-        }
-
-        const ret = try self.eventReturnType(event, key);
-        if (event.input.fields.len > 0) {
-            try self.writeFmt("struct {s}_in {{\n", .{name});
-            for (event.input.fields) |f| {
-                if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
-                    try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
-                    continue;
-                }
-                const ct = self.cTypeOfResolved(f.type) orelse {
-                    std.debug.print("error[KORU047]: C lane: {s} field {s} has type {s} — no C type in the first fragment\n", .{ key, f.name, f.type });
-                    return CEmitError.UnsupportedConstruct;
-                };
-                try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
-            }
-            try self.write("};\n");
-        }
-        try self.writeFmt("static {s} {s}(", .{ ret, name });
-        if (event.input.fields.len == 0) {
-            try self.write("void");
-        } else {
-            try self.writeFmt("struct {s}_in {s}", .{ name, INPUT_PARAM });
-        }
-        try self.write(");\n");
-    }
-
     fn eventReturnType(self: *Emitter, event: *const ast.EventDecl, key: []const u8) CEmitError![]const u8 {
         if (event.return_type) |rt| {
             return self.cTypeOfResolved(rt) orelse {
@@ -1487,58 +1415,6 @@ self.checkCatalogFragment("missing-target-proc-body");
             }
         }
         return try std.fmt.allocPrint(self.allocator, "struct {s}_{s}_t", .{ event_name, codegen_utils.cMemberName(self.allocator, b.name) });
-    }
-
-    /// `enum { <name>_tag_<b>, … };` + record payload struct types +
-    /// `struct <name>_res { int tag; <members> };` — the tagged-result
-    /// machinery an event's named `|` branches lower to (the union(enum)
-    /// the zig lane emits, spelled flat the way the js record is).
-    fn emitTaggedResultDecl(self: *Emitter, event: *const ast.EventDecl, name: []const u8, key: []const u8) CEmitError!void {
-        // `!` effect branches join no result — they splice per call site.
-        // Their payload structs still emit (an effect arm's binding reads
-        // that type at the raise), but the enum and `_res` members are
-        // terminal-only.
-        var terminal_count: usize = 0;
-        for (event.branches) |*b| {
-            if (b.kind == .effect) continue;
-            terminal_count += 1;
-            _ = try self.branchPayloadCType(name, key, b);
-        }
-        for (event.branches) |*b| {
-            const fs = b.payload.fields;
-            const is_rec = (fs.len > 0 and !std.mem.eql(u8, fs[0].name, "__type_ref")) or b.payload.is_wildcard;
-            if (!is_rec) continue;
-            try self.writeFmt("struct {s}_{s}_t {{\n", .{ name, codegen_utils.cMemberName(self.allocator, b.name) });
-            if (b.payload.is_wildcard) {
-                // C has no `struct {}` — one byte carries the shape hole the
-                // `| x *` decl leaves for the use site to fill.
-                try self.write("    char __koru_wildcard;\n");
-            } else {
-                for (fs) |f| {
-                    const ct = self.cTypeOfResolved(f.type) orelse {
-                        std.debug.print("error[KORU047]: C lane: {s} branch `! {s}` payload field {s} has type {s} — no C type in the first fragment\n", .{ key, b.name, f.name, f.type });
-                        return CEmitError.UnsupportedConstruct;
-                    };
-                    try self.writeFmt("    {s} {s};\n", .{ ct, codegen_utils.cMemberName(self.allocator, f.name) });
-                }
-            }
-            try self.write("};\n");
-        }
-        if (terminal_count == 0) return;
-        try self.write("enum {\n");
-        for (event.branches) |*b| {
-            if (b.kind == .effect) continue;
-            try self.writeFmt("    {s},\n", .{codegen_utils.cResTagConst(self.allocator, name, b.name)});
-        }
-        try self.write("};\n");
-        try self.writeFmt("struct {s}_res {{\n", .{name});
-        try self.write("    int tag;\n");
-        for (event.branches) |*b| {
-            if (b.kind == .effect) continue;
-            const ptype = (try self.branchPayloadCType(name, key, b)) orelse continue;
-            try self.writeFmt("    {s} {s};\n", .{ ptype, codegen_utils.cPayloadMember(self.allocator, b.name) });
-        }
-        try self.write("};\n");
     }
 
     /// `const <ct> <field> = __koru_in.<field>;` — the |c proc binding
@@ -3578,30 +3454,15 @@ pub fn sessionOpen(allocator: std.mem.Allocator, program: *const ast.Program, li
 }
 
 /// decls — the walk's declaration pass: one tagged-result grammar and
-/// prototype per reached event. Sole-source: the walk's text is what
-/// emits; the oracle renders beside it under emit_audit's isolation.
+/// prototype per reached event. The walk is sole-source here — the decl
+/// oracle rendered clean beside it across the corpus and is deleted.
 pub fn sessionDeclPass(s: *Session) CEmitError!void {
     const allocator = s.allocator;
     const em = &s.em;
     for (s.reached_events.items) |event| {
-        // Sole-source: the walk writes the declaration — its text is
-        // what emits and its refusals are the lane's. The oracle renders
-        // beside it into scratch under isolation (emit_audit) — the pin
-        // on the migration, never the emitted bytes.
-        const dkey = pathKey(allocator, event.path) catch "?";
-        var oracle: std.ArrayList(u8) = .empty;
-        defer oracle.deinit(allocator);
-        var oracle_ok = true;
-        em.renderIsolated(&oracle, Emitter.emitEventDeclaration, .{event}) catch |e| {
-            oracle_ok = false;
-            emit_audit.oracleErrored("decl", dkey, @errorName(e));
-        };
-        const mark = em.buf.items.len;
         emit_walk.writeEventDecl(em.buf, allocator, event, &em.decl_writer) catch |e| {
-            if (oracle_ok) emit_audit.walkRefusedPastOracle("decl", dkey, @errorName(e));
             return @errorCast(e);
         };
-        if (oracle_ok) emit_audit.compare("decl", allocator, dkey, oracle.items, em.buf.items[mark..]);
     }
     try em.write("\n");
 }
