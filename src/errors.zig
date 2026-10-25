@@ -173,6 +173,7 @@ pub const ErrorCode = enum(u16) {
     KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
     KORU209, // `dir:` relocates the emitted artifact while the program declares build:requires — generated build_output.zig stages output_emitted.zig in cwd. Printed by the host-build-zig tor in koru_std/compiler.materialize.kz.
     KORU210, // A std/build:app declaration is malformed — the Source block did not parse as `name: "…", id: "…"` plus optional `version: "…"`, `icon: "…"`, or carried a key the collector does not know. An identity is whole or refused; never defaulted. Emitted by src/compiler_requires.zig at requirement collection.
+    KORU211, // A qualified call (`mod:x(...)`) names a tor no imported/own module declares — almost always a missing `import`; without the wall it emitted as a name-mangled handler with unbound args (the record-arg garble). Emitted by src/ast_transform.zig refuseUnresolvableQualifiedCalls.
 };
 
 pub const SourceLocation = struct {

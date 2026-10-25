@@ -8519,6 +8519,12 @@ pub fn main() !void {
     const canonicalize_names = @import("canonicalize_names");
     try canonicalize_names.canonicalize(&source_file, parse_allocator, &resolver);
 
+    // A qualified call into a module that declares nothing in this program must refuse —
+    // unimported `std/io:print.ln` otherwise reaches emission as a mangled
+    // handler with unbound args (KORU211).
+    const ast_transform_refuse = @import("ast_transform");
+    try ast_transform_refuse.refuseUnresolvableQualifiedCalls(parse_allocator, &source_file, &parser.reporter);
+
     // Host-type scope: a bare host (Zig) type is legal only inside the module
     // that declares it; across a module boundary the signature spells it fully
     // qualified — `*mod:Type` (220_031, ruled 2026-09-06). Runs right after

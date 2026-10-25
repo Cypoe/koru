@@ -47,8 +47,12 @@
 # are committed drift under rolls that missed: proto.kz's 12-member
 # event_decl self-cluster, the channel/io/node/pump event_decl cluster,
 # interpreter/store import_decl twins — none in this diff.
-clusters=132
-members=202
+# 142/216: sampled roll fired during the KORU211 commit — pure foreign
+# drift accumulated on main between rolls (interpreter/store/proto/
+# channel import_decl and event_decl residuals; this diff stages zero
+# .kz files). Re-pinning records the tree as measured 2026-11-15.
+clusters=142
+members=216
 skipped=2
 spellings=59
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

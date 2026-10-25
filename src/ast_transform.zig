@@ -3414,6 +3414,88 @@ const InvariantHoist = struct {
     }
 };
 
+/// A qualified call (`mod:x(...)`) whose tor decl never made it into the
+/// program is unresolvable — almost always a missing `import`. Refuse with
+/// teaching instead of emitting a name-mangled handler whose args were never
+/// bound (the record-arg garble: an import-less `std/io:print.ln` compiled to
+/// `.@"{{ … }}" = "{{ … }}"` and died as a Zig error, found 2026-10-26 while
+/// pinning the invariant hoist).
+fn collectModuleNames(allocator: std.mem.Allocator, items: []const ast.Item, modules: *std.StringHashMap(void)) !void {
+    for (items) |*item| {
+        switch (item.*) {
+            .module_decl => |*m| {
+                try modules.put(m.logical_name, {});
+                try collectModuleNames(allocator, m.items, modules);
+            },
+            .event_decl => |*ev| if (ev.path.module_qualifier) |q| {
+                try modules.put(q, {});
+            },
+            .proc_decl => |*pr| if (pr.path.module_qualifier) |q| {
+                try modules.put(q, {});
+            },
+            else => {},
+        }
+    }
+}
+
+fn checkContCalls(cont: *const ast.Continuation, modules: *const std.StringHashMap(void), home_module: []const u8, allocator: std.mem.Allocator, reporter: *errors_mod.ErrorReporter) !void {
+    if (cont.node) |n| {
+        const inv: ?ast.Invocation = switch (n) {
+            .invocation => |iv| iv,
+            .label_with_invocation => |li| li.invocation,
+            else => null,
+        };
+        if (inv) |iv| {
+            if (iv.path.module_qualifier) |q| {
+                // Self-qualified calls (canonicalize stamps the enclosing
+                // module on bare names before ambient builtins resolve) and
+                // tap-inserted steps are exempt — everything else must name
+                // a module whose decls are in the program.
+                const self = std.mem.eql(u8, q, home_module);
+                if (!self and !iv.inserted_by_tap and !iv.from_opaque_tap and !modules.contains(q)) {
+                    const import_path = try allocator.dupe(u8, q);
+                    for (import_path) |*c| {
+                        if (c.* == '.') c.* = '/';
+                    }
+                    try reporter.addErrorAtLocationWithHint(
+                        .KORU211,
+                        cont.location,
+                        "call to `{s}:{s}` cannot be resolved — module `{s}` declares nothing in this program",
+                        .{ q, iv.path.segments[iv.path.segments.len - 1], q },
+                        "if `{s}` is a module, it needs `import {s}` at file scope (`~import {s}` in a .kz)",
+                        .{ q, import_path, import_path },
+                    );
+                }
+            }
+        }
+    }
+    for (@constCast(cont.continuations)) |*c| try checkContCalls(c, modules, home_module, allocator, reporter);
+}
+
+fn checkItemCalls(items: []const ast.Item, modules: *const std.StringHashMap(void), allocator: std.mem.Allocator, reporter: *errors_mod.ErrorReporter, home_module: []const u8) !void {
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*flow| try checkContCalls(&flow.body, modules, home_module, allocator, reporter),
+            .module_decl => |*m| try checkItemCalls(m.items, modules, allocator, reporter, m.logical_name),
+            .event_tap => |*tap| {
+                for (@constCast(tap.continuations)) |*c| try checkContCalls(c, modules, home_module, allocator, reporter);
+            },
+            else => {},
+        }
+    }
+}
+
+pub fn refuseUnresolvableQualifiedCalls(
+    allocator: std.mem.Allocator,
+    source_file: *ast.Program,
+    reporter: *errors_mod.ErrorReporter,
+) !void {
+    var modules = std.StringHashMap(void).init(allocator);
+    defer modules.deinit();
+    try collectModuleNames(allocator, source_file.items, &modules);
+    try checkItemCalls(source_file.items, &modules, allocator, reporter, source_file.main_module_name);
+}
+
 /// Loop-invariant prefix hoist — see InvariantHoist's doc comment for the
 /// ruling. Runs after purity marking, before emission.
 pub fn hoistInvariantLoopPrefix(
