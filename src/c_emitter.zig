@@ -328,16 +328,6 @@ fn cDeclManglePath(ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.Dot
     return mangle(allocator, path) catch null;
 }
 
-fn cDeclTaggedResult(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl, name: []const u8) anyerror!void {
-    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return));
-    const key = try pathKey(em.allocator, event.path);
-    defer em.allocator.free(key);
-    const saved = em.buf;
-    em.buf = out;
-    defer em.buf = saved;
-    try em.emitTaggedResultDecl(event, name, key);
-}
-
 // ---------------------------------------------------------------------------
 // Indexes
 // ---------------------------------------------------------------------------
@@ -806,7 +796,6 @@ const Emitter = struct {
         .typeOf = cDeclTypeOf,
         .memberName = cDeclMemberName,
         .manglePath = cDeclManglePath,
-        .taggedResult = cDeclTaggedResult,
     },
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,

@@ -291,9 +291,9 @@ pub fn declShape(event: *const ast.EventDecl) DeclShape {
 }
 
 /// The spelling questions a C write path asks — narrow answers only.
-/// The walk owns sequencing and grammar; the lane answers names, types,
-/// and (this rung) the tagged-result decl, whose union/enum grammar is
-/// still emitter-owned behind this slot until it templates.
+/// The walk owns sequencing and grammar; the lane answers names and
+/// types. Member/tag spellings (`cMemberName`, `cResTagConst`,
+/// `cPayloadMember`) are codegen_utils-shared, not writer questions.
 pub const CDeclWriter = struct {
     ctx: ?*anyopaque = null,
     /// koru type → C spelling (catalog-sole-source on the oracle).
@@ -302,9 +302,6 @@ pub const CDeclWriter = struct {
     memberName: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, name: []const u8) []const u8,
     /// event path → C function name.
     manglePath: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.DottedPath) ?[]const u8,
-    /// branched events: the tagged-result decl (payload structs, tag
-    /// enum, `_res`). Lane-owned grammar behind the standard slot.
-    taggedResult: *const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl, name: []const u8) anyerror!void,
     /// The bound input parameter's spelling (`__koru_in` on the oracle).
     inputParam: []const u8 = "__koru_in",
 };
@@ -342,6 +339,85 @@ fn writeInParam(
     }
 }
 
+/// A branch's `_res` member type — the agnostic payload rules the oracle
+/// carries: `| x *` (wildcard) mints the one-byte-hole `struct <n>_<b>_t`;
+/// a bare `__type_ref` payload unwraps to the field's own type; `__type_ref`
+/// mixed with named fields refuses (outside the fragment); named fields
+/// mint `struct <n>_<b>_t` — and every field must answer a C type.
+fn writePayloadCType(
+    allocator: std.mem.Allocator,
+    w: *const CDeclWriter,
+    event_name: []const u8,
+    b: *const ast.Branch,
+) error{OutOfMemory, UnsupportedConstruct}!?[]const u8 {
+    const eql = std.mem.eql;
+    if (b.payload.is_wildcard) {
+        return try std.fmt.allocPrint(allocator, "struct {s}_{s}_t", .{ event_name, w.memberName(w.ctx, allocator, b.name) });
+    }
+    const fs = b.payload.fields;
+    if (fs.len == 0) return null;
+    if (fs.len == 1 and eql(u8, fs[0].name, "__type_ref")) {
+        return w.typeOf(w.ctx, fs[0].type) orelse error.UnsupportedConstruct;
+    }
+    for (fs) |f| {
+        if (eql(u8, f.name, "__type_ref")) return error.UnsupportedConstruct;
+        if (w.typeOf(w.ctx, f.type) == null) return error.UnsupportedConstruct;
+    }
+    return try std.fmt.allocPrint(allocator, "struct {s}_{s}_t", .{ event_name, w.memberName(w.ctx, allocator, b.name) });
+}
+
+/// `enum { <n>_tag_<b>, … };` + record payload structs + `struct <n>_res`
+/// — the tagged-result machinery, sequenced by the walk. `!` effect
+/// branches splice per call site: their payload structs still emit (the
+/// raise reads the type), but the enum and `_res` members are
+/// terminal-only. The C text lives here; the lane only answers spellings.
+fn writeTaggedResultDecl(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    w: *const CDeclWriter,
+    event: *const ast.EventDecl,
+    name: []const u8,
+) anyerror!void {
+    const eql = std.mem.eql;
+    var terminal_count: usize = 0;
+    for (event.branches) |*b| {
+        if (b.kind == .effect) continue;
+        terminal_count += 1;
+        _ = try writePayloadCType(allocator, w, name, b);
+    }
+    for (event.branches) |*b| {
+        const fs = b.payload.fields;
+        const is_rec = (fs.len > 0 and !eql(u8, fs[0].name, "__type_ref")) or b.payload.is_wildcard;
+        if (!is_rec) continue;
+        try out.print(allocator, "struct {s}_{s}_t {{\n", .{ name, w.memberName(w.ctx, allocator, b.name) });
+        if (b.payload.is_wildcard) {
+            // C has no `struct {}` — one byte carries the shape hole.
+            try out.appendSlice(allocator, "    char __koru_wildcard;\n");
+        } else {
+            for (fs) |f| {
+                const ct = w.typeOf(w.ctx, f.type) orelse return error.UnsupportedConstruct;
+                try out.print(allocator, "    {s} {s};\n", .{ ct, w.memberName(w.ctx, allocator, f.name) });
+            }
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    if (terminal_count == 0) return;
+    try out.appendSlice(allocator, "enum {\n");
+    for (event.branches) |*b| {
+        if (b.kind == .effect) continue;
+        try out.print(allocator, "    {s},\n", .{codegen_utils.cResTagConst(allocator, name, b.name)});
+    }
+    try out.appendSlice(allocator, "};\n");
+    try out.print(allocator, "struct {s}_res {{\n", .{name});
+    try out.appendSlice(allocator, "    int tag;\n");
+    for (event.branches) |*b| {
+        if (b.kind == .effect) continue;
+        const ptype = (try writePayloadCType(allocator, w, name, b)) orelse continue;
+        try out.print(allocator, "    {s} {s};\n", .{ ptype, codegen_utils.cPayloadMember(allocator, b.name) });
+    }
+    try out.appendSlice(allocator, "};\n");
+}
+
 /// One event declaration — `struct <n>_in`, tagged-result decl, forward
 /// prototype — sequenced by `declShape`, spelled by the writer. This is
 /// the oracle's `emitEventDeclaration` lifted onto the walk; during the
@@ -358,7 +434,7 @@ pub fn writeEventDecl(
         .stub => try out.print(allocator, "static void {s}(void);\n", .{name}),
         .wildcard => {},
         .branched => {
-            try w.taggedResult(w.ctx, out, event, name);
+            try writeTaggedResultDecl(out, allocator, w, event, name);
             if (event.input.fields.len > 0) try writeInStruct(out, allocator, w, event, name);
             // An all-`!` event is never a C function — its `|c` body is
             // per-call-site inline text, so no prototype exists either.

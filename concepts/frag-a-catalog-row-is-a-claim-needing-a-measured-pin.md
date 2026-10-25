@@ -66,10 +66,17 @@ The walk then grew a write stage on the same discipline: `std/emit`'s
 `writeEventDecl` owns the agnostic part of a declaration — the
 `declShape` classification (stub | wildcard | branched | plain), the
 field iteration, the shape sequencing — while a `CDeclWriter` answers
-the C spellings (types, member names, mangled paths, and the
-tagged-result grammar still lane-owned behind its slot). Same pin
+the C spellings (types, member names, mangled paths). Same pin
 shape as the templates: the oracle renders into scratch beside the
 walk's bytes, a mismatch is drift, the oracle wins. What moved is the
 *sequencing* — the questions the emitter asks — not the answers. That
 is the migration's real unit: an emitter is a set of answers behind
 slots, and the walk owns the asking.
+
+The tagged-result decl was the test of that claim: what looked like
+lane-owned grammar was sequencing plus three spelling answers —
+`enum`/`_res` text moved into the walk with the payload rules (wildcard
+hole, `__type_ref` unwrap, mixed-payload refusal) intact, and the
+writer slot collapsed to `typeOf`/`memberName`/`manglePath`. When a
+slot turns out to hold only sequencing, the honest move is to delete
+the slot, not template it.
