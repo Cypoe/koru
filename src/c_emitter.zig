@@ -311,6 +311,33 @@ fn catalogBuiltinResolver(ctx: ?*anyopaque, name: []const u8) ?[]const u8 {
 /// the writer (the std/emit shadow walk shares it).
 const driftLog = codegen_utils.driftLog;
 
+// The decl_writer's answers — thin adapters over the emitter's own
+// resolvers so the walk's write path asks exactly what the oracle asks.
+fn cDeclTypeOf(ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8 {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return null));
+    return em.cTypeOfResolved(koru_type);
+}
+
+fn cDeclMemberName(ctx: ?*anyopaque, allocator: std.mem.Allocator, name: []const u8) []const u8 {
+    _ = ctx;
+    return codegen_utils.cMemberName(allocator, name);
+}
+
+fn cDeclManglePath(ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.DottedPath) ?[]const u8 {
+    _ = ctx;
+    return mangle(allocator, path) catch null;
+}
+
+fn cDeclTaggedResult(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl, name: []const u8) anyerror!void {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return));
+    const key = try pathKey(em.allocator, event.path);
+    defer em.allocator.free(key);
+    const saved = em.buf;
+    em.buf = out;
+    defer em.buf = saved;
+    try em.emitTaggedResultDecl(event, name, key);
+}
+
 // ---------------------------------------------------------------------------
 // Indexes
 // ---------------------------------------------------------------------------
@@ -773,6 +800,14 @@ const Emitter = struct {
     /// The prelude family, ordered + text-carrying — sole source of the
     /// emitted preamble when loaded (defs render in row order).
     prelude_rows: ?PreludeRows = null,
+    /// The std/emit write-path's answer table — the walk owns decl
+    /// sequencing, this supplies C spellings (ctx set post-init).
+    decl_writer: emit_walk.CDeclWriter = .{
+        .typeOf = cDeclTypeOf,
+        .memberName = cDeclMemberName,
+        .manglePath = cDeclManglePath,
+        .taggedResult = cDeclTaggedResult,
+    },
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,
     catalog_loaded: bool = false,
@@ -3420,8 +3455,32 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     try emitTopLevelInlineCode(&em, program.items);
     try emitFileScopeBodies(&em, program.items);
 
+    em.decl_writer.ctx = &em;
     for (reached_events.items) |event| {
-        try em.emitEventDeclaration(event);
+        // Dual-answer stage: the walk's write path renders the same decl
+        // beside the oracle's — a byte mismatch or a walk-side refusal is
+        // drift, and the oracle's text is what emits.
+        var oracle: std.ArrayList(u8) = .empty;
+        defer oracle.deinit(allocator);
+        {
+            const saved = em.buf;
+            em.buf = &oracle;
+            try em.emitEventDeclaration(event);
+            em.buf = saved;
+        }
+        var walkbuf: std.ArrayList(u8) = .empty;
+        defer walkbuf.deinit(allocator);
+        var walk_ok = true;
+        emit_walk.writeEventDecl(&walkbuf, allocator, event, &em.decl_writer) catch |e| {
+            walk_ok = false;
+            const key = pathKey(allocator, event.path) catch "?";
+            driftLog("std/target drift: emit-walk decl `{s}` errored {s} (oracle wins)\n", .{ key, @errorName(e) });
+        };
+        if (walk_ok and !std.mem.eql(u8, oracle.items, walkbuf.items)) {
+            const key = pathKey(allocator, event.path) catch "?";
+            driftLog("std/target drift: emit-walk decl `{s}` bytes differ (oracle wins)\n", .{key});
+        }
+        try em.write(oracle.items);
     }
     try em.write("\n");
     for (reached_events.items) |event| {

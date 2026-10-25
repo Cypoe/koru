@@ -255,6 +255,132 @@ fn walkItems(items: []const ast.Item, stats: *Stats, cat: *const Catalog, main_m
     }
 }
 
+// ---------------------------------------------------------------------------
+// Write stage — the walk stops only asking and starts sequencing. Coverage
+// proved the traversal sees what the emitter touches; this stage proves the
+// emitted TEXT agrees, one decl at a time, under the same dual-answer
+// discipline the builtin solver used (the displaced path renders into
+// scratch beside the walk's, a byte mismatch is drift, the oracle wins).
+// ---------------------------------------------------------------------------
+
+/// The agnostic decl classification — which emission shape a declared
+/// event takes. Every lane's write path asks this; it is the piece of
+/// "what emits" that is not target grammar. Mirrors the oracle's own
+/// order: stub first (it pre-empts wildcard and branches), then wildcard,
+/// then branched (an all-`!` event still gets its tagged-result decl and
+/// input struct — only the prototype is absent), then plain.
+pub const DeclShape = enum { stub, wildcard, branched, plain };
+
+fn declStub(event: *const ast.EventDecl) bool {
+    return event.hasAnnotation("transform") or event.hasAnnotation("comptime") or
+        event.hasAnnotation("norun") or event.hasAnnotation("keyword");
+}
+
+fn hasEffectBranch(event: *const ast.EventDecl) bool {
+    for (event.branches) |*b| {
+        if (b.kind == .effect) return true;
+    }
+    return false;
+}
+
+pub fn declShape(event: *const ast.EventDecl) DeclShape {
+    if (declStub(event)) return .stub;
+    if (event.input.is_wildcard) return .wildcard;
+    if (event.branches.len > 0) return .branched;
+    return .plain;
+}
+
+/// The spelling questions a C write path asks — narrow answers only.
+/// The walk owns sequencing and grammar; the lane answers names, types,
+/// and (this rung) the tagged-result decl, whose union/enum grammar is
+/// still emitter-owned behind this slot until it templates.
+pub const CDeclWriter = struct {
+    ctx: ?*anyopaque = null,
+    /// koru type → C spelling (catalog-sole-source on the oracle).
+    typeOf: *const fn (ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8,
+    /// field name → C member spelling.
+    memberName: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, name: []const u8) []const u8,
+    /// event path → C function name.
+    manglePath: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.DottedPath) ?[]const u8,
+    /// branched events: the tagged-result decl (payload structs, tag
+    /// enum, `_res`). Lane-owned grammar behind the standard slot.
+    taggedResult: *const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl, name: []const u8) anyerror!void,
+    /// The bound input parameter's spelling (`__koru_in` on the oracle).
+    inputParam: []const u8 = "__koru_in",
+};
+
+fn writeInStruct(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    w: *const CDeclWriter,
+    event: *const ast.EventDecl,
+    name: []const u8,
+) error{OutOfMemory, UnsupportedConstruct}!void {
+    try out.print(allocator, "struct {s}_in {{\n", .{name});
+    for (event.input.fields) |f| {
+        if (codegen_utils.cArrayType(f.type, w.typeOf, w.ctx)) |at| {
+            try out.print(allocator, "    {s} {s}{s};\n", .{ at.base, w.memberName(w.ctx, allocator, f.name), at.dims });
+            continue;
+        }
+        const ct = w.typeOf(w.ctx, f.type) orelse return error.UnsupportedConstruct;
+        try out.print(allocator, "    {s} {s};\n", .{ ct, w.memberName(w.ctx, allocator, f.name) });
+    }
+    try out.appendSlice(allocator, "};\n");
+}
+
+fn writeInParam(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    w: *const CDeclWriter,
+    event: *const ast.EventDecl,
+    name: []const u8,
+) error{OutOfMemory}!void {
+    if (event.input.fields.len == 0) {
+        try out.appendSlice(allocator, "void");
+    } else {
+        try out.print(allocator, "struct {s}_in {s}", .{ name, w.inputParam });
+    }
+}
+
+/// One event declaration — `struct <n>_in`, tagged-result decl, forward
+/// prototype — sequenced by `declShape`, spelled by the writer. This is
+/// the oracle's `emitEventDeclaration` lifted onto the walk; during the
+/// dual-answer stage the oracle still emits its own text and this
+/// renders beside it into scratch.
+pub fn writeEventDecl(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    event: *const ast.EventDecl,
+    w: *const CDeclWriter,
+) anyerror!void {
+    const name = w.manglePath(w.ctx, allocator, event.path) orelse return error.UnsupportedConstruct;
+    switch (declShape(event)) {
+        .stub => try out.print(allocator, "static void {s}(void);\n", .{name}),
+        .wildcard => {},
+        .branched => {
+            try w.taggedResult(w.ctx, out, event, name);
+            if (event.input.fields.len > 0) try writeInStruct(out, allocator, w, event, name);
+            // An all-`!` event is never a C function — its `|c` body is
+            // per-call-site inline text, so no prototype exists either.
+            if (!hasEffectBranch(event)) {
+                try out.print(allocator, "static struct {s}_res {s}(", .{ name, name });
+                try writeInParam(out, allocator, w, event, name);
+                try out.appendSlice(allocator, ");\n");
+            }
+        },
+        .plain => {
+            if (event.input.fields.len > 0) try writeInStruct(out, allocator, w, event, name);
+            const ret = if (event.return_type) |rt|
+                w.typeOf(w.ctx, rt) orelse return error.UnsupportedConstruct
+            else
+                "void";
+            try out.print(allocator, "static {s} {s}(", .{ ret, name });
+            try writeInParam(out, allocator, w, event, name);
+            try out.appendSlice(allocator, ");\n");
+        },
+    }
+}
+
 /// Shadow-pass entry — call after a successful emission, on the same AST.
 /// Prints coverage to stderr; misses are advisory (stderr), never drift —
 /// an over-ask is a coverage question, not a declared-vs-live disagreement.

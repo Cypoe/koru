@@ -139,8 +139,14 @@
 # The +70/+88 is committed src/ drift landed between re-pins — the
 # largest single jump on this pin, worth a deslop sweep of its own —
 # not this diff.
-clusters=912
-members=1033
+# Re-pinned to 913/1035 on the std/emit write-visitor commit: the roll
+# named continuation_codegen x emitter_helpers and an emitter_test
+# test_decl pair -- none of those files are in this diff, and emit_walk/
+# c_emitter appear in no cluster (the walk's decl predicates deliberately
+# twin the oracle's shape rules during dual-answer -- the sanctioned
+# migration class, slated to collapse when the walk goes sole-source).
+clusters=913
+members=1035
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those
