@@ -43,11 +43,12 @@
             }
             {% endif %}
         };
-        const __koru_par_C{{ __site }} = 4;
-        var __koru_par_threads{{ __site }}: [__koru_par_C{{ __site }}]@import("std").Thread = undefined;
+        const __koru_par_CAP{{ __site }} = 64;
+        const __koru_par_C{{ __site }} = @min(@import("std").Thread.getCpuCount() catch 4, __koru_par_CAP{{ __site }});
+        var __koru_par_threads{{ __site }}: [__koru_par_CAP{{ __site }}]@import("std").Thread = undefined;
         var __koru_par_spawned{{ __site }}: usize = 0;
-        {% if __cells %}var __koru_par_caps{{ __site }}: [__koru_par_C{{ __site }}]@TypeOf(.{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }) = undefined;
-        var __koru_par_ok{{ __site }}: [__koru_par_C{{ __site }}]bool = @splat(false);
+        {% if __cells %}var __koru_par_caps{{ __site }}: [__koru_par_CAP{{ __site }}]@TypeOf(.{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }) = undefined;
+        var __koru_par_ok{{ __site }}: [__koru_par_CAP{{ __site }}]bool = @splat(false);
         {% endif %}{% if __range_lo != "" %}const __koru_par_rlo{{ __site }}: usize = {{ __range_lo }};
         const __koru_par_rhi{{ __site }}: usize = {{ __range_hi }};
         for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
