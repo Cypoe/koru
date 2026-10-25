@@ -104,6 +104,30 @@ when shared-cell writes arrive.
 Cross-module named locksets: refused — the instance-resolved form covers
 the legitimate version.
 
+**Deferred layer — fork/join on recursion (tree kernels).** The fold
+shape is range-split; `fib`/`tak`/`binarytrees` are a different lowering
+family: sibling continuation binds fan out
+(`|> fib(n-1): a |> fib(n-2): b -> a+b`) — no cell, no combine law, the
+bindings ARE the partials. Three open rulings, ordered by load:
+
+- *Cutoff, first.* `fib(35)` is ~2^35 calls — naive spawn-per-call
+  explodes, so a threshold below which recursion stays serial is part of
+  the semantics, not a tuning knob. Bend's shape: spawn above a depth /
+  input-size bound, serial under it. Where the bound lives (a numeric
+  `[parallel(depth>=k)]`-style parameter? measured task count?) is the
+  ruling — the one piece that cannot be spiked around.
+- *Marker spelling.* `[parallel]` on which node — the proc decl
+  (`~[parallel]fib`), the else-arm, the individual invocation? Decl-level
+  reads most honestly: the recursion IS the parallel surface.
+- *The flood gap is a precondition.* `name = <flow>` impls never enter
+  the call graph — dirty marking can't reach a recursion body, and the
+  fork site's codegen lives in chain emission, not `control.for.kz`.
+  Closing the gap (flow impls as graph nodes) is a prerequisite diff,
+  small on its own.
+
+Estimated: a real feature pass — new emit surface + cutoff ruling +
+call-graph fix — not a tweak of the fold machinery.
+
 **Deferred layer — obligation guards.** Multi-step atomicity
 (read-check-write as one user sequence) is unexpressible in per-call
 locks. The mechanism when a case demands it: `tor:begin`-style guards
