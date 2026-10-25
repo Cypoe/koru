@@ -298,6 +298,11 @@ pub const EmissionContext = struct {
     // Set by emitFlow when the target event has effect (`!`) branches and a Handlers
     // struct has been synthesized locally. Cleared after the invocation.
     pending_handlers_name: ?[]const u8 = null,
+    // Fork/join: `[parallel]`-marked invocation calls emit as spawned tasks
+    // writing slots instead of `const <bind> = handler(...)`. Each spawn
+    // records its thread var here; the join emits before the next step that
+    // could read the binding (any non-parallel step drains the list).
+    pending_parallel: std.ArrayList([]const u8) = .empty,
     // ── Tail self-continuation loop lowering ─────────────────────────────────
     // When a flow that implements event E re-enters E in tail position and
     // forwards the result unchanged (e.g. `|> run(...) | done res => done res`),
@@ -1405,6 +1410,30 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("};\n");
     try emitter.write("const __koru_backing = if (@import(\"builtin\").link_libc) @import(\"std\").heap.c_allocator else if (@import(\"builtin\").os.tag == .freestanding and !@import(\"builtin\").cpu.arch.isWasm()) __koru_bare.allocator else @import(\"std\").heap.page_allocator;\n");
     try emitter.write("var __koru_leak_count: @import(\"std\").atomic.Value(usize) = .init(0);\n");
+    // Fork/join pool: [parallel]-marked calls queue as WaitGroup tasks on a
+    // lazily-initialized worker pool (µs-cost queued work, never an OS
+    // thread per call — kernel.kz's __koru_pool_ensure pattern, mutex-gated
+    // because a spawned worker can itself reach a marked call). The live
+    // task count is a best-effort bound: over the cap the call runs inline —
+    // work is owed, only width is lost, and correctness never rides on it.
+    try emitter.write("var __koru_par_tasks: @import(\"std\").atomic.Value(usize) = .init(0);\n");
+    try emitter.write("const __koru_par_CAP: usize = 128;\n");
+    // The REAL bound is fork-depth, not live count: a marked call forks only
+    // while the fork-tree is shallow, so ~2^DEPTH_CAP coarse tasks exist for
+    // an entire run — queue churn (task-count caps let finished tasks free
+    // budget, so millions of spawnWg ops roll through) can't happen. This is
+    // the frag's cutoff ruling landed as semantics, not a tuning knob.
+    try emitter.write("threadlocal var __koru_par_depth: usize = 0;\n");
+    try emitter.write("const __koru_par_DEPTH_CAP: usize = 7;\n");
+    try emitter.write("var __koru_par_pool: @import(\"std\").Thread.Pool = undefined;\n");
+    try emitter.write("var __koru_par_pool_ready: bool = false;\n");
+    try emitter.write("var __koru_par_pool_mtx: @import(\"std\").Thread.Mutex = .{};\n");
+    try emitter.write("fn __koru_par_pool_ensure() *@import(\"std\").Thread.Pool {\n");
+    try emitter.write("    __koru_par_pool_mtx.lock();\n    defer __koru_par_pool_mtx.unlock();\n");
+    try emitter.write("    if (!__koru_par_pool_ready) {\n");
+    try emitter.write("        @import(\"std\").Thread.Pool.init(&__koru_par_pool, .{ .allocator = @import(\"std\").heap.smp_allocator }) catch @panic(\"koru: thread pool init failed\");\n");
+    try emitter.write("        __koru_par_pool_ready = true;\n    }\n");
+    try emitter.write("    return &__koru_par_pool;\n}\n");
     try emitter.write("fn __koru_alloc(ctx: *anyopaque, len: usize, alignment: @import(\"std\").mem.Alignment, ret_addr: usize) ?[*]u8 {\n");
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    const r = __koru_backing.rawAlloc(len, alignment, ret_addr);\n");
@@ -9238,6 +9267,15 @@ fn emitInvocation(
     invocation: *const ast.Invocation,
     result_var: []const u8,
 ) !void {
+    // Fork/join drains before any unmarked call — a pending spawn's slot is
+    // only safe to read once joined, and every subsequent step is a reader.
+    const is_parallel_inv = blk: {
+        for (invocation.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) break :blk true;
+        }
+        break :blk false;
+    };
+    if (!is_parallel_inv) try drainParallelJoins(emitter, ctx);
     // Subflow-implemented effects: inside the declaring event's impl, a call
     // to one of its own effect arms IS the firing — lower it to the
     // consumer's handler-struct fn via the comptime `__H` param, never to an
@@ -9687,6 +9725,74 @@ fn emitInvocation(
         }
         break :blk false;
     };
+    // Fork/join: a [parallel]-marked call lowers to slot + spawn instead of
+    // `const <bind> = handler(...)`. The worker fn runs `handler` on a
+    // thread writing the slot; the join drains at the first step that could
+    // read the binding. Serial fallbacks where the call shape can't fork:
+    // pending effect-handlers (the Handlers 2nd arg can't cross a thread),
+    // explicit variants, `try`/async emission, and destructured binds
+    // (their consts would read the slot pre-join).
+    const forkable = is_parallel_inv and
+        ctx.pending_handlers_name == null and
+        invocation.variant == null and
+        ctx.is_sync and
+        invocation.return_destructure.len == 0;
+    if (forkable) {
+        const slot = if (std.mem.eql(u8, bound_var, "_"))
+            try std.fmt.allocPrint(ctx.allocator, "__koru_par_s{d}", .{ctx.pending_parallel.items.len})
+        else
+            bound_var;
+        try emitter.writeIndent();
+        try emitter.write("var ");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output = undefined;\n");
+        try emitter.writeIndent();
+        try emitter.write("const __koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input = .{ ");
+        try emitArgs(emitter, ctx, invocation.args, &invocation.path);
+        try emitter.write(" };\nconst __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(" = struct {\n    fn run(__in: ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input, __out: *");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output) void {\n        __out.* = ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".handler(__in);\n    }\n    fn runTask(__in: ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input, __out: *");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output) void {\n        __koru_par_depth += 1;\n        defer __koru_par_depth -= 1;\n        run(__in, __out);\n        _ = __koru_par_tasks.fetchSub(1, .monotonic);\n    }\n};\n");
+        try emitter.write("var __koru_par_wg_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": @import(\"std\").Thread.WaitGroup = .{};\n");
+        try emitter.write("if (__koru_par_depth < __koru_par_DEPTH_CAP and __koru_par_tasks.load(.monotonic) < __koru_par_CAP) {\n    _ = __koru_par_tasks.fetchAdd(1, .monotonic);\n    __koru_par_pool_ensure().spawnWg(&__koru_par_wg_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(".runTask, .{ __koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", &");
+        try writeBranchName(emitter, slot);
+        try emitter.write(" });\n} else __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(".run(__koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", &");
+        try writeBranchName(emitter, slot);
+        try emitter.write(");\n");
+        const tvar = try std.fmt.allocPrint(ctx.allocator, "__koru_par_wg_{s}", .{slot});
+        try ctx.pending_parallel.append(ctx.allocator, tvar);
+        if (!std.mem.eql(u8, bound_var, "_")) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, bound_var));
+        }
+        return;
+    }
     if (!std.mem.eql(u8, bound_var, "_")) {
         try emitter.write(if (bound_mutable) "var " else "const ");
         // Record the name for the current Zig function scope: an inline frame
@@ -12198,12 +12304,40 @@ pub fn emitContinuationBody(
 }
 
 /// Emit a single step in a pipeline
+/// Fork/join: join every spawned task recorded on ctx — emitted before any
+/// step that isn't itself a `[parallel]` invocation, so a spawned binding's
+/// first reader (the produce, an unmarked call, a branch) sees the joined
+/// value, never mid-flight.
+fn drainParallelJoins(emitter: *CodeEmitter, ctx: *EmissionContext) !void {
+    // waitAndWork, not wait: a pool worker that blocks on its join would
+    // hold queued tasks nobody runs (all workers waiting = deadlock on a
+    // recursive fork tree). Cooperative waiting lets the waiter drain the
+    // queue itself — the standard fork/join requirement.
+    for (ctx.pending_parallel.items) |wgvar| {
+        try emitter.writeIndent();
+        try emitter.write("if (__koru_par_pool_ready) __koru_par_pool.waitAndWork(&");
+        try emitter.write(wgvar);
+        try emitter.write(");\n");
+    }
+    ctx.pending_parallel.clearRetainingCapacity();
+}
+
 fn emitStep(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     step: *const ast.Step,
     result_var: []const u8,
 ) !void {
+    // Fork/join: a pending spawn drains before any step that isn't itself a
+    // marked invocation — marked steps keep the window open so sibling
+    // binds overlap.
+    const keep_open = step.* == .invocation and blk: {
+        for (step.invocation.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) break :blk true;
+        }
+        break :blk false;
+    };
+    if (!keep_open) try drainParallelJoins(emitter, ctx);
     // Check if this step is from an opaque tap - if so, skip nested tap-inserted steps
     const is_from_opaque_tap = switch (step.*) {
         .invocation => |inv| inv.from_opaque_tap,

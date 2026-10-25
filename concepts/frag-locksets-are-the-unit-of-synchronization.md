@@ -114,29 +114,37 @@ gap matters when shared-cell writes arrive.
 Cross-module named locksets: refused — the instance-resolved form covers
 the legitimate version.
 
-**Deferred layer — fork/join on recursion (tree kernels).** The fold
-shape is range-split; `fib`/`tak`/`binarytrees` are a different lowering
-family: sibling continuation binds fan out
-(`|> fib(n-1): a |> fib(n-2): b -> a+b`) — no cell, no combine law, the
-bindings ARE the partials. Three open rulings, ordered by load:
+**Deferred layer — fork/join on recursion (tree kernels), spike landed
+2026-10-25.** `[parallel]` on a mid-chain invocation marks a fork point:
+`|> [parallel]fib(n-1): a |> [parallel]fib(n-2): b -> a+b` lowers each
+marked call to slot + `Pool.spawnWg` + cooperative `waitAndWork` join —
+the bindings ARE the partials, no combine law. What the spike measured
+that the ruling had to say honestly:
 
-- *Cutoff, first.* `fib(35)` is ~2^35 calls — naive spawn-per-call
-  explodes, so a threshold below which recursion stays serial is part of
-  the semantics, not a tuning knob. Bend's shape: spawn above a depth /
-  input-size bound, serial under it. Where the bound lives (a numeric
-  `[parallel(depth>=k)]`-style parameter? measured task count?) is the
-  ruling — the one piece that cannot be spiked around.
-- *Marker spelling.* `[parallel]` on which node — the proc decl
-  (`~[parallel]fib`), the else-arm, the individual invocation? Decl-level
-  reads most honestly: the recursion IS the parallel surface.
-- *The flood gap is a precondition.* `name = <flow>` impls never enter
-  the call graph — dirty marking can't reach a recursion body, and the
-  fork site's codegen lives in chain emission, not `control.for.kz`.
-  Closing the gap (flow impls as graph nodes) is a prerequisite diff,
-  small on its own.
+- *The cutoff is semantics, proven empirically.* Task-count caps bound
+  concurrency, not churn — finished tasks free budget so spawn ops roll
+  through the whole call tree (fib(40): 4.9s vs 0.29s serial). The
+  landed bound is fork-DEPTH: `threadlocal __koru_par_depth`, capped at
+  7, so ~2^7 coarse tasks exist per run. Work always runs — over the cap
+  the call inlines, correctness never rides on the bound.
+- *Worker starvation is real without cooperative joins.* A pool worker
+  blocked in `wg.wait()` can't dequeue the tasks its parent waits on —
+  all workers + main waiting on queued tasks deadlocks. `waitAndWork`
+  (Zig Pool's cooperative wait) is load-bearing, not a nicety.
+- *The remaining economics: fork-site density.* Every marked call pays
+  the gate check (fib(45): 2.89s vs 3.25s serial — real win but ~4x
+  work amplification). The honest answer is the second half of the
+  cutoff ruling: fork sites should be SPARSE (one site per subtree
+  level, or a `[parallel(depth<=k)]`-style bound the user places), not
+  every recursive call. fib(40) still loses (0.41 vs 0.29) — sub-second
+  workloads sit below the overhead crossover.
+- *Serial fallbacks are honest, not silent.* Effect-handler targets,
+  variants, `try` paths, destructured binds emit serial — the shape
+  can't fork, so it doesn't pretend.
 
-Estimated: a real feature pass — new emit surface + cutoff ruling +
-call-graph fix — not a tweak of the fold machinery.
+Flow impls (`name = <flow>`) joined the call graph the same pass —
+impl_of-keyed nodes let the dirty flood reach recursion bodies, a
+prerequisite the fork codegen now depends on.
 
 **Deferred layer — obligation guards.** Multi-step atomicity
 (read-check-write as one user sequence) is unexpressible in per-call
