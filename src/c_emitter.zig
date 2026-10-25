@@ -214,6 +214,20 @@ fn catalogCTypeResolver(ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8 {
     return em.catalogFlatType(koru_type);
 }
 
+/// Drift goes to stderr AND `catalog_drift.log` in CWD — the harness drops
+/// backend stderr on success, which made drift advisory-invisible. A file
+/// in the compile dir is an artifact a test or CI can check for presence:
+/// file exists ⇔ the declared catalog disagreed with the emitter.
+fn driftLog(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print(fmt, args);
+    const f = std.fs.cwd().createFile("catalog_drift.log", .{ .truncate = false }) catch return;
+    defer f.close();
+    f.seekFromEnd(0) catch return;
+    const line = std.fmt.allocPrint(std.heap.page_allocator, fmt ++ "\n", args) catch return;
+    defer std.heap.page_allocator.free(line);
+    f.writeAll(line) catch {};
+}
+
 // ---------------------------------------------------------------------------
 // Indexes
 // ---------------------------------------------------------------------------
@@ -452,7 +466,7 @@ fn isConcurrencyPath(path: ast.DottedPath) bool {
 fn checkFragmentRow(fragment: ?*const std.StringHashMap([]const u8), key: []const u8) void {
     const table = fragment orelse return;
     if (!table.contains(key)) {
-        std.debug.print("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
+        driftLog("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
     }
 }
 
@@ -753,13 +767,13 @@ const Emitter = struct {
             if (table.get(t)) |declared| {
                 if (cTypeOf(t)) |legacy| {
                     if (!std.mem.eql(u8, legacy, declared)) {
-                        std.debug.print("std/target drift: `{s}` emitter=`{s}` catalog=`{s}` (catalog wins)\n", .{ t, legacy, declared });
+                        driftLog("std/target drift: `{s}` emitter=`{s}` catalog=`{s}` (catalog wins)\n", .{ t, legacy, declared });
                     }
                 }
                 return declared;
             }
             if (cTypeOf(t) != null) {
-                std.debug.print("std/target drift: type row missing for `{s}` — catalog is sole source\n", .{t});
+                driftLog("std/target drift: type row missing for `{s}` — catalog is sole source\n", .{t});
             }
             return null;
         }
@@ -773,11 +787,11 @@ const Emitter = struct {
         self.ensureCatalog();
         const table = self.catalog_names orelse return;
         const declared = table.get(key) orelse {
-            std.debug.print("std/target drift: name row missing for `{s}` (emitter mints `{s}`)\n", .{ key, literal });
+            driftLog("std/target drift: name row missing for `{s}` (emitter mints `{s}`)\n", .{ key, literal });
             return;
         };
         if (!std.mem.eql(u8, declared, literal)) {
-            std.debug.print("std/target drift: name `{s}` emitter=`{s}` catalog=`{s}`\n", .{ key, literal, declared });
+            driftLog("std/target drift: name `{s}` emitter=`{s}` catalog=`{s}`\n", .{ key, literal, declared });
         }
     }
 
@@ -789,11 +803,11 @@ const Emitter = struct {
         const table = self.catalog_builtins orelse return;
         const key = std.fmt.allocPrint(self.allocator, "@{s}", .{name}) catch return;
         const declared = table.get(key) orelse {
-            std.debug.print("std/target drift: builtin refusal `{s}` not catalog-declared\n", .{key});
+            driftLog("std/target drift: builtin refusal `{s}` not catalog-declared\n", .{key});
             return;
         };
         if (std.mem.eql(u8, declared, "lowered")) {
-            std.debug.print("std/target drift: builtin `{s}` catalog=`lowered` but emitter refuses\n", .{key});
+            driftLog("std/target drift: builtin `{s}` catalog=`lowered` but emitter refuses\n", .{key});
         }
     }
 
@@ -805,7 +819,7 @@ const Emitter = struct {
         self.ensureCatalog();
         const table = self.catalog_fragment orelse return;
         if (!table.contains(key)) {
-            std.debug.print("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
+            driftLog("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
         }
     }
 
@@ -817,7 +831,7 @@ const Emitter = struct {
         const table = self.catalog_constructs orelse return;
         if (table.get(key)) |decl| {
             if (std.mem.eql(u8, decl, "supported")) {
-                std.debug.print("std/target drift: construct `{s}` catalog=`supported` but emitter refuses\n", .{key});
+                driftLog("std/target drift: construct `{s}` catalog=`supported` but emitter refuses\n", .{key});
             }
         }
     }
@@ -836,7 +850,7 @@ const Emitter = struct {
             const end = std.mem.indexOfScalar(u8, after, '>') orelse break;
             const inc = after[0..end];
             if (!table.contains(inc)) {
-                std.debug.print("std/target drift: include `<{s}>` emitted but not catalog-declared\n", .{inc});
+                driftLog("std/target drift: include `<{s}>` emitted but not catalog-declared\n", .{inc});
             }
             rest = after[end..];
         }
@@ -857,7 +871,7 @@ const Emitter = struct {
             if (is_def) {
                 const full = std.fmt.allocPrint(self.allocator, "__koru_{s}", .{ident}) catch continue;
                 if (!table.contains(full)) {
-                    std.debug.print("std/target drift: helper `{s}` emitted but not catalog-declared\n", .{full});
+                    driftLog("std/target drift: helper `{s}` emitted but not catalog-declared\n", .{full});
                 }
             }
         }
