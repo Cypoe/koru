@@ -1,0 +1,82 @@
+// Koru Standard Library: the `nodeaware` part of proto.kz — joined via
+// `~part nodeaware` in proto.kz; merged into the proto module namespace.
+//
+// Node-kind awareness for the shared registry. `std/tree:node(Name)`
+// registers a KIND=node entry in the same one-name-per-home namespace the
+// proto doors feed — but a node is an EDGE (owned, pointed to), never a
+// payload. These scans let proto's field vocabulary say "names a tree
+// node — edges point, they don't embed" instead of misreading the field
+// as an unknown terminal, and give the tree lane's own readers the live
+// door + erased-marker lookup.
+
+// A live `std/tree:node(Name)` door — the mirror of liveDeclarationIs-
+// Compound. Registration may be in flight when a reader runs, so the live
+// door answers alongside the erased marker.
+fn liveDeclarationIsNode(inv: *const astz.Invocation, want: []const u8) bool {
+    if (inv.path.segments.len != 1) return false;
+    if (!std.mem.eql(u8, inv.path.segments[0], "node")) return false;
+    const mq = inv.path.module_qualifier orelse return false;
+    if (!std.mem.eql(u8, mq, "std.tree") and !std.mem.eql(u8, mq, "std/tree")) return false;
+    if (inv.args.len == 0) return false;
+    return std.mem.eql(u8, TerminalRef.bareName(inv.args[0].value), want);
+}
+
+// `// proto-node Name: ...` — a node registration's erased marker.
+fn markerDeclaresNodeLine(line: []const u8, want: []const u8) bool {
+    const marker = std.mem.trimLeft(u8, line, " \t");
+    const prefix = "// proto-node ";
+    if (!std.mem.startsWith(u8, marker, prefix)) return false;
+    const colon = std.mem.indexOfScalar(u8, marker[prefix.len..], ':') orelse return false;
+    const declared = std.mem.trim(u8, marker[prefix.len .. prefix.len + colon], " \t");
+    return std.mem.eql(u8, declared, want);
+}
+
+fn markerDeclaresNode(code: []const u8, want: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, code, '\n');
+    while (lines.next()) |line| {
+        if (markerDeclaresNodeLine(line, want)) return true;
+    }
+    return false;
+}
+
+fn scanItemsNode(items: []const astz.Item, scope_home: []const u8, want: []const u8, want_home: []const u8) bool {
+    for (items) |entry| {
+        switch (entry) {
+            .flow => |candidate| {
+                if (candidate.body.node) |*node| {
+                    if (node.* == .invocation and std.mem.eql(u8, scope_home, want_home)) {
+                        if (liveDeclarationIsNode(&node.invocation, want)) return true;
+                    }
+                }
+            },
+            .inline_code => |inline_code| {
+                if (std.mem.eql(u8, scope_home, want_home)) {
+                    if (markerDeclaresNode(inline_code.code, want)) return true;
+                }
+            },
+            .module_decl => |module| {
+                if (scanItemsNode(module.items, module.logical_name, want, want_home)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// Is `ftype` a node-registered name in scope — live `std/tree:node` door
+/// or erased `// proto-node` marker. `pub`: the tree lane's own registry
+/// reads share this (koru_std/tree.registry.kz).
+pub fn isDeclaredNode(prog: *const astz.Program, alloc: std.mem.Allocator, ftype: []const u8, scope_home: []const u8) bool {
+    const w = TerminalRef.splitWant(alloc, ftype, scope_home);
+    return scanItemsNode(prog.items, prog.main_module_name, w.name, w.home);
+}
+
+/// The refusal text for a field whose type is not payload material —
+/// node's edge-vs-payload teaching when the name IS a registered node,
+/// the plain unknown-terminal message otherwise.
+pub fn fieldTypeDiagnosis(alloc: std.mem.Allocator, prog: *const astz.Program, entry: []const u8, p: anytype) []const u8 {
+    if (isDeclaredNode(prog, alloc, p.ftype, p.home)) {
+        return std.fmt.allocPrint(alloc, "std/proto({s}): field '{s}' names tree node '{s}' — a node is an edge (owned, pointed to), never a payload field. Declare the edge inside a std/tree:node(...) block: edges belong to nodes, payloads to protos", .{ entry, p.name, p.ftype }) catch unreachable;
+    }
+    return std.fmt.allocPrint(alloc, "std/proto({s}): field '{s}' names unknown terminal '{s}' — a field must use a scalar material, a terminal or compound of its own home, or a qualified name from another home", .{ entry, p.name, p.ftype }) catch unreachable;
+}

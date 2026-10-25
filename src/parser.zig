@@ -5107,6 +5107,31 @@ pub const Parser = struct {
             if (close_pos) |cp| {
                 var j = cp + 1;
                 while (j < clean.len and (clean[j] == ' ' or clean[j] == '\t')) : (j += 1) {}
+                // `call(args) { block }: name` — the inline source block sits
+                // between the `)` close and the bind colon; skip it so the
+                // bind lands on `return_binding` exactly as `f(): name` does.
+                // A `{` directly after `)` is never arg data (args live inside
+                // the parens) — it is the block. (210-site twin: the multi-line
+                // `}: name` close path in parseImplicitSourceBlock.)
+                if (j < clean.len and clean[j] == '{') {
+                    var bdepth: i32 = 0;
+                    var in_str2 = false;
+                    while (j < clean.len) : (j += 1) {
+                        const c2 = clean[j];
+                        if (c2 == '"' and (j == 0 or clean[j - 1] != '\\')) {
+                            in_str2 = !in_str2;
+                            continue;
+                        }
+                        if (in_str2) continue;
+                        if (c2 == '{') bdepth += 1;
+                        if (c2 == '}') {
+                            bdepth -= 1;
+                            if (bdepth == 0) break;
+                        }
+                    }
+                    j += 1;
+                    while (j < clean.len and (clean[j] == ' ' or clean[j] == '\t')) : (j += 1) {}
+                }
                 if (j < clean.len and clean[j] == ':') {
                     var k = j + 1;
                     while (k < clean.len and (clean[k] == ' ' or clean[k] == '\t')) : (k += 1) {}

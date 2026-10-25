@@ -1,0 +1,102 @@
+// Koru Standard Library: the `node` part of tree.kz.
+// Joined via `~part node` in tree.kz; merged into the tree module.
+//
+// `std/tree:node(Node) { fields }` — the KIND declaration. Registers Node in
+// the shared registry as kind=node, validates the field grammar (payload vs
+// edge by registry kind of the field type), and materializes the host node
+// record. Nothing else emits here — mint/dispose synthesize their own tors
+// lazily at their call sites, so transform order is never a contract.
+
+~[comptime|transform]pub tor node {
+    expr: Expression,
+    source: ?Source,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    allocator: std.mem.Allocator,
+    reporter: *std/compiler:ErrorReporter
+} -> SiteResult
+
+~proc node|zig {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow)
+        &item.flow
+    else
+        return .{};
+
+    var type_name = expr;
+    if (type_name.len >= 2 and type_name[0] == '"' and type_name[type_name.len - 1] == '"') {
+        type_name = type_name[1 .. type_name.len - 1];
+    }
+    const name = std.mem.trim(u8, type_name, " \t");
+
+    var name_ok = name.len > 0;
+    for (name, 0..) |c, i| {
+        const legal = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+            (c == '_') or (i > 0 and c >= '0' and c <= '9') or (c == '-');
+        if (!legal) {
+            name_ok = false;
+            break;
+        }
+    }
+    if (!name_ok or name.len == 0) {
+        return .{ .replacement = ast.refusal(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:node: the entry name '{s}' is not usable — a node name must be an identifier (a-z, A-Z, 0-9, '_', '-'; no leading digit)", .{name}) };
+    }
+
+    const src = if (source) |s| s.text else "";
+    const home = TerminalRef_scopeOfFlow(program, flow);
+    const parsed = parseNodeFields(allocator, program, src, home, name, true);
+    const fields = switch (parsed) {
+        .ok => |fs| fs,
+        .fault => |f| return .{ .replacement = ast.refusal(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:node({s}): field '{s}' {s}", .{ name, f.field, f.why }) },
+    };
+    if (fields.len == 0) {
+        return .{ .replacement = ast.refusal(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:node({s}): a node with no fields is a declaration that says nothing — declare at least one `name: Type` (payload) or `name: ?Node` (edge)", .{name}) };
+    }
+
+    // Marker: the registry's record of this entry, one flat line — same
+    // self-erase contract as `// proto Name: ...`; later lines of a
+    // multi-line block would land as raw text, so the fields join on ", ".
+    var flat = std.ArrayList(u8).initCapacity(allocator, fields.len * 24) catch unreachable;
+    for (fields) |f| {
+        if (flat.items.len > 0) flat.appendSlice(allocator, ", ") catch unreachable;
+        flat.appendSlice(allocator, f.name) catch unreachable;
+        flat.appendSlice(allocator, ": ") catch unreachable;
+        if (f.optional) flat.appendSlice(allocator, "?") catch unreachable;
+        flat.appendSlice(allocator, if (f.kind == .edge) f.edge_type else f.zig_type) catch unreachable;
+    }
+
+    var code = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    code.appendSlice(allocator, std.fmt.allocPrint(allocator, "// proto-node {s}: {s}\n", .{ name, flat.items }) catch unreachable) catch unreachable;
+
+    // Host materialization — Zig only on this rung. Payload embeds its
+    // material; an edge is `?*T` (optional) or `*T` (required: the node is
+    // never a leaf, which is exactly what a required child means).
+    if (std.mem.eql(u8, CompilerEnv.lang, "zig")) {
+        code.appendSlice(allocator, std.fmt.allocPrint(allocator, "pub const {s} = struct {{\n", .{name}) catch unreachable) catch unreachable;
+        for (fields) |f| {
+            switch (f.kind) {
+                .payload => {
+                    code.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s}: {s},\n", .{ f.name, f.zig_type }) catch unreachable) catch unreachable;
+                },
+                .edge => {
+                    code.appendSlice(allocator, std.fmt.allocPrint(allocator, "    {s}: {s}*{s},\n", .{ f.name, if (f.optional) "?" else "", f.edge_type }) catch unreachable) catch unreachable;
+                },
+            }
+        }
+        code.appendSlice(allocator, "};\n") catch unreachable;
+    }
+
+    const inline_code_item = ast.Item{
+        .inline_code = ast.InlineCode{
+            .code = code.toOwnedSlice(allocator) catch unreachable,
+            .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        },
+    };
+    return .{ .replacement = inline_code_item };
+}
+
+fn TerminalRef_scopeOfFlow(prog: *const astz.Program, flow: *const astz.Flow) []const u8 {
+    return koru_std.koru_proto.TerminalRef.scopeOfFlow(prog, flow);
+}

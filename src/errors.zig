@@ -160,6 +160,7 @@ pub const ErrorCode = enum(u16) {
     KORU181, // An unspaced `-` joined identifiers into one kebab name that binds nothing, while every `-`-segment resolves — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
     KORU182, // A `-`-joined member name (`p.x-c`) names no field of the receiver's statically-known record, while the first `-`-segment IS a field and the rest resolve as names — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
     KORU183, // A std/cli call site or declaration is malformed — a `| arm` that is neither a command nor `usage`/`help`, a destructure field that is neither a declared flag nor a positional, an unsupported positional/flag type, or a nested `std/cli()` site (the dispatch is a top-level item). One code for the class; the message names the fault. Emitted by koru_std/cli.kz — reserved in scripts/registry_reserved.txt.
+    KORU184, // A std/tree declaration or call site is malformed — a non-identifier node name, a field that is neither `name: Type` nor `name: ?Type`, a field type that is neither payload material nor a node-registered edge, a mint missing a required field or spelling an undeclared one, a null on a required edge, or a dispose whose binding's node type can't be resolved. One code for the class; the message names the fault. Emitted by koru_std/tree.kz — reserved in scripts/registry_reserved.txt.
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)

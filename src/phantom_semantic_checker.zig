@@ -90,6 +90,7 @@ pub const PhantomSemanticChecker = struct {
         is_proto: bool,
         is_terminal: bool,
         is_foreign: bool,
+        is_node: bool = false,
     };
 
     pub fn init(allocator: std.mem.Allocator, reporter: *errors.ErrorReporter) !PhantomSemanticChecker {
@@ -170,7 +171,15 @@ pub const PhantomSemanticChecker = struct {
                         std.mem.eql(u8, mqv, "std.foreign") or std.mem.eql(u8, mqv, "std/foreign")
                     else
                         false;
-                    if ((types_tor or proto_door or foreign_door) and inv.path.segments.len > 0) {
+                    // Tree rung: `std/tree:node(Name)` registers a node kind —
+                    // Koru-owned heap identity in the SAME registry. Same
+                    // collision law: a proto and a node sharing one name in one
+                    // home refuse at declaration (the C# class/struct rule).
+                    const tree_door = if (mq) |mqv|
+                        std.mem.eql(u8, mqv, "std.tree") or std.mem.eql(u8, mqv, "std/tree")
+                    else
+                        false;
+                    if ((types_tor or proto_door or foreign_door or tree_door) and inv.path.segments.len > 0) {
                         const last_seg = inv.path.segments[inv.path.segments.len - 1];
                         // The decl-tor verbs are `struct` plus the scalar
                         // vocabulary — `std/proto:i64(Port)` spells the host
@@ -195,7 +204,10 @@ pub const PhantomSemanticChecker = struct {
                         // A foreign entry is an identity from the host side of
                         // the airlock: collides loudly, derives nothing.
                         const is_foreign = foreign_door and std.mem.eql(u8, last_seg, "struct");
-                        if ((is_decl_tor or is_proto or is_foreign) and inv.args.len > 0) {
+                        // A tree node entry is a Koru-owned heap identity:
+                        // collides loudly, derives nothing through this door.
+                        const is_node = tree_door and std.mem.eql(u8, last_seg, "node");
+                        if ((is_decl_tor or is_proto or is_foreign or is_node) and inv.args.len > 0) {
                             var name = inv.args[0].value;
                             // `<:` extension rides the labeled-arg split —
                             // `std/proto(Dog <: Animal)` arrives as
@@ -216,6 +228,7 @@ pub const PhantomSemanticChecker = struct {
                                     .is_proto = is_proto,
                                     .is_terminal = is_terminal,
                                     .is_foreign = is_foreign,
+                                    .is_node = is_node,
                                 };
                                 try self.registerDeclaredIdentity(name, home, site, sites);
                                 if (is_proto) {
@@ -226,6 +239,7 @@ pub const PhantomSemanticChecker = struct {
                                         .is_proto = true,
                                         .is_terminal = false,
                                         .is_foreign = false,
+                                        .is_node = false,
                                     };
                                     try self.registerDeclaredIdentity(container, home, container_site, sites);
                                 }
@@ -263,11 +277,19 @@ pub const PhantomSemanticChecker = struct {
             // fires when at least one of the two registrants is a compound
             // PROTO entry or a `std/proto` terminal (both ruled identity
             // front doors); the legacy nominal wrappers stay idempotent.
-            const collides = site.is_proto or site.is_terminal or site.is_foreign or prior.is_proto or prior.is_terminal or prior.is_foreign;
+            const collides = site.is_proto or site.is_terminal or site.is_foreign or site.is_node or prior.is_proto or prior.is_terminal or prior.is_foreign or prior.is_node;
             if (collides) {
                 const prior_loc = prior.location;
                 log.debug("[PHANTOM] ❌ DUPLICATE PROTO DECLARATION '{s}'\n", .{name});
-                if (site.is_foreign or prior.is_foreign) {
+                if (site.is_node or prior.is_node) {
+                    try self.reporter.addError(
+                        .KORU030,
+                        site.location.line,
+                        site.location.column,
+                        "duplicate registry entry '{s}' — a name is registered once per home, whatever its kind (proto, terminal, foreign, tree node); the declaration at {s}:{d} collides with the prior registration at {s}:{d}",
+                        .{ name, site.location.file, self.reporter.userLineIn(site.location), prior_loc.file, self.reporter.userLineIn(prior_loc) },
+                    );
+                } else if (site.is_foreign or prior.is_foreign) {
                     try self.reporter.addError(
                         .KORU030,
                         site.location.line,

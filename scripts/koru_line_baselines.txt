@@ -210,6 +210,7 @@ koru_std/profiler.kz	283
 koru_std/proto.fields.kz	58
 koru_std/proto.kz	353
 koru_std/proto.markers.kz	42
+koru_std/proto.nodeaware.kz	82
 koru_std/proto.ownedleaf.kz	63
 koru_std/proto.resolve.kz	451
 koru_std/proto.terminal.kz	47

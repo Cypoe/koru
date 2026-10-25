@@ -126,3 +126,7 @@ KORU209
 # answered by a specific PARSE code or accepted as an invocation) needs a ruling
 # before this code is wired or retired.
 KORU001
+
+# `std/tree` lane refusals — koru_std/tree.*.kz transforms; .kz emit sites are
+# invisible to the zig-only scan, same situation as KORU178 above.
+KORU184

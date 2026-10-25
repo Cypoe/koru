@@ -3302,6 +3302,21 @@ const InvariantHoist = struct {
     /// Does this step consume a `<!owned>` param bound to a hoisted name?
     /// Match by value: a bare `free-tree(t)` arg needn't spell the field name.
     fn isDischarge(self: *InvariantHoist, inv: *const ast.Invocation, hoisted: *std.StringHashMap(void)) bool {
+        // `std/tree:dispose(t)` — the lane verb consumes the owned root it
+        // names, but this pass runs BEFORE the transform expands the site to
+        // `dispose-Node`, so the event lookup below sees the transform's own
+        // signature (no `!owned`). The lane contract is fixed: the arg is the
+        // discharged root — match by value like any other consume.
+        if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "dispose")) {
+            if (inv.path.module_qualifier) |mq| {
+                if (std.mem.eql(u8, mq, "std.tree") or std.mem.eql(u8, mq, "std/tree")) {
+                    for (inv.args) |a| {
+                        if (hoisted.contains(a.value)) return true;
+                    }
+                    return false;
+                }
+            }
+        }
         const decl = self.events.get(self.norm(lastSeg(inv.path))) orelse return false;
         var takes_owned = false;
         for (decl.input.fields) |f| {
