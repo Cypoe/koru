@@ -7,6 +7,7 @@ const shape_checker = @import("shape_checker");
 const ShapeChecker = shape_checker.ShapeChecker;
 const purity_checker = @import("purity_checker.zig");
 const PurityChecker = purity_checker.PurityChecker;
+const threaded_checker = @import("threaded_checker.zig");
 const compiler_feature_flags = @import("compiler_config");
 // Old Emitter no longer needed - using ComptimeEmitter
 const ast = @import("ast");
@@ -8676,6 +8677,12 @@ pub fn main() !void {
     var purity_check = PurityChecker.init(compile_allocator);
     defer purity_check.deinit();
     try purity_check.check(&source_file);
+
+    // Threaded-reachability pass — floods "dirty" forward from ~[threaded]
+    // roots; consumed at codegen for lockset emission.
+    var threaded_check = threaded_checker.ThreadedChecker.init(compile_allocator);
+    defer threaded_check.deinit();
+    try threaded_check.check(&source_file);
 
     // Flow checking pass - FRONTEND ONLY (syntactic checks: KORU100, KORU050, KORU051)
     // Unknown-branch (KORU021) runs here — source arm names only exist

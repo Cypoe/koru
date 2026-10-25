@@ -36,7 +36,11 @@ it right once and every program on top is free.
 The dirty flag is a compile-time fact on the decl (any-threaded-path-wins —
 never duplicated trees, never call-time flags), computed by a forward
 flood-fill over the `purity_checker`-shaped call graph from the `@threaded`
-surface marker. Codegen reads flag × declaration:
+surface marker. Codegen reads flag × declaration. The spike's concrete root
+spelling is `~[threaded]` on a proc — an internal compile-time marker naming
+"a threaded path enters here"; the user-facing parallel-scope spelling
+(`parallel for` or whatever it becomes) lowers onto the same flag and stays
+Lars's to rule:
 
 - nothing declared → module mutex (process-lifetime static, coarse, safe —
   state that races usually lives in the same module's internals);

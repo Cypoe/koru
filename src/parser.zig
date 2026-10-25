@@ -3724,10 +3724,12 @@ pub const Parser = struct {
 
         // Check for ~[pure] annotation
         var is_pure = false;
+        var is_threaded = false;
         for (annotations) |ann| {
             if (std.mem.eql(u8, ann, "pure")) {
                 is_pure = true;
-                break;
+            } else if (std.mem.eql(u8, ann, "threaded")) {
+                is_threaded = true;
             }
         }
 
@@ -3744,6 +3746,7 @@ pub const Parser = struct {
             .prose = self.takePendingProse(),
             .target = target,
             .is_pure = is_pure,
+            .is_threaded = is_threaded,
             // is_transitively_pure defaults to false, will be set by purity checker
             .location = self.getLineLocation(decl_line_index, lexer.getIndent(line)),
             .module = try self.allocator.dupe(u8, self.module_name),

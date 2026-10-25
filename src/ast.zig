@@ -480,6 +480,9 @@ pub const EventDecl = struct {
     is_pure: bool = false, // True if ALL proc implementations are pure
     is_transitively_pure: bool = false, // True if ALL proc implementations are transitively pure
 
+    // Threading: dirty when any @threaded path reaches this event
+    is_threaded_dirty: bool = false,
+
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
     module: []const u8 = "", // Canonical module path (e.g., "input", "lib/fs")
@@ -642,6 +645,10 @@ pub const ProcDecl = struct {
     // Purity tracking
     is_pure: bool = false, // True if marked ~[pure] or inline-only pattern
     is_transitively_pure: bool = false, // True if pure AND all called events are transitively pure
+
+    // Threading: root marker from ~[threaded]; dirty when any threaded path reaches it
+    is_threaded: bool = false,
+    is_threaded_dirty: bool = false,
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1244,6 +1251,9 @@ pub const Flow = struct {
     // Purity tracking
     is_pure: bool = true, // Flows are always locally pure (just composition)
     is_transitively_pure: bool = false, // Default false until purity checker walks and verifies
+
+    // Threading: dirty when a threaded-reachable path invokes this flow
+    is_threaded_dirty: bool = false,
 
     // Subflow implementation context (null for top-level flows)
     // When set, this flow implements the named event.
