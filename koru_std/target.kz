@@ -262,11 +262,18 @@ pub const Catalog = struct {
 
 ~[comptime|norun]pub tor construct { name: Expression, source: Source }
 
+// Canonical names post-transform: `print.ln`/`eprint.ln` both reroute to
+// `std.io:print.impl` at the site — the name the emitted C actually
+// invokes. The walker sees the post-transform AST, so the canonical name
+// is the one its positive check can answer. (Rows are a strict JSON map —
+// no comments inside the braces or the whole family silently voids.)
+
 ~std/target:construct(c) {
     "std/io:print.ln": "supported",
     "std/io:eprint.ln": "supported",
+    "std/io:print.impl": "supported",
     "std/store:new": "supported",
     "std/store:stored": "supported",
     "std/store:watch": "supported",
-    "std/switch:char": "supported",
+    "std/switch:char": "supported"
 }

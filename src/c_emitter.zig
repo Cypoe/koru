@@ -177,7 +177,13 @@ fn loadTargetRows(
         if (!is_c) continue;
         const src = source_text orelse continue;
         const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return table;
-        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch continue;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch |e| {
+            // A malformed row block must not silently void the family —
+            // a `construct` trailing comma sat dead this way until the
+            // shadow's harvest count exposed it.
+            std.debug.print("std/target catalog: `{s}` row block failed to parse: {s}\n", .{ verb, @errorName(e) });
+            continue;
+        };
         defer parsed.deinit();
         if (parsed.value != .object) continue;
         var it = parsed.value.object.iterator();
@@ -3324,6 +3330,10 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     em.checkCatalogPrelude(&rewritten);
     try validateNoZigInC(&em, &rewritten);
     em.ensureCatalog();
-    emit_walk.shadow(program, if (em.catalog_types) |*t| t else null);
+    const shadow_catalog = emit_walk.Catalog{
+        .types = if (em.catalog_types) |*t| t else null,
+        .constructs = if (em.catalog_constructs) |*t| t else null,
+    };
+    emit_walk.shadow(program, &shadow_catalog);
     return rewritten.toOwnedSlice(allocator);
 }
