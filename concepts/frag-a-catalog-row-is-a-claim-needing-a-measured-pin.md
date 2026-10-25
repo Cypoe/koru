@@ -129,3 +129,20 @@ the audit calls ARE the residual twin class, deleting only when the
 oracle renderers are deleted outright. The honest next cut is per-pass:
 delete an oracle renderer only after its walk pass is measured clean
 across the regression set, and the audit module shrinks with it.
+
+The emit.kz port taught the reachability rule that governs the whole
+idiom: a koru_std module lands in backend_output.koru_std only when the
+pipeline *invokes* one of its comptime-marked tors — `~import` makes a
+module resolvable, never emittable, and `[comptime]` is the per-tor gate
+that puts its handler in the generated file (an unmarked `~pub tor`
+parses, accepts calls, and silently emits no event struct). With that
+gate understood, the C lane became a pipeline arm exactly the way
+compiler.materialize.kz does it upstream: `target-of` yields the compile
+target's tag, the `| c |>` arm calls `std/emit:emit-c`, and the tor's
+|zig body is the lane entry — the engine stays src/c_emitter.zig +
+src/emit_walk.zig the way emit-zig's engine stays visitor_emitter.zig.
+A .kz module holding the lane's address while src/ holds its engine is
+not a smell then; it is the shape every lane takes as it metacircular-
+izes. What belongs in emit.kz going forward is the *addressable* layer —
+target routing, artifact verbs, walk tors the pipeline must call — not a
+verbatim transplant of the engine's Zig.
