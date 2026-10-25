@@ -339,6 +339,11 @@ pub const CDeclWriter = struct {
     /// `main`'s runtime-state prologue text (`__koru_argc/argv`
     /// bindings on the C lane) — null when the lane needs none.
     mainPrologueText: ?[]const u8 = null,
+    /// Register one input field's bound C type — the lane's post-pass
+    /// (`rewriteSliceAccessors`' `int_bindings` on the oracle) reads
+    /// which fields are scalars vs array-as-pointer. The walk reports
+    /// each binding as it renders it; the lane owns the table.
+    bindField: ?*const fn (ctx: ?*anyopaque, field_name: []const u8, c_type: []const u8) anyerror!void = null,
 };
 
 fn writeInStruct(
@@ -454,22 +459,28 @@ fn writeTaggedResultDecl(
 }
 
 /// `const <ct> <f> = __koru_in.<f>;` per input field — the binding
-/// convention, grammar plus spelling answers. The oracle's version also
-/// registers `int_bindings` for later passes; during dual-answer that
-/// side effect rides the oracle — the walk only renders text.
+/// convention, grammar plus spelling answers. Each binding also reports
+/// to `bindField` when the writer declares one: the lane's expression
+/// lowering reads the field→C-type table during later passes, so the
+/// registration rides the real render, not an audit.
 fn writeFieldBindings(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     w: *const CDeclWriter,
     event: *const ast.EventDecl,
-) error{OutOfMemory, UnsupportedConstruct}!void {
+) anyerror!void {
     for (event.input.fields) |f| {
         const cm = w.memberName(w.ctx, allocator, f.name);
         if (codegen_utils.cArrayType(f.type, w.typeOf, w.ctx)) |at| {
+            // `[N]T` fields bind as pointers — C arrays are not
+            // assignable, and `arr[i]` indexes identically on `T *`
+            // (1-D) / `T (*)[M]` (N-D), so .kc bodies stay verbatim.
+            if (w.bindField) |bf| try bf(w.ctx, f.name, at.base);
             try out.print(allocator, "    {s} = {s}.{s};\n", .{ codegen_utils.cArrayPtrDecl(allocator, at, cm), w.inputParam, cm });
             continue;
         }
         const ct = w.typeOf(w.ctx, f.type) orelse return error.UnsupportedConstruct;
+        if (w.bindField) |bf| try bf(w.ctx, f.name, ct);
         try out.print(allocator, "    {s} const {s} = {s}.{s};\n", .{ ct, cm, w.inputParam, cm });
     }
 }

@@ -35,6 +35,7 @@ const struct_literal = @import("struct_literal");
 const parser = @import("parser");
 const compiler_env = @import("compiler_env");
 const emit_walk = @import("emit_walk");
+const emit_audit = @import("emit_audit");
 
 pub const CEmitError = error{
     OutOfMemory,
@@ -375,6 +376,13 @@ fn cDefRenderFlow(ctx: ?*anyopaque, out: *std.ArrayList(u8), flow: *const ast.Fl
 fn cFlowName(ctx: ?*anyopaque, allocator: std.mem.Allocator, index: usize) ?[]const u8 {
     _ = ctx;
     return std.fmt.allocPrint(allocator, "koru_flow_{d}", .{index}) catch null;
+}
+
+/// `int_bindings.put` behind the walk's bindField slot — the field→C
+/// type table expression lowering and rewriteSliceAccessors read.
+fn cBindField(ctx: ?*anyopaque, field_name: []const u8, c_type: []const u8) anyerror!void {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return));
+    try em.int_bindings.put(field_name, c_type);
 }
 
 // ---------------------------------------------------------------------------
@@ -851,6 +859,7 @@ const Emitter = struct {
         .renderFlow = cDefRenderFlow,
         .flowName = cFlowName,
         .mainPrologueText = "    __koru_argc = argc;\n    __koru_argv = argv;\n",
+        .bindField = cBindField,
     },
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,
@@ -2842,6 +2851,24 @@ self.checkCatalogFragment("destructure");
             try self.emitSite(&flow.body, "    ", ctx);
         }
     }
+
+    /// Render `render(args…)` into `out` beside the real output with the
+    /// emitter's minting state restored on exit — the audit's oracle
+    /// render: the text is comparable to what the walk emits, the
+    /// `res_counter` advance is discarded, the buffer returns.
+    fn renderIsolated(
+        self: *Emitter,
+        out: *std.ArrayList(u8),
+        comptime render: anytype,
+        args: anytype,
+    ) CEmitError!void {
+        const rc = self.res_counter;
+        defer self.res_counter = rc;
+        const saved = self.buf;
+        self.buf = out;
+        defer self.buf = saved;
+        try @call(.auto, render, .{self} ++ args);
+    }
 };
 
 /// Transform-rendered inline bodies arrive with a `//@koru:inline_stmt` flag
@@ -3333,48 +3360,6 @@ fn rewriteSliceAccessors(
     }
 }
 
-/// Dual-answer scaffolding, shared by the decl and def passes: run the
-/// walk's render beside the oracle's — a walk-side refusal is drift
-/// (the oracle's text is what emits), and the label names which pass
-/// asked.
-fn walkRenderOrDrift(
-    comptime label: []const u8,
-    out: *std.ArrayList(u8),
-    allocator: std.mem.Allocator,
-    subject: anytype,
-    key: []const u8,
-    w: *const emit_walk.CDeclWriter,
-    comptime render: anytype,
-) bool {
-    render(out, allocator, subject, w) catch |e| {
-        driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` errored {s} (oracle wins)\n", .{ key, @errorName(e) });
-        return false;
-    };
-    return true;
-}
-
-/// Byte-compare the walk's render against the oracle's; a mismatch is
-/// drift and both texts land beside `catalog_drift.log` so the
-/// divergence is inspectable without rerunning.
-fn driftBytes(
-    comptime label: []const u8,
-    allocator: std.mem.Allocator,
-    key: []const u8,
-    oracle_bytes: []const u8,
-    walk_bytes: []const u8,
-) void {
-    if (std.mem.eql(u8, oracle_bytes, walk_bytes)) return;
-    driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` bytes differ (oracle wins)\n", .{key});
-    const oname = std.fmt.allocPrint(allocator, "drift_oracle_{s}.c", .{std.fs.path.basename(key)}) catch null;
-    const wname = std.fmt.allocPrint(allocator, "drift_walk_{s}.c", .{std.fs.path.basename(key)}) catch null;
-    if (oname) |n| {
-        std.fs.cwd().writeFile(.{ .sub_path = n, .data = oracle_bytes }) catch {};
-    }
-    if (wname) |n| {
-        std.fs.cwd().writeFile(.{ .sub_path = n, .data = walk_bytes }) catch {};
-    }
-}
-
 pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError![]const u8 {
     if (library) {
         std.debug.print("error[KORU047]: C lane: --library emission is outside the first fragment\n", .{});
@@ -3581,73 +3566,61 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
 
     em.decl_writer.ctx = &em;
     for (reached_events.items) |event| {
-        // Dual-answer stage: the walk's write path renders the same decl
-        // beside the oracle's — a byte mismatch or a walk-side refusal is
-        // drift, and the oracle's text is what emits.
+        // Sole-source: the walk writes the declaration — its text is
+        // what emits and its refusals are the lane's. The oracle renders
+        // beside it into scratch under isolation (emit_audit) — the pin
+        // on the migration, never the emitted bytes.
+        const dkey = pathKey(allocator, event.path) catch "?";
         var oracle: std.ArrayList(u8) = .empty;
         defer oracle.deinit(allocator);
-        {
-            const saved = em.buf;
-            em.buf = &oracle;
-            try em.emitEventDeclaration(event);
-            em.buf = saved;
-        }
-        var walkbuf: std.ArrayList(u8) = .empty;
-        defer walkbuf.deinit(allocator);
-        const dkey = pathKey(allocator, event.path) catch "?";
-        const walk_ok = walkRenderOrDrift("decl", &walkbuf, allocator, event, dkey, &em.decl_writer, emit_walk.writeEventDecl);
-        if (walk_ok) driftBytes("decl", allocator, dkey, oracle.items, walkbuf.items);
-        try em.write(oracle.items);
+        var oracle_ok = true;
+        em.renderIsolated(&oracle, Emitter.emitEventDeclaration, .{event}) catch |e| {
+            oracle_ok = false;
+            emit_audit.oracleErrored("decl", dkey, @errorName(e));
+        };
+        const mark = em.buf.items.len;
+        emit_walk.writeEventDecl(em.buf, allocator, event, &em.decl_writer) catch |e| {
+            if (oracle_ok) emit_audit.walkRefusedPastOracle("decl", dkey, @errorName(e));
+            return @errorCast(e);
+        };
+        if (oracle_ok) emit_audit.compare("decl", allocator, dkey, oracle.items, em.buf.items[mark..]);
     }
     try em.write("\n");
     for (reached_events.items) |event| {
-        // Same dual-answer as the declaration pass: the walk renders the
-        // definition (signature + impl-resolution body) beside the
-        // oracle's — a mismatch or walk-side refusal is drift, the
-        // oracle's text is what emits.
+        // Same sole-source audit as the declaration pass: the walk's
+        // definition (signature + impl-resolution body) is what emits.
+        const fkey = pathKey(allocator, event.path) catch "?";
         var oracle_def: std.ArrayList(u8) = .empty;
         defer oracle_def.deinit(allocator);
-        // Body rendering mints `__koru_res_N` off `res_counter`: the walk must
-        // render against the counter state the oracle saw, and downstream defs
-        // must keep the numbering the oracle's single render produced.
-        const rc_saved = em.res_counter;
-        {
-            const saved = em.buf;
-            em.buf = &oracle_def;
-            try em.emitEventDecl(event);
-            em.buf = saved;
-        }
-        const rc_oracle_end = em.res_counter;
-        em.res_counter = rc_saved;
-        var walkbuf_def: std.ArrayList(u8) = .empty;
-        defer walkbuf_def.deinit(allocator);
-        const fkey = pathKey(allocator, event.path) catch "?";
-        const walk_def_ok = walkRenderOrDrift("def", &walkbuf_def, allocator, event, fkey, &em.decl_writer, emit_walk.writeEventDef);
-        if (walk_def_ok) driftBytes("def", allocator, fkey, oracle_def.items, walkbuf_def.items);
-        em.res_counter = rc_oracle_end;
-        try em.write(oracle_def.items);
+        var oracle_def_ok = true;
+        em.renderIsolated(&oracle_def, Emitter.emitEventDecl, .{event}) catch |e| {
+            oracle_def_ok = false;
+            emit_audit.oracleErrored("def", fkey, @errorName(e));
+        };
+        const mark = em.buf.items.len;
+        emit_walk.writeEventDef(em.buf, allocator, event, &em.decl_writer) catch |e| {
+            if (oracle_def_ok) emit_audit.walkRefusedPastOracle("def", fkey, @errorName(e));
+            return @errorCast(e);
+        };
+        if (oracle_def_ok) emit_audit.compare("def", allocator, fkey, oracle_def.items, em.buf.items[mark..]);
     }
 
-    // Driver dual-answer: the walk owns the flow enumeration and main's
-    // call list beside the oracle's emitDriverFns — same state-isolated
-    // compare as the def pass (flow bodies mint __koru_res_N too).
+    // The driver pass — same audit shape; flow bodies mint
+    // __koru_res_N the way event defs do, so renderIsolated still
+    // guards the counter.
     var oracle_drv: std.ArrayList(u8) = .empty;
     defer oracle_drv.deinit(allocator);
-    const rc_drv = em.res_counter;
-    {
-        const saved = em.buf;
-        em.buf = &oracle_drv;
-        try em.emitDriverFns(program);
-        em.buf = saved;
-    }
-    const rc_drv_end = em.res_counter;
-    em.res_counter = rc_drv;
-    var walkbuf_drv: std.ArrayList(u8) = .empty;
-    defer walkbuf_drv.deinit(allocator);
-    const walk_drv_ok = walkRenderOrDrift("driver", &walkbuf_drv, allocator, program, "driver", &em.decl_writer, emit_walk.writeDriver);
-    if (walk_drv_ok) driftBytes("driver", allocator, "driver", oracle_drv.items, walkbuf_drv.items);
-    em.res_counter = rc_drv_end;
-    try em.write(oracle_drv.items);
+    var oracle_drv_ok = true;
+    em.renderIsolated(&oracle_drv, Emitter.emitDriverFns, .{program}) catch |e| {
+        oracle_drv_ok = false;
+        emit_audit.oracleErrored("driver", "driver", @errorName(e));
+    };
+    const drv_mark = em.buf.items.len;
+    emit_walk.writeDriver(em.buf, allocator, program, &em.decl_writer) catch |e| {
+        if (oracle_drv_ok) emit_audit.walkRefusedPastOracle("driver", "driver", @errorName(e));
+        return @errorCast(e);
+    };
+    if (oracle_drv_ok) emit_audit.compare("driver", allocator, "driver", oracle_drv.items, em.buf.items[drv_mark..]);
 
     var rewritten: std.ArrayList(u8) = .empty;
     errdefer rewritten.deinit(allocator);

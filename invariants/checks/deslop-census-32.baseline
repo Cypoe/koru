@@ -105,8 +105,15 @@
 # working-tree drift in parser.zig (uncommitted edits from a sibling
 # session — the census reads the working tree, so it counts). Census
 # re-measured: 1919/2451.
-clusters=2084
-members=2683
+# Re-pinned on the sole-source flip: the walk now emits into the real
+# buffer and the oracle renders only as an audit into scratch. Correcting
+# the previous note: the migration-twin class did NOT collapse at
+# sole-source — it became the audit calls themselves (decl-vs-def audit
+# blocks in c_emitter, impl-cascade slot calls in writeEventDef), which
+# delete only when the oracle renderers are deleted outright. Own delta
+# +3 clusters / +4 members; census re-measured.
+clusters=2087
+members=2687
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-

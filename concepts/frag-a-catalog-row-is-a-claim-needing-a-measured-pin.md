@@ -114,3 +114,18 @@ emitFlow/emitImplFlowBody twin outright — the migration's own fold,
 not a sanctioned twin awaiting sole-source. Events are walk-owned end
 to end: preamble (catalog sole-source) → decls → defs → driver, each
 still drift-pinned to the oracle it displaced.
+
+The flip closed the arc: the walk no longer renders beside the oracle —
+it renders *into* the emitted buffer, and its refusal is the lane's
+refusal. The oracle survives only as emit_audit's scratch render
+(renderIsolated snapshots and discards its minting state), its bytes
+compared after the fact, its diagnostics still firing so a walk refusal
+carries the oracle's wording. Three rules the flip made load-bearing:
+the audit is a sidecar that must never gate output or mutate live state;
+a writer slot can carry a *side effect* (bindField registers
+int_bindings on the real render — an audit render cannot be
+load-bearing); and sole-source does not collapse the migration twins —
+the audit calls ARE the residual twin class, deleting only when the
+oracle renderers are deleted outright. The honest next cut is per-pass:
+delete an oracle renderer only after its walk pass is measured clean
+across the regression set, and the audit module shrinks with it.
