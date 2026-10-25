@@ -78,18 +78,91 @@ const ast = @import("ast");
     return .{ .other = .{} };
 }
 
-// The C lane's pipeline address — selected under --lang=c. The engine is
-// src/c_emitter.zig (+ src/emit_walk.zig for the event/driver walk); a
-// refusal is a program outside the verified fragment, never a Zig
-// fallback — same fail-loud contract the other lanes keep.
+// The C lane's pipeline address — selected under --lang=c. The lane is a
+// composed chain of pass tors over one emission session: open builds the
+// indexes + preamble, decls/defs/driver run the walk's three passes,
+// close runs the post-passes and returns the code. Ordinary tors, so a
+// user emission override can drop, reorder, or interpose on any of them —
+// the engine (src/c_emitter.zig + src/emit_walk.zig) stays the engine.
 ~[comptime] pub tor emit-c { ctx: std/compiler:CompilerContext } -> { ctx: std/compiler:CompilerContext, code: string }
 
-~proc emit-c|zig {
+~emit-c = emit-c-open(ctx): s1
+|> emit-c-decls(s1.ctx, s1.session): s2
+|> emit-c-defs(s2.ctx, s2.session): s3
+|> emit-c-driver(s3.ctx, s3.session): s4
+|> emit-c-close(s4.ctx, s4.session): e -> e
+
+// The session crosses tors as an opaque usize — the Emitter lives in the
+// engine; the pipeline threads the handle, never the struct.
+~[comptime] pub tor emit-c-open { ctx: std/compiler:CompilerContext } -> { ctx: std/compiler:CompilerContext, session: usize }
+
+~proc emit-c-open|zig {
     const c_emitter = @import("c_emitter");
-    const code = c_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
-        std.debug.print("error[KORU047]: C emission failed: {s}\n", .{@errorName(err)});
+    const session = c_emitter.sessionOpen(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
+        std.debug.print("error[KORU047]: C emission failed at open: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emit-c-open";
+    return .{ .ctx = updated_ctx, .session = @intFromPtr(session) };
+}
+
+~[comptime] pub tor emit-c-decls { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, session: usize }
+
+~proc emit-c-decls|zig {
+    const c_emitter = @import("c_emitter");
+    const s: *c_emitter.Session = @ptrFromInt(session);
+    c_emitter.sessionDeclPass(s) catch |err| {
+        std.debug.print("error[KORU047]: C emission failed at decls: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emit-c-decls";
+    return .{ .ctx = updated_ctx, .session = session };
+}
+
+~[comptime] pub tor emit-c-defs { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, session: usize }
+
+~proc emit-c-defs|zig {
+    const c_emitter = @import("c_emitter");
+    const s: *c_emitter.Session = @ptrFromInt(session);
+    c_emitter.sessionDefPass(s) catch |err| {
+        std.debug.print("error[KORU047]: C emission failed at defs: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emit-c-defs";
+    return .{ .ctx = updated_ctx, .session = session };
+}
+
+~[comptime] pub tor emit-c-driver { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, session: usize }
+
+~proc emit-c-driver|zig {
+    const c_emitter = @import("c_emitter");
+    const s: *c_emitter.Session = @ptrFromInt(session);
+    c_emitter.sessionDriverPass(s) catch |err| {
+        std.debug.print("error[KORU047]: C emission failed at driver: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emit-c-driver";
+    return .{ .ctx = updated_ctx, .session = session };
+}
+
+~[comptime] pub tor emit-c-close { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, code: string }
+
+~proc emit-c-close|zig {
+    const c_emitter = @import("c_emitter");
+    const s: *c_emitter.Session = @ptrFromInt(session);
+    const code = c_emitter.sessionClose(s) catch |err| {
+        std.debug.print("error[KORU047]: C emission failed at close: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+    c_emitter.sessionDestroy(s);
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";

@@ -146,3 +146,17 @@ not a smell then; it is the shape every lane takes as it metacircular-
 izes. What belongs in emit.kz going forward is the *addressable* layer —
 target routing, artifact verbs, walk tors the pipeline must call — not a
 verbatim transplant of the engine's Zig.
+
+The addressable layer's second rule: engine state crosses tors as an
+opaque `usize` handle, never a spelled struct. `emit-c` decomposed into
+the five-pass chain (open → decls → defs → driver → close — the same
+split `c_emitter.emit` makes over a `Session`), each pass a [comptime]
+tor a user override can drop or interpose on; the Session threads the
+chain while the Emitter stays engine-owned. Two details the port
+measured: record-field tails pun (`s1.session` binds `session` without
+a label — PARSE005 refuses the redundant spelling), and decomposing a
+tor into a `~emit-c =` subflow chain leaves its declared signature as
+the pipeline contract while the pass handlers materialize as sibling
+events. This is the granularity the delete arc wanted: each oracle
+pass's audit lives inside exactly one pass tor's engine call, so a
+measured-clean pass deletes its oracle with no cross-pass blast radius.

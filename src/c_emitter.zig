@@ -3360,36 +3360,59 @@ fn rewriteSliceAccessors(
     }
 }
 
-pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError![]const u8 {
+/// One C-lane emission run's shared state — the indexes, binding tables,
+/// and the Emitter the walk's passes write through. The pipeline's emit-c
+/// chain threads the session across pass tors as an opaque usize handle;
+/// `emit()` is the same five calls composed in one function.
+pub const Session = struct {
+    allocator: std.mem.Allocator,
+    program: *const ast.Program,
+    buf: std.ArrayList(u8) = .empty,
+    events: EventIndex,
+    procs: ProcIndex,
+    impls: ImplIndex,
+    impl_flows: ImplFlowIndex,
+    aliases: std.StringHashMap([]const u8),
+    protos: std.StringArrayHashMap([]const ProtoField),
+    record_decls: std.StringArrayHashMap([]const ProtoField),
+    int_bindings: std.StringHashMap([]const u8),
+    slice_decls: std.StringArrayHashMap([]const u8),
+    cap_cells: std.StringHashMap(void),
+    reached_events: std.ArrayList(*const ast.EventDecl) = .empty,
+    em: Emitter,
+};
+
+/// open — refuse the out-of-fragment shapes up front, build the indexes
+/// and binding tables, then emit everything the walk's passes are not:
+/// the catalog preamble, the cell/struct pre-pass, and the file-scope
+/// host text.
+pub fn sessionOpen(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError!*Session {
     if (library) {
         std.debug.print("error[KORU047]: C lane: --library emission is outside the first fragment\n", .{});
         return CEmitError.UnsupportedConstruct;
     }
 
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-
-    var events = EventIndex.init(allocator);
-    defer events.deinit();
-    var procs = ProcIndex.init(allocator);
-    defer {
-        var it = procs.valueIterator();
-        while (it.next()) |v| v.deinit(allocator);
-        procs.deinit();
-    }
-    var impls = ImplIndex.init(allocator);
-    defer impls.deinit();
-    var impl_flows = ImplFlowIndex.init(allocator);
-    defer {
-        var it = impl_flows.valueIterator();
-        while (it.next()) |v| v.deinit(allocator);
-        impl_flows.deinit();
-    }
-    try indexItems(allocator, program.items, &events, &procs, &impls, &impl_flows);
+    const s = allocator.create(Session) catch return CEmitError.OutOfMemory;
+    s.* = .{
+        .allocator = allocator,
+        .program = program,
+        .events = EventIndex.init(allocator),
+        .procs = ProcIndex.init(allocator),
+        .impls = ImplIndex.init(allocator),
+        .impl_flows = ImplFlowIndex.init(allocator),
+        .aliases = std.StringHashMap([]const u8).init(allocator),
+        .protos = std.StringArrayHashMap([]const ProtoField).init(allocator),
+        .record_decls = std.StringArrayHashMap([]const ProtoField).init(allocator),
+        .int_bindings = std.StringHashMap([]const u8).init(allocator),
+        .slice_decls = std.StringArrayHashMap([]const u8).init(allocator),
+        .cap_cells = std.StringHashMap(void).init(allocator),
+        .em = undefined,
+    };
+    try indexItems(allocator, program.items, &s.events, &s.procs, &s.impls, &s.impl_flows);
 
     // Pre-flight: name every applicable refusal axis before emitting a byte.
     var census: AxisCensus = .{};
-    const census_ctx = CensusCtx{ .allocator = allocator, .events = &events };
+    const census_ctx = CensusCtx{ .allocator = allocator, .events = &s.events };
     try axisRefusalItems(program.items, program.main_module_name, &census, &census_ctx);
     if (census.host_lines != null or census.resumable != null or census.concurrency != null) {
         // The pre-flight runs before an Emitter exists — the fragment
@@ -3405,44 +3428,30 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     defer worklist.deinit(allocator);
     try markReachedCalls(allocator, program.items, program.main_module_name, &reached, &worklist);
     try markRetainedEvents(allocator, program.items, &reached, &worklist);
-    try reachImplFlows(allocator, &impl_flows, &reached, &worklist);
+    try reachImplFlows(allocator, &s.impl_flows, &reached, &worklist);
 
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
-    var reached_events: std.ArrayList(*const ast.EventDecl) = .empty;
-    defer reached_events.deinit(allocator);
-    try collectReachedInOrder(allocator, program.items, &events, &reached, &reached_events, &seen);
+    try collectReachedInOrder(allocator, program.items, &s.events, &reached, &s.reached_events, &seen);
 
-    var aliases = std.StringHashMap([]const u8).init(allocator);
-    defer aliases.deinit();
-    try seedProtoTerminals(program.items, &aliases);
+    try seedProtoTerminals(program.items, &s.aliases);
+    try seedProtoStructs(allocator, program.items, &s.protos);
 
-    var protos = std.StringArrayHashMap([]const ProtoField).init(allocator);
-    defer protos.deinit();
-    try seedProtoStructs(allocator, program.items, &protos);
-    var record_decls = std.StringArrayHashMap([]const ProtoField).init(allocator);
-    defer record_decls.deinit();
-
-    var int_bindings = std.StringHashMap([]const u8).init(allocator);
-    defer int_bindings.deinit();
-    var slice_decls = std.StringArrayHashMap([]const u8).init(allocator);
-    defer slice_decls.deinit();
-    var cap_cells = std.StringHashMap(void).init(allocator);
-    defer cap_cells.deinit();
-    var em = Emitter{
-        .cap_cells = &cap_cells,
+    s.em = Emitter{
+        .cap_cells = &s.cap_cells,
         .allocator = allocator,
-        .buf = &buf,
-        .events = &events,
-        .procs = &procs,
-        .impls = &impls,
-        .impl_flows = &impl_flows,
-        .aliases = &aliases,
-        .int_bindings = &int_bindings,
-        .slice_decls = &slice_decls,
-        .protos = &protos,
-        .record_decls = &record_decls,
+        .buf = &s.buf,
+        .events = &s.events,
+        .procs = &s.procs,
+        .impls = &s.impls,
+        .impl_flows = &s.impl_flows,
+        .aliases = &s.aliases,
+        .int_bindings = &s.int_bindings,
+        .slice_decls = &s.slice_decls,
+        .protos = &s.protos,
+        .record_decls = &s.record_decls,
     };
+    const em = &s.em;
 
     // Preamble — includes plus the runtime surface the lowering and the |c
     // transforms write against. Catalog loaded → the `prelude(c)` rows are
@@ -3521,16 +3530,16 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // `_in`/`_res`/`_ret` struct or prototype can spell. The definitions
     // emit before any text that can name one — the ring's `.kc` cell
     // types its buffer `struct Reading`, so the struct must already exist.
-    for (reached_events.items) |event| {
+    for (s.reached_events.items) |event| {
         for (event.input.fields) |f| _ = em.cTypeOfResolved(f.type);
         if (event.return_type) |rt| _ = em.cTypeOfResolved(rt);
         for (event.branches) |*b| {
             for (b.payload.fields) |f| _ = em.cTypeOfResolved(f.type);
         }
     }
-    var pit = protos.iterator();
+    var pit = s.protos.iterator();
     while (pit.next()) |e| _ = em.cTypeOfResolved(e.key_ptr.*);
-    for (slice_decls.keys(), slice_decls.values()) |tag, member| {
+    for (s.slice_decls.keys(), s.slice_decls.values()) |tag, member| {
         try em.writeFmt("struct __koru_slice_{s} {{ {s} *ptr; uintptr_t len; }};\n", .{ tag, member });
     }
     // The two-word 128-bit cells — leaf types, so they precede any
@@ -3545,7 +3554,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     {
         var td_names: std.ArrayList([]const u8) = .empty;
         defer td_names.deinit(allocator);
-        var ait = aliases.iterator();
+        var ait = s.aliases.iterator();
         while (ait.next()) |e| try td_names.append(allocator, e.key_ptr.*);
         std.mem.sort([]const u8, td_names.items, {}, struct {
             fn lt(_: void, a: []const u8, b: []const u8) bool {
@@ -3553,19 +3562,28 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
             }
         }.lt);
         for (td_names.items) |name| {
-            const scalar = aliases.get(name).?;
+            const scalar = s.aliases.get(name).?;
             const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
             if (em.catalogFlatType(host)) |ct| try em.writeFmt("typedef {s} {s};\n", .{ ct, name });
         }
     }
-    try emitCellStructDefs(&em);
+    try emitCellStructDefs(em);
 
-    try emitCHostLines(&em, program.items);
-    try emitTopLevelInlineCode(&em, program.items);
-    try emitFileScopeBodies(&em, program.items);
+    try emitCHostLines(em, program.items);
+    try emitTopLevelInlineCode(em, program.items);
+    try emitFileScopeBodies(em, program.items);
 
-    em.decl_writer.ctx = &em;
-    for (reached_events.items) |event| {
+    em.decl_writer.ctx = em;
+    return s;
+}
+
+/// decls — the walk's declaration pass: one tagged-result grammar and
+/// prototype per reached event. Sole-source: the walk's text is what
+/// emits; the oracle renders beside it under emit_audit's isolation.
+pub fn sessionDeclPass(s: *Session) CEmitError!void {
+    const allocator = s.allocator;
+    const em = &s.em;
+    for (s.reached_events.items) |event| {
         // Sole-source: the walk writes the declaration — its text is
         // what emits and its refusals are the lane's. The oracle renders
         // beside it into scratch under isolation (emit_audit) — the pin
@@ -3586,7 +3604,14 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         if (oracle_ok) emit_audit.compare("decl", allocator, dkey, oracle.items, em.buf.items[mark..]);
     }
     try em.write("\n");
-    for (reached_events.items) |event| {
+}
+
+/// defs — the definition pass: signature + field bindings + the
+/// impl-resolution body per reached event. Same audit shape as decls.
+pub fn sessionDefPass(s: *Session) CEmitError!void {
+    const allocator = s.allocator;
+    const em = &s.em;
+    for (s.reached_events.items) |event| {
         // Same sole-source audit as the declaration pass: the walk's
         // definition (signature + impl-resolution body) is what emits.
         const fkey = pathKey(allocator, event.path) catch "?";
@@ -3604,10 +3629,15 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         };
         if (oracle_def_ok) emit_audit.compare("def", allocator, fkey, oracle_def.items, em.buf.items[mark..]);
     }
+}
 
-    // The driver pass — same audit shape; flow bodies mint
-    // __koru_res_N the way event defs do, so renderIsolated still
-    // guards the counter.
+/// driver — the flow functions plus `main`'s call order for the runnable
+/// flows. Same audit shape; flow bodies mint __koru_res_N the way event
+/// defs do, so renderIsolated still guards the counter.
+pub fn sessionDriverPass(s: *Session) CEmitError!void {
+    const allocator = s.allocator;
+    const em = &s.em;
+    const program = s.program;
     var oracle_drv: std.ArrayList(u8) = .empty;
     defer oracle_drv.deinit(allocator);
     var oracle_drv_ok = true;
@@ -3621,19 +3651,61 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         return @errorCast(e);
     };
     if (oracle_drv_ok) emit_audit.compare("driver", allocator, "driver", oracle_drv.items, em.buf.items[drv_mark..]);
+}
 
+/// close — the post-passes that consume what the walk registered: slice
+/// accessors rewritten against int_bindings, catalog prelude checked,
+/// no-zig-in-c validated, the shadow walk's coverage report. Returns the
+/// emitted code; sessionDestroy frees the session's own tables.
+pub fn sessionClose(s: *Session) CEmitError![]const u8 {
+    const allocator = s.allocator;
+    const em = &s.em;
     var rewritten: std.ArrayList(u8) = .empty;
     errdefer rewritten.deinit(allocator);
-    try rewriteSliceAccessors(&rewritten, allocator, buf.items, &int_bindings);
-    buf.deinit(allocator);
-    buf = .empty;
+    try rewriteSliceAccessors(&rewritten, allocator, s.buf.items, &s.int_bindings);
+    s.buf.deinit(allocator);
+    s.buf = .empty;
     em.checkCatalogPrelude(&rewritten);
-    try validateNoZigInC(&em, &rewritten);
+    try validateNoZigInC(em, &rewritten);
     em.ensureCatalog();
     const shadow_catalog = emit_walk.Catalog{
         .types = if (em.catalog_types) |*t| t else null,
         .constructs = if (em.catalog_constructs) |*t| t else null,
     };
-    emit_walk.shadow(program, &shadow_catalog);
+    emit_walk.shadow(s.program, &shadow_catalog);
     return rewritten.toOwnedSlice(allocator);
+}
+
+/// Free every table the session owns. The returned code slice is the
+/// caller's — it outlives the session.
+pub fn sessionDestroy(s: *Session) void {
+    const allocator = s.allocator;
+    s.buf.deinit(allocator);
+    s.events.deinit();
+    var pit = s.procs.valueIterator();
+    while (pit.next()) |v| v.deinit(allocator);
+    s.procs.deinit();
+    s.impls.deinit();
+    var fit = s.impl_flows.valueIterator();
+    while (fit.next()) |v| v.deinit(allocator);
+    s.impl_flows.deinit();
+    s.aliases.deinit();
+    s.protos.deinit();
+    s.record_decls.deinit();
+    s.int_bindings.deinit();
+    s.slice_decls.deinit();
+    s.cap_cells.deinit();
+    s.reached_events.deinit(allocator);
+    allocator.destroy(s);
+}
+
+pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError![]const u8 {
+    const s = try sessionOpen(allocator, program, library);
+    errdefer sessionDestroy(s);
+    try sessionDeclPass(s);
+    try sessionDefPass(s);
+    try sessionDriverPass(s);
+    const code = try sessionClose(s);
+    sessionDestroy(s);
+    return code;
 }

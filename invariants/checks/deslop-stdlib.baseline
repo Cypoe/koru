@@ -60,7 +60,11 @@
 clusters=134
 members=210
 skipped=2
-spellings=53
+spellings=60
+# spellings 53->60: the emit.kz port landed the C lane's addressable
+# layer — target-of plus the five pass tors of the emit-c chain
+# (emit-c-open/decls/defs/driver/close) plus emit-c itself: +7 declared
+# tor spellings, no clone clusters. Vocabulary growth, sanctioned.
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
 # 71/113: bulkjoin's import-preamble clone (joined 2026-10-14) + in-flight
 # pump/channel work in the shared checkout; re-pinning records the working
