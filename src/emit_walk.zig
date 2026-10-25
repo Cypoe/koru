@@ -328,6 +328,17 @@ pub const CDeclWriter = struct {
     /// Subflow impl — renders the impl flow's body; false = none
     /// declared; a `!=1` impls refusal rides anyerror through.
     renderImplFlow: ?*const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl) anyerror!bool = null,
+    // -- driver slots (null on a writer without a main) -----------------
+    /// One runnable flow's whole function — file-scope preamble, shell,
+    /// spliced body. The walk owns which flows run and their numbering;
+    /// the lane owns the render.
+    renderFlow: ?*const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), flow: *const ast.Flow, index: usize) anyerror!void = null,
+    /// The flow-fn's spelled name (`koru_flow_{d}` on the oracle) —
+    /// main's call list and renderFlow must answer the same name.
+    flowName: ?*const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, index: usize) ?[]const u8 = null,
+    /// `main`'s runtime-state prologue text (`__koru_argc/argv`
+    /// bindings on the C lane) — null when the lane needs none.
+    mainPrologueText: ?[]const u8 = null,
 };
 
 fn writeInStruct(
@@ -520,6 +531,57 @@ pub fn writeEventDef(
         }
     }
     return error.NoCProcBody;
+}
+
+/// One runnable-flow predicate — the walk's own rules, mirroring the
+/// oracle's driver selection: impl flows emit through their event's
+/// definition, `declaration`/`norun` annotations are not run bodies, a
+/// `koru.`-qualified head is compiler-internal, and only the main
+/// module's flows drive `main`.
+fn flowRunnable(f: *const ast.Flow, main_module: []const u8) bool {
+    if (f.impl_of != null) return false;
+    if (!std.mem.eql(u8, f.module, main_module)) return false;
+    for (f.annotations) |ann| {
+        if (std.mem.eql(u8, ann, "declaration") or std.mem.eql(u8, ann, "norun")) return false;
+    }
+    if (f.body.node) |n| {
+        if (n == .invocation) {
+            if (n.invocation.path.module_qualifier) |mq| {
+                if (std.mem.eql(u8, mq, "koru")) return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// The driver half of emission: each runnable top-level flow renders as
+/// a numbered function (the writer's `renderFlow` spells it), then one
+/// `main` calls them in enumeration order. The walk owns the selection
+/// and the call order — which flows run and when — the lane owns each
+/// function's render and `main`'s prologue text.
+pub fn writeDriver(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    program: *const ast.Program,
+    w: *const CDeclWriter,
+) anyerror!void {
+    const render_flow = w.renderFlow orelse return error.UnsupportedConstruct;
+    const flow_name = w.flowName orelse return error.UnsupportedConstruct;
+    var flow_num: usize = 0;
+    for (program.items) |*item| {
+        if (item.* != .flow) continue;
+        const f = &item.flow;
+        if (!flowRunnable(f, program.main_module_name)) continue;
+        try render_flow(w.ctx, out, f, flow_num);
+        flow_num += 1;
+    }
+    try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
+    if (w.mainPrologueText) |text| try out.appendSlice(allocator, text);
+    for (0..flow_num) |i| {
+        const name = flow_name(w.ctx, allocator, i) orelse return error.UnsupportedConstruct;
+        try out.print(allocator, "    {s}();\n", .{name});
+    }
+    try out.appendSlice(allocator, "    return 0;\n}\n");
 }
 
 /// One event declaration — `struct <n>_in`, tagged-result decl, forward

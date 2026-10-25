@@ -334,6 +334,11 @@ fn cDefImmediateImpl(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const as
     const key = try pathKey(em.allocator, event.path);
     defer em.allocator.free(key);
     const ii = em.impls.get(key) orelse return false;
+    // `cur_event` is render context the oracle establishes for its own
+    // body pass — the walk's render must see the same binding.
+    const saved_event = em.cur_event;
+    em.cur_event = event;
+    defer em.cur_event = saved_event;
     const saved = em.buf;
     em.buf = out;
     defer em.buf = saved;
@@ -349,11 +354,27 @@ fn cDefImplFlow(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.Eve
     // `!=1` impls is the oracle's variant-selection refusal — the same
     // error rides the slot.
     if (flist.items.len != 1) return CEmitError.UnsupportedConstruct;
+    const saved_event = em.cur_event;
+    em.cur_event = event;
+    defer em.cur_event = saved_event;
     const saved = em.buf;
     em.buf = out;
     defer em.buf = saved;
     try em.emitImplFlowBody(flist.items[0]);
     return true;
+}
+
+fn cDefRenderFlow(ctx: ?*anyopaque, out: *std.ArrayList(u8), flow: *const ast.Flow, index: usize) anyerror!void {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return));
+    const saved = em.buf;
+    em.buf = out;
+    defer em.buf = saved;
+    try em.emitFlow(flow, index);
+}
+
+fn cFlowName(ctx: ?*anyopaque, allocator: std.mem.Allocator, index: usize) ?[]const u8 {
+    _ = ctx;
+    return std.fmt.allocPrint(allocator, "koru_flow_{d}", .{index}) catch null;
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +848,9 @@ const Emitter = struct {
         .procBody = cDefProcBody,
         .renderImmediateImpl = cDefImmediateImpl,
         .renderImplFlow = cDefImplFlow,
+        .renderFlow = cDefRenderFlow,
+        .flowName = cFlowName,
+        .mainPrologueText = "    __koru_argc = argc;\n    __koru_argv = argv;\n",
     },
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,
@@ -1387,18 +1411,7 @@ self.checkCatalogFragment("missing-target-proc-body");
     /// impl author today. The impl-resolution path and the walk's
     /// write-stage adapter share this — one cascade, one truth.
     fn emitImplFlowBody(self: *Emitter, implf: *const ast.Flow) CEmitError!void {
-        if (if (implf.preamble_code) |pre| stripStmtScopeMarker(pre) else null) |sp| {
-            try self.emitCapPreamble(sp, "    ");
-            try self.emitUnconsumedContinuations(implf.body.continuations, 0, "    ", .in_impl);
-        } else if (implf.inline_body) |body| {
-            if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
-                var consumed: u64 = 0;
-                try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), implf.body.continuations, "    ", .in_impl, &consumed);
-                try self.emitUnconsumedContinuations(implf.body.continuations, consumed, "    ", .in_impl);
-            }
-        } else {
-            try self.emitSite(&implf.body, "    ", .in_impl);
-        }
+        try self.emitSplicedFlowBody(implf, .in_impl, if (implf.preamble_code) |pre| stripStmtScopeMarker(pre) else null);
     }
 
     fn findBranch(event: *const ast.EventDecl, name: []const u8) ?*const ast.Branch {
@@ -2767,22 +2780,67 @@ self.checkCatalogFragment("destructure");
             if (stmt_pre == null) try self.emitVerbatimLines(pre, "");
         }
         try self.writeFmt("static void koru_flow_{d}(void) {{\n", .{flow_num});
+        try self.emitSplicedFlowBody(flow, .in_flow, stmt_pre);
+        try self.write("}\n\n");
+    }
+
+    /// Top-level flows → flow functions + one main driving them in
+    /// order. The oracle's enumeration; the walk's `writeDriver` answers
+    /// the same question beside it during dual-answer.
+    fn emitDriverFns(self: *Emitter, program: *const ast.Program) CEmitError!void {
+        var flow_num: usize = 0;
+        for (program.items) |*item| {
+            if (item.* != .flow) continue;
+            const f = &item.flow;
+            if (f.impl_of != null) continue;
+            if (!std.mem.eql(u8, f.module, program.main_module_name)) continue;
+            var skip = false;
+            for (f.annotations) |ann| {
+                if (std.mem.eql(u8, ann, "declaration") or std.mem.eql(u8, ann, "norun")) skip = true;
+            }
+            if (skip) continue;
+            if (f.body.node) |n| {
+                if (n == .invocation) {
+                    if (n.invocation.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "koru")) continue;
+                    }
+                }
+            }
+            try self.emitFlow(f, flow_num);
+            flow_num += 1;
+        }
+
+        try self.write("int main(int argc, char **argv) {\n");
+        try self.write("    __koru_argc = argc;\n    __koru_argv = argv;\n");
+        for (0..flow_num) |i| {
+            try self.writeFmt("    koru_flow_{d}();\n", .{i});
+        }
+        try self.write("    return 0;\n}\n");
+    }
+
+    /// The flow-body splice shared by top-level flows (.in_flow) and impl
+    /// flows (.in_impl): a stmt-scope preamble emits cap text at the
+    /// head-call position with the head call consumed; a non-file-scope
+    /// inline body resolves its statements against continuations; else
+    /// the body's site walks. File-scope preambles are the caller's
+    /// business — emitFlow emits them verbatim at file scope; an impl's
+    /// is still dropped (const|c has no impl author today).
+    fn emitSplicedFlowBody(self: *Emitter, flow: *const ast.Flow, ctx: SiteCtx, stmt_pre: ?[]const u8) CEmitError!void {
         if (stmt_pre) |sp| {
             try self.emitCapPreamble(sp, "    ");
-            try self.emitUnconsumedContinuations(flow.body.continuations, 0, "    ", .in_flow);
+            try self.emitUnconsumedContinuations(flow.body.continuations, 0, "    ", ctx);
         } else if (flow.inline_body) |body| {
             if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
                 var consumed: u64 = 0;
-                try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), flow.body.continuations, "    ", .in_flow, &consumed);
-                try self.emitUnconsumedContinuations(flow.body.continuations, consumed, "    ", .in_flow);
+                try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), flow.body.continuations, "    ", ctx, &consumed);
+                try self.emitUnconsumedContinuations(flow.body.continuations, consumed, "    ", ctx);
             }
             // else: `//@koru:file_scope` — the decl text already landed via
             // emitFileScopeBodies; the empty shell keeps main()'s call list
             // uniform.
         } else {
-            try self.emitSite(&flow.body, "    ", .in_flow);
+            try self.emitSite(&flow.body, "    ", ctx);
         }
-        try self.write("}\n\n");
     }
 };
 
@@ -3283,12 +3341,12 @@ fn walkRenderOrDrift(
     comptime label: []const u8,
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
-    event: *const ast.EventDecl,
+    subject: anytype,
+    key: []const u8,
     w: *const emit_walk.CDeclWriter,
-    comptime render: fn (*std.ArrayList(u8), std.mem.Allocator, *const ast.EventDecl, *const emit_walk.CDeclWriter) anyerror!void,
+    comptime render: anytype,
 ) bool {
-    render(out, allocator, event, w) catch |e| {
-        const key = pathKey(allocator, event.path) catch "?";
+    render(out, allocator, subject, w) catch |e| {
         driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` errored {s} (oracle wins)\n", .{ key, @errorName(e) });
         return false;
     };
@@ -3301,12 +3359,11 @@ fn walkRenderOrDrift(
 fn driftBytes(
     comptime label: []const u8,
     allocator: std.mem.Allocator,
-    event: *const ast.EventDecl,
+    key: []const u8,
     oracle_bytes: []const u8,
     walk_bytes: []const u8,
 ) void {
     if (std.mem.eql(u8, oracle_bytes, walk_bytes)) return;
-    const key = pathKey(allocator, event.path) catch "?";
     driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` bytes differ (oracle wins)\n", .{key});
     const oname = std.fmt.allocPrint(allocator, "drift_oracle_{s}.c", .{std.fs.path.basename(key)}) catch null;
     const wname = std.fmt.allocPrint(allocator, "drift_walk_{s}.c", .{std.fs.path.basename(key)}) catch null;
@@ -3537,8 +3594,9 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         }
         var walkbuf: std.ArrayList(u8) = .empty;
         defer walkbuf.deinit(allocator);
-        const walk_ok = walkRenderOrDrift("decl", &walkbuf, allocator, event, &em.decl_writer, emit_walk.writeEventDecl);
-        if (walk_ok) driftBytes("decl", allocator, event, oracle.items, walkbuf.items);
+        const dkey = pathKey(allocator, event.path) catch "?";
+        const walk_ok = walkRenderOrDrift("decl", &walkbuf, allocator, event, dkey, &em.decl_writer, emit_walk.writeEventDecl);
+        if (walk_ok) driftBytes("decl", allocator, dkey, oracle.items, walkbuf.items);
         try em.write(oracle.items);
     }
     try em.write("\n");
@@ -3563,41 +3621,33 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         em.res_counter = rc_saved;
         var walkbuf_def: std.ArrayList(u8) = .empty;
         defer walkbuf_def.deinit(allocator);
-        const walk_def_ok = walkRenderOrDrift("def", &walkbuf_def, allocator, event, &em.decl_writer, emit_walk.writeEventDef);
-        if (walk_def_ok) driftBytes("def", allocator, event, oracle_def.items, walkbuf_def.items);
+        const fkey = pathKey(allocator, event.path) catch "?";
+        const walk_def_ok = walkRenderOrDrift("def", &walkbuf_def, allocator, event, fkey, &em.decl_writer, emit_walk.writeEventDef);
+        if (walk_def_ok) driftBytes("def", allocator, fkey, oracle_def.items, walkbuf_def.items);
         em.res_counter = rc_oracle_end;
         try em.write(oracle_def.items);
     }
 
-    // Top-level flows → flow functions + one main driving them in order.
-    var flow_num: usize = 0;
-    for (program.items) |*item| {
-        if (item.* != .flow) continue;
-        const f = &item.flow;
-        if (f.impl_of != null) continue;
-        if (!std.mem.eql(u8, f.module, program.main_module_name)) continue;
-        var skip = false;
-        for (f.annotations) |ann| {
-            if (std.mem.eql(u8, ann, "declaration") or std.mem.eql(u8, ann, "norun")) skip = true;
-        }
-        if (skip) continue;
-        if (f.body.node) |n| {
-            if (n == .invocation) {
-                if (n.invocation.path.module_qualifier) |mq| {
-                    if (std.mem.eql(u8, mq, "koru")) continue;
-                }
-            }
-        }
-        try em.emitFlow(f, flow_num);
-        flow_num += 1;
+    // Driver dual-answer: the walk owns the flow enumeration and main's
+    // call list beside the oracle's emitDriverFns — same state-isolated
+    // compare as the def pass (flow bodies mint __koru_res_N too).
+    var oracle_drv: std.ArrayList(u8) = .empty;
+    defer oracle_drv.deinit(allocator);
+    const rc_drv = em.res_counter;
+    {
+        const saved = em.buf;
+        em.buf = &oracle_drv;
+        try em.emitDriverFns(program);
+        em.buf = saved;
     }
-
-    try em.write("int main(int argc, char **argv) {\n");
-    try em.write("    __koru_argc = argc;\n    __koru_argv = argv;\n");
-    for (0..flow_num) |i| {
-        try em.writeFmt("    koru_flow_{d}();\n", .{i});
-    }
-    try em.write("    return 0;\n}\n");
+    const rc_drv_end = em.res_counter;
+    em.res_counter = rc_drv;
+    var walkbuf_drv: std.ArrayList(u8) = .empty;
+    defer walkbuf_drv.deinit(allocator);
+    const walk_drv_ok = walkRenderOrDrift("driver", &walkbuf_drv, allocator, program, "driver", &em.decl_writer, emit_walk.writeDriver);
+    if (walk_drv_ok) driftBytes("driver", allocator, "driver", oracle_drv.items, walkbuf_drv.items);
+    em.res_counter = rc_drv_end;
+    try em.write(oracle_drv.items);
 
     var rewritten: std.ArrayList(u8) = .empty;
     errdefer rewritten.deinit(allocator);

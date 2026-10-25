@@ -97,4 +97,20 @@ off `res_counter`, so the walk compared against a counter the oracle
 had already advanced and "drifted" on `res_1` vs `res_2` alone.
 Dual-answer is state isolation, not byte compare: snapshot the minting
 state, render both against it, keep the oracle's end state for
-downstream emission.
+downstream emission. `cur_event` is the same lesson one level deeper:
+render *context* is state too — a record produce reads the enclosing
+event off the emitter, so the body slots set and restore it around the
+render, or `mk-reading -> { … }` refuses `UnsupportedConstruct` where
+the oracle emits `struct Reading`.
+
+The driver rung closed the lane: `writeDriver` owns the runnable-flow
+enumeration (impl flows emit through their event, `declaration`/`norun`
+are not run bodies, `koru.` heads are compiler-internal, only the main
+module drives `main`) and the call order; the writer answers a
+whole-render operation (`renderFlow`), the flow-fn name, and `main`'s
+runtime-state prologue text. Extracting the shared splice cascade
+(`emitSplicedFlowBody`, parameterized by in_flow/in_impl) collapsed the
+emitFlow/emitImplFlowBody twin outright — the migration's own fold,
+not a sanctioned twin awaiting sole-source. Events are walk-owned end
+to end: preamble (catalog sole-source) → decls → defs → driver, each
+still drift-pinned to the oracle it displaced.
