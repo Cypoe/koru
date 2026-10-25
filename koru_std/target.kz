@@ -273,6 +273,7 @@ pub const Catalog = struct {
     "std/io:eprint.ln": "supported",
     "std/io:print.impl": "supported",
     "std/store:new": "supported",
+    "std/store:insert": "supported",
     "std/store:stored": "supported",
     "std/store:watch": "supported",
     "std/switch:char": "supported"

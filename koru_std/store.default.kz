@@ -58,6 +58,7 @@
     const watch_inv = ast.Invocation{
         .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.store") catch unreachable, .segments = segs },
         .args = watch_args,
+        .marks = &.{"@from_construct(\"std/store:watch\")"},
     };
     const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
     for (flow.body.continuations, 0..) |*c, i| {

@@ -80,6 +80,7 @@
     const clr_inv = ast.Invocation{
         .path = H.mkPathH(allocator, home_ns, clr_name),
         .args = &[_]ast.Arg{},
+        .marks = &.{"@from_construct(\"std/store:clear\")"},
     };
     // The chain tail joins the rewritten call, the same contract stripe and
     // stored carry: `clear(s) |> tail` runs the tail after the store is empty.

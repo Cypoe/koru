@@ -392,6 +392,7 @@
     const call_inv = ast.Invocation{
         .path = H.mkPathH(allocator, home_ns, target),
         .args = call_args,
+        .marks = &.{"@from_construct(\"std/store:insert\")"},
     };
 
     const conts: []ast.Continuation = blk: {
