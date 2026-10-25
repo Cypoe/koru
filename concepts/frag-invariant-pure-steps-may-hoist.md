@@ -31,6 +31,14 @@ through machinery Koru already had, rather than assumed by a runtime:
 - **The prefix, not the body, is the unit.** Item-dependent tails (`captured`
   folds, item-bound calls) stay in the loop untouched — `400_222`/`400_223`
   pin both directions, and `400_222` was verified to fail with the pass off.
+- **Owned consumers hoist only on lifted inputs.** A step that consumes a
+  `<!owned>` param may lift only when every such arg is bound by an earlier
+  lifted step — `mint-node(l, r)` on loop-minted children is fine; `take(h:
+  h0)` on an outer-scope obligation is not. Relocating an outer consume once
+  *launders* the refusal the spelling must earn: 330_082 regressed red at
+  first (hoist silently legalized an in-scope outer discharge, KORU032 lost
+  its wall) until `ownedArgsLifted` closed it. Return-type `owned!` alone is
+  not cleanliness — a move is not a mint.
 
 ## What it bought, measured
 

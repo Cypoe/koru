@@ -8519,12 +8519,6 @@ pub fn main() !void {
     const canonicalize_names = @import("canonicalize_names");
     try canonicalize_names.canonicalize(&source_file, parse_allocator, &resolver);
 
-    // A qualified call into a module that declares nothing in this program must refuse —
-    // unimported `std/io:print.ln` otherwise reaches emission as a mangled
-    // handler with unbound args (KORU211).
-    const ast_transform_refuse = @import("ast_transform");
-    try ast_transform_refuse.refuseUnresolvableQualifiedCalls(parse_allocator, &source_file, &parser.reporter);
-
     // Host-type scope: a bare host (Zig) type is legal only inside the module
     // that declares it; across a module boundary the signature spells it fully
     // qualified — `*mod:Type` (220_031, ruled 2026-09-06). Runs right after
@@ -8713,6 +8707,15 @@ pub fn main() !void {
     // foreign tag with no diagnostic. Runs before check_only so `-c`
     // refuses the same lies as a full build.
     try enforceLangNamespace(compile_allocator, &source_file, compiler_config.lang);
+
+    // A qualified call into a module that declares nothing in this program
+    // must refuse — unimported `std/io:print.ln` otherwise reaches emission
+    // as a mangled handler with unbound args (KORU211). Runs last among the
+    // checks: the more specific diagnostics (qualifier spelling, obligation
+    // moves, shape) must get their word in first.
+    const ast_transform_refuse = @import("ast_transform");
+    try ast_transform_refuse.refuseUnresolvableQualifiedCalls(parse_allocator, &source_file, &parser.reporter);
+    try exitOnReportedErrors(&parser.reporter);
 
     // If check-only, we're done
     if (check_only) {

@@ -3214,6 +3214,26 @@ const InvariantHoist = struct {
         return false;
     }
 
+    /// Every `<!owned>` arg on a lifted step must be bound by an earlier
+    /// lifted step. A consumer of an obligation owned OUTSIDE the loop is not
+    /// hoistable — relocating the consume launders the KORU032 refusal the
+    /// in-scope spelling must earn (330_082's `take(h: h0)`).
+    fn ownedArgsLifted(self: *InvariantHoist, inv: *const ast.Invocation, bound: *const std.StringHashMap(void)) bool {
+        const decl = self.events.get(self.norm(lastSeg(inv.path))) orelse return true;
+        for (decl.input.fields) |f| {
+            const ph = f.phantom orelse continue;
+            if (std.mem.indexOf(u8, ph, "!owned") == null) continue;
+            var matched = false;
+            for (inv.args) |a| {
+                if (a.name.len > 0 and !std.mem.eql(u8, a.name, f.name)) continue;
+                matched = true;
+                if (!bound.contains(a.value)) return false;
+            }
+            if (!matched) return false;
+        }
+        return true;
+    }
+
     /// Does this step consume a `<!owned>` param bound to a hoisted name?
     /// Match by value: a bare `free-tree(t)` arg needn't spell the field name.
     fn isDischarge(self: *InvariantHoist, inv: *const ast.Invocation, hoisted: *std.StringHashMap(void)) bool {
@@ -3307,7 +3327,8 @@ const InvariantHoist = struct {
             }
             if (winv.return_binding != null and
                 self.sameModule(winv.path) and
-                self.isClean(self.norm(lastSeg(winv.path)))) {
+                self.isClean(self.norm(lastSeg(winv.path))) and
+                self.ownedArgsLifted(&winv, &hoisted)) {
                 try pre.append(self.allocator, &w.node.?);
                 if (winv.return_binding) |b| try hoisted.put(b, {});
                 continue;
@@ -3457,11 +3478,17 @@ fn checkContCalls(cont: *const ast.Continuation, modules: *const std.StringHashM
                     for (import_path) |*c| {
                         if (c.* == '.') c.* = '/';
                     }
+                    var dotted = std.ArrayList(u8).initCapacity(allocator, 32) catch return;
+                    defer dotted.deinit(allocator);
+                    for (iv.path.segments, 0..) |seg, si| {
+                        if (si > 0) try dotted.append(allocator, '.');
+                        try dotted.appendSlice(allocator, seg);
+                    }
                     try reporter.addErrorAtLocationWithHint(
-                        .KORU211,
+                        .KORU040,
                         cont.location,
                         "call to `{s}:{s}` cannot be resolved — module `{s}` declares nothing in this program",
-                        .{ q, iv.path.segments[iv.path.segments.len - 1], q },
+                        .{ q, dotted.items, q },
                         "if `{s}` is a module, it needs `import {s}` at file scope (`~import {s}` in a .kz)",
                         .{ q, import_path, import_path },
                     );
