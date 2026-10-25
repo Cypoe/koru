@@ -3429,6 +3429,19 @@ pub const VisitorEmitter = struct {
                                 try self.code_emitter.writeIndent();
                                 try self.code_emitter.write("_ = &__koru_event_input;\n");
 
+                                // Threaded-dirty procs take their lock on entry — the
+                                // local-static struct var gives a shared mutex with
+                                // function-scope naming (per-handler granularity for
+                                // the spike; lockset/module resolution is the next tier).
+                                if (proc.is_threaded_dirty) {
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("const __koru_lockscope = struct { var m: @import(\"std\").Thread.Mutex = .{}; };\n");
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("__koru_lockscope.m.lock();\n");
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("defer __koru_lockscope.m.unlock();\n");
+                                }
+
                                 // `[template]` procs are rendered per-invocation and inlined
                                 // at call sites (Stage C `template_processor`); this decl-site
                                 // handler is never called, and its body is template text
