@@ -545,6 +545,18 @@ const Allocator = std.mem.Allocator;
     c_emitter_module.addImport("struct_literal", struct_literal_module);
     c_emitter_module.addImport("parser", parser_module);
     c_emitter_module.addImport("compiler_env", compiler_env_module);
+
+    // std/emit's engine, first landing — the shadow walk (src/emit_walk.zig)
+    // traverses the same program the real emitter just consumed and asks the
+    // catalog the flat-type questions; coverage proven before it emits bytes.
+    const emit_walk_module = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_walk.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    emit_walk_module.addImport("ast", ast_module);
+    emit_walk_module.addImport("codegen_utils", codegen_utils_module);
+    c_emitter_module.addImport("emit_walk", emit_walk_module);
     // Build.zig emission
     const emit_build_zig_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_build_zig.zig" },

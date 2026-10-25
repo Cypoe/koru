@@ -257,6 +257,21 @@ pub fn scanDecimalIndex(text: []const u8, pos: *usize) ?usize {
 /// The C emitter and koru_std C-minted declarations (grid.new, store.new)
 /// share this one map - two copies drifting is how a minted `i64` field and
 /// an emitted `long long` param would stop agreeing.
+/// Drift goes to stderr AND `catalog_drift.log` in CWD — the harness drops
+/// backend stderr on success, which made drift advisory-invisible. A file
+/// in the compile dir is an artifact a test or CI can check for presence:
+/// file exists ⇔ a declared catalog answer disagreed with the emitter
+/// (or the std/emit shadow walk found an uncovered question).
+pub fn driftLog(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print(fmt, args);
+    const f = std.fs.cwd().createFile("catalog_drift.log", .{ .truncate = false }) catch return;
+    defer f.close();
+    f.seekFromEnd(0) catch return;
+    const line = std.fmt.allocPrint(std.heap.page_allocator, fmt ++ "\n", args) catch return;
+    defer std.heap.page_allocator.free(line);
+    f.writeAll(line) catch {};
+}
+
 pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
     const t = std.mem.trim(u8, koru_type, " \t");
     if (std.mem.eql(u8, t, "string") or std.mem.eql(u8, t, "[]const u8") or

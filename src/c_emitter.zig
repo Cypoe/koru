@@ -34,6 +34,7 @@ const codegen_utils = @import("codegen_utils");
 const struct_literal = @import("struct_literal");
 const parser = @import("parser");
 const compiler_env = @import("compiler_env");
+const emit_walk = @import("emit_walk");
 
 pub const CEmitError = error{
     OutOfMemory,
@@ -214,19 +215,9 @@ fn catalogCTypeResolver(ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8 {
     return em.catalogFlatType(koru_type);
 }
 
-/// Drift goes to stderr AND `catalog_drift.log` in CWD — the harness drops
-/// backend stderr on success, which made drift advisory-invisible. A file
-/// in the compile dir is an artifact a test or CI can check for presence:
-/// file exists ⇔ the declared catalog disagreed with the emitter.
-fn driftLog(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print(fmt, args);
-    const f = std.fs.cwd().createFile("catalog_drift.log", .{ .truncate = false }) catch return;
-    defer f.close();
-    f.seekFromEnd(0) catch return;
-    const line = std.fmt.allocPrint(std.heap.page_allocator, fmt ++ "\n", args) catch return;
-    defer std.heap.page_allocator.free(line);
-    f.writeAll(line) catch {};
-}
+/// Drift lines: stderr + `catalog_drift.log` in CWD — codegen_utils owns
+/// the writer (the std/emit shadow walk shares it).
+const driftLog = codegen_utils.driftLog;
 
 // ---------------------------------------------------------------------------
 // Indexes
@@ -3332,5 +3323,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     buf = .empty;
     em.checkCatalogPrelude(&rewritten);
     try validateNoZigInC(&em, &rewritten);
+    em.ensureCatalog();
+    emit_walk.shadow(program, if (em.catalog_types) |*t| t else null);
     return rewritten.toOwnedSlice(allocator);
 }
