@@ -1439,7 +1439,30 @@ fn maybeRenderPerCall(
         const impl_path = flow.impl_of orelse break :blk null;
         break :blk findEventDeclByLastSegment(allocator, all_items, &impl_path);
     };
+    // `[parallel]<name> = <head call>`: the impl decl's annotation marks the
+    // head call — the hint text's own contract ("the impl carries the
+    // annotation and the head call it names supplies the open vocabulary").
+    // Graft it onto the head invocation's annotation set so `__parallel` sees
+    // it; without this the decl spelling parsed, seeded the flood, and
+    // silently did nothing.
     if (flow.inline_body == null) {
+        var impl_parallel = false;
+        for (flow.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) impl_parallel = true;
+        }
+        if (impl_parallel) {
+            const head_inv = flow.invMut();
+            var head_has = false;
+            for (head_inv.annotations) |ann| {
+                if (std.mem.eql(u8, ann, "parallel")) head_has = true;
+            }
+            if (!head_has) {
+                const grown = try allocator.alloc([]const u8, head_inv.annotations.len + 1);
+                @memcpy(grown[0..head_inv.annotations.len], head_inv.annotations);
+                grown[head_inv.annotations.len] = try allocator.dupe(u8, "parallel");
+                head_inv.annotations = grown;
+            }
+        }
         if (try renderTemplateInvocation(all_items, flow.inv(), flow.body.continuations, flow.location, build_lang, impl_event, allocator)) |rendered| {
             flow.inline_body = rendered;
             log.debug("[TEMPLATE/per-call] rendered '{s}' at top-level call site\n", .{
