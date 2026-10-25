@@ -21,7 +21,6 @@
 // - capture is a comptime transform: `! as` binds the cell (live/during),
 //   `captured { ... }` invocations are rewritten into general `.assignment`
 //   nodes, `| captured` is the one-shot after-read.
-//
 // SEMANTICS:
 // - Pure from Koru's perspective (captured computes the NEXT value)
 // - Efficient mutation in generated Zig (var cell + field writes)

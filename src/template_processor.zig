@@ -907,6 +907,63 @@ fn renameCellRef(allocator: std.mem.Allocator, text: []const u8, from: []const u
     return out.toOwnedSlice(allocator);
 }
 
+/// Identifier-boundary retarget of `from` → `to` across every expression text
+/// under `cont` — invocation args, assignment field exprs, bare expression/
+/// inline_code steps, and arm guards. Used to point a [parallel] worker body
+/// at the rebound env name (`__koru_parenv_<n>`): the outer name is both
+/// invisible and unshadowable inside `run`, so the body must spell the local.
+fn renameEnvRefs(
+    allocator: std.mem.Allocator,
+    cont: *const ast.Continuation,
+    from: []const u8,
+    to: []const u8,
+) !void {
+    if (cont.condition) |cond| {
+        @constCast(&cont.condition).* = try renameCellRef(allocator, cond, from, to);
+    }
+    if (cont.node) |*step| {
+        switch (step.*) {
+            .invocation => |*inv| {
+                for (@constCast(inv.args)) |*a| {
+                    a.value = try renameCellRef(allocator, a.value, from, to);
+                }
+            },
+            .label_with_invocation => |*li| {
+                for (@constCast(li.invocation.args)) |*a| {
+                    a.value = try renameCellRef(allocator, a.value, from, to);
+                }
+            },
+            .assignment => |*asgn| {
+                for (@constCast(asgn.fields)) |*f| {
+                    if (f.expression_str) |e| {
+                        f.expression_str = try renameCellRef(allocator, e, from, to);
+                    }
+                }
+            },
+            .expression, .inline_code => {
+                const cur: *[]const u8 = switch (step.*) {
+                    .expression => @constCast(&step.expression),
+                    .inline_code => @constCast(&step.inline_code),
+                    else => unreachable,
+                };
+                cur.* = try renameCellRef(allocator, cur.*, from, to);
+            },
+            .conditional => |*cond| {
+                @constCast(&cond.condition).* = try renameCellRef(allocator, cond.condition, from, to);
+                for (@constCast(cond.branches)) |*br| {
+                    for (@constCast(br.body)) |*bc| {
+                        try renameEnvRefs(allocator, bc, from, to);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    for (@constCast(cont.continuations)) |*nested| {
+        try renameEnvRefs(allocator, nested, from, to);
+    }
+}
+
 fn collectParallelCells(
     allocator: std.mem.Allocator,
     cont: *const ast.Continuation,
@@ -1259,6 +1316,36 @@ pub fn renderTemplateInvocation(
             ci += 1;
         }
         try ctx.put("__cells", .{ .array = arr });
+    }
+
+    // `__env`: hoisted bindings the surviving each body still references
+    // (`@hoisted-env:<name>` marks stamped by hoistInvariantLoopPrefix). The
+    // worker fn cannot see the enclosing scope's consts — Zig's namespace
+    // boundary — and cannot rebind them under their own names — the no-shadow
+    // rule reaches across it — so the body text is retargeted to a fresh
+    // worker-local name (`__koru_parenv_<n>`) the template declares inside
+    // `run` from a passed-in environment. Without the marks the key is an
+    // empty array. The retarget mutates the live AST, like the cell retarget
+    // above — a [parallel] each body only ever emits inside `run`.
+    {
+        var env_names = try std.ArrayList(*liquid.Context).initCapacity(allocator, 0);
+        if (parallel_text.len > 0) {
+            for (invocation.marks) |m| {
+                if (!std.mem.startsWith(u8, m, "@hoisted-env:")) continue;
+                const name = m["@hoisted-env:".len..];
+                const local = try std.fmt.allocPrint(allocator, "__koru_parenv_{s}", .{name});
+                for (continuations) |*cont| {
+                    if (cont.kind != .effect) continue;
+                    try renameEnvRefs(allocator, cont, name, local);
+                }
+                const ec = try allocator.create(liquid.Context);
+                ec.* = liquid.Context.init(allocator);
+                try ec.put("name", .{ .string = name });
+                try ec.put("local", .{ .string = local });
+                try env_names.append(allocator, ec);
+            }
+        }
+        try ctx.put("__env", .{ .array = env_names.items });
     }
 
     // `binds`: the whole dispatch's binder preamble, emitted once ahead of the

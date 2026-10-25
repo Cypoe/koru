@@ -4912,6 +4912,35 @@ pub const AutoDischargeInserter = struct {
                         if (try self.refreshInlineBody(&inv, out[i].continuations, cont.location, all_items, impl_event)) |new_inv| {
                             out[i].node = .{ .invocation = new_inv };
                         }
+                    } else {
+                        // [parallel] bodies bake `__cells`/`__env` at
+                        // process-template-procs, which runs BEFORE the
+                        // .main-stage transforms (capture's captured{} →
+                        // .assignment dissolution) — and nothing downstream
+                        // re-renders unless the arm list changed. Re-render
+                        // once so the partitioner sees the dissolved writes
+                        // (400_224). The `@par-rerendered` mark keeps this
+                        // out of the fixpoint — a second pass would re-render
+                        // forever (__site differs) and exhaust the budget.
+                        var is_parallel = false;
+                        for (inv.annotations) |ann| {
+                            if (std.mem.eql(u8, ann, "parallel")) is_parallel = true;
+                        }
+                        var already = false;
+                        for (inv.marks) |m| {
+                            if (std.mem.eql(u8, m, "@par-rerendered")) already = true;
+                        }
+                        if (is_parallel and !already) {
+                            if (try self.refreshInlineBody(&inv, out[i].continuations, cont.location, all_items, impl_event)) |new_inv| {
+                                var stamped = new_inv;
+                                const grown = try self.allocator.alloc([]const u8, stamped.marks.len + 1);
+                                @memcpy(grown[0..stamped.marks.len], stamped.marks);
+                                grown[stamped.marks.len] = "@par-rerendered";
+                                stamped.marks = grown;
+                                out[i].node = .{ .invocation = stamped };
+                                changed = true;
+                            }
+                        }
                     }
                 },
                 else => {},

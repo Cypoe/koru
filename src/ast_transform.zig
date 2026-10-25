@@ -3093,6 +3093,71 @@ pub fn inlineEvent(ctx: *TransformContext, invocation: *ast.Invocation, proc: *a
 
 const HoistVerdict = enum { clean, dirty, visiting };
 
+/// Identifier-boundary mention of `name` inside `text` — the same boundary
+/// rule the parallel cell retarget applies when it renames a write.
+fn textMentionsName(text: []const u8, name: []const u8) bool {
+    if (name.len == 0) return false;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, text, i, name)) |j| {
+        const left_ok = j == 0 or !(std.ascii.isAlphanumeric(text[j - 1]) or text[j - 1] == '_');
+        const after = j + name.len;
+        const right_ok = after >= text.len or !(std.ascii.isAlphanumeric(text[after]) or text[after] == '_');
+        if (left_ok and right_ok) return true;
+        i = j + 1;
+    }
+    return false;
+}
+
+fn nodeMentionsName(node: ?ast.Node, name: []const u8) bool {
+    const n = node orelse return false;
+    switch (n) {
+        .invocation => |inv| {
+            for (inv.args) |a| {
+                if (textMentionsName(a.value, name) or textMentionsName(a.name, name)) return true;
+            }
+            return false;
+        },
+        .label_with_invocation => |li| {
+            for (li.invocation.args) |a| {
+                if (textMentionsName(a.value, name) or textMentionsName(a.name, name)) return true;
+            }
+            return false;
+        },
+        .assignment => |asgn| {
+            for (asgn.fields) |f| {
+                if (textMentionsName(f.name, name)) return true;
+                if (f.expression_str) |e| {
+                    if (textMentionsName(e, name)) return true;
+                }
+            }
+            return false;
+        },
+        .expression => |t| return textMentionsName(t, name),
+        .inline_code => |t| return textMentionsName(t, name),
+        .conditional => |cond| {
+            if (textMentionsName(cond.condition, name)) return true;
+            for (cond.branches) |*br| {
+                for (br.body) |*bc| {
+                    if (contMentionsName(bc, name)) return true;
+                }
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+fn contMentionsName(cont: *const ast.Continuation, name: []const u8) bool {
+    if (cont.condition) |c| {
+        if (textMentionsName(c, name)) return true;
+    }
+    if (nodeMentionsName(cont.node, name)) return true;
+    for (cont.continuations) |*cc| {
+        if (contMentionsName(cc, name)) return true;
+    }
+    return false;
+}
+
 const InvariantHoist = struct {
     allocator: std.mem.Allocator,
     main_module: []const u8,
@@ -3336,6 +3401,41 @@ const InvariantHoist = struct {
             boundary = i; break;
         }
         if (pre.items.len == 0) return;
+
+        // The surviving each body may still read hoisted names (`c` in
+        // `captured { acc: g.acc + c }`). Inside a [parallel] worker fn
+        // those bindings cross a namespace boundary and do not resolve —
+        // stamp them on the for invocation so the template render can pass
+        // them into the worker as an environment (`@hoisted-env:<name>`).
+        if (boundary) |bi| {
+            const bw = wrappers.items[bi];
+            var env_names = try std.ArrayList([]const u8).initCapacity(self.allocator, 0);
+            var hit = hoisted.keyIterator();
+            while (hit.next()) |k| {
+                if (nodeMentionsName(bw.node, k.*)) {
+                    try env_names.append(self.allocator, k.*);
+                    continue;
+                }
+                var seen = false;
+                for (bw.continuations) |*cc| {
+                    if (contMentionsName(cc, k.*)) seen = true;
+                }
+                if (seen) try env_names.append(self.allocator, k.*);
+            }
+            if (env_names.items.len > 0) {
+                if (for_cont.node) |*n| {
+                    if (n.* == .invocation) {
+                        const inv = &n.invocation;
+                        const grown = try self.allocator.alloc([]const u8, inv.marks.len + env_names.items.len);
+                        @memcpy(grown[0..inv.marks.len], inv.marks);
+                        for (env_names.items, 0..) |nm, i| {
+                            grown[inv.marks.len + i] = try std.fmt.allocPrint(self.allocator, "@hoisted-env:{s}", .{nm});
+                        }
+                        inv.marks = grown;
+                    }
+                }
+            }
+        }
 
         // Splice: pre-steps run before the for; discharges append to `| done`.
         const for_node = for_cont.node.?;

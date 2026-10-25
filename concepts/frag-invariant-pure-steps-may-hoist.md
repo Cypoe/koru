@@ -39,6 +39,23 @@ through machinery Koru already had, rather than assumed by a runtime:
   first (hoist silently legalized an in-scope outer discharge, KORU032 lost
   its wall) until `ownedArgsLifted` closed it. Return-type `owned!` alone is
   not cleanliness — a move is not a mint.
+- **A lifted binding the body still reads is a worker-environment input.**
+  Under `[parallel]` the each body emits inside a worker fn: enclosing-scope
+  consts are invisible *and* unshadowable across the namespace boundary.
+  The hoist stamps the still-referenced lifted names as `@hoisted-env:`
+  marks on the `for` invocation; the `~for` template passes them in and
+  rebinds them under fresh names (`__koru_parenv_<n>`) inside `run`
+  (400_224). Same law as capture cells: what crosses into a worker crosses
+  as a parameter, never as a captured name.
+- **Template renders baked before `.main` transforms are stale.** `capture`
+  dissolves `captured{}` → `.assignment` at `.main`, after
+  `process-template-procs` — so `[parallel]` cell partitioning only ever
+  worked when auto-discharge's arm synthesis happened to force a re-render.
+  Moving `capture` to `.pre` fixed that ordering but broke `listops`
+  (dissolving before `stored`'s splice re-orders name visibility), so the
+  landed fix is narrower: the inserter re-renders `[parallel]` bodies once,
+  post-dissolve, under a `@par-rerendered` mark that keeps it out of the
+  fixpoint.
 
 ## What it bought, measured
 

@@ -251,5 +251,12 @@ members=2463
 # commit's only src/ edit (template_processor.zig) reproduces the
 # identical census, so the +23/+34 drift over the last pin predates it
 # (accumulated on main between sampled rolls). Re-measured: 1957/2516.
-clusters=1957
-members=2516
+# Re-pinned in "[parallel]for: hoist-referenced bindings cross into
+# workers as env": the sampled roll caught +8 clusters / +13 members of
+# foreign drift accumulated between rolls — parser.zig errdefer line-shape
+# clones and a shape_analyzer/parser cross-file twin — all in files
+# this commit's diff does not touch (its src/ edits are ast_transform,
+# template_processor, auto_discharge_inserter). Census re-measured on
+# this tree: 1965/2529.
+clusters=1965
+members=2529

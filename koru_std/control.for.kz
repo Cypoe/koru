@@ -17,8 +17,9 @@
         // a wrong answer, not a missing feature. A failed spawn runs the
         // chunk inline — the work is owed, width is the only thing lost.
         const __koru_par_body{{ __site }} = struct {
-            {% if __range_lo != "" %}fn run(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
-                {% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
+            {% if __range_lo != "" %}fn run(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                {% for e in __env %}const {{ e.local }} = __koru_par_env.{{ e.name }}; _ = &{{ e.local }};
+                {% endfor %}{% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
                 {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
                 {% endif %}{% endfor %}{% endfor %}for (__koru_par_lo..__koru_par_hi) |__koru_item{{ __site }}| {
                     {% if keep != "" %}if (!({{ keep }})) break;
@@ -29,14 +30,15 @@
                 {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
-            fn runTask(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
+            fn runTask(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
                 __koru_par_depth += 1;
                 defer __koru_par_depth -= 1;
-                run(__koru_par_lo, __koru_par_hi{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %});
+                run(__koru_par_lo, __koru_par_hi{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %}{% if __env %}, __koru_par_env{% endif %});
                 _ = __koru_par_tasks.fetchSub(1, .monotonic);
             }
-            {% else %}fn run(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
-                {% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
+            {% else %}fn run(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                {% for e in __env %}const {{ e.local }} = __koru_par_env.{{ e.name }}; _ = &{{ e.local }};
+                {% endfor %}{% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
                 {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
                 {% endif %}{% endfor %}{% endfor %}for (__koru_par_slice) |__koru_item{{ __site }}| {
                     {% if keep != "" %}if (!({{ keep }})) break;
@@ -47,10 +49,10 @@
                 {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
                 {% endif %}{% endfor %}{% endfor %}
             }
-            fn runTask(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}) void {
+            fn runTask(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
                 __koru_par_depth += 1;
                 defer __koru_par_depth -= 1;
-                run(__koru_par_slice{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %});
+                run(__koru_par_slice{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %}{% if __env %}, __koru_par_env{% endif %});
                 _ = __koru_par_tasks.fetchSub(1, .monotonic);
             }
             {% endif %}
@@ -69,9 +71,9 @@
                 {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
                 {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
                     _ = __koru_par_tasks.fetchAdd(1, .monotonic);
-                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} });
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %} });
                 } else {
-                    __koru_par_body{{ __site }}.run(__koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %});
+                    __koru_par_body{{ __site }}.run(__koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %});
                 }
             }
         }
@@ -90,9 +92,9 @@
                 {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
                 {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
                     _ = __koru_par_tasks.fetchAdd(1, .monotonic);
-                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %} });
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %} });
                 } else {
-                    __koru_par_body{{ __site }}.run(__koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %});
+                    __koru_par_body{{ __site }}.run(__koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %});
                 }
             }
         }
