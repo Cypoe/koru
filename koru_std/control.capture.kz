@@ -80,7 +80,7 @@ const CC = struct {
         const t = std.mem.trim(u8, value, " \t");
         const open = std.mem.indexOfScalar(u8, t, '{') orelse return null;
         if (t.len == 0 or t[t.len - 1] != '}') return null;
-        const at = cgu.cArrayType(t[0..open]) orelse return null;
+        const at = cgu.cArrayType(t[0..open], null, null) orelse return null;
         return .{ .at = at, .init = try cArrayInitText(allocator, t[open + 1 .. t.len - 1]) };
     }
 

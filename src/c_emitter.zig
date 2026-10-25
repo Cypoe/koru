@@ -206,6 +206,14 @@ fn loadTargetRows(
     return table;
 }
 
+/// The LowerDiag/cArrayType resolver shape — hands the emitter's
+/// catalog-sole-source flat table to codegen_utils paths that have no
+/// `self` (`@as` inside lowerCBuiltin, cArrayType's base).
+fn catalogCTypeResolver(ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8 {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return null));
+    return em.catalogFlatType(koru_type);
+}
+
 // ---------------------------------------------------------------------------
 // Indexes
 // ---------------------------------------------------------------------------
@@ -682,6 +690,8 @@ const Emitter = struct {
         var diag: codegen_utils.LowerDiag = .{};
         diag.resolve_int_ctype = resolveIntCtype;
         diag.int_width_ctx = self;
+        diag.resolve_c_type = catalogCTypeResolver;
+        diag.c_type_ctx = self;
         const lowered = codegen_utils.lowerKoruExpr(self.allocator, text, .c, .koru_expr, &diag) catch |err| {
             if (err == error.UnsupportedBuiltin) {
                 if (diag.unsupported_op.len != 0) {
@@ -716,21 +726,30 @@ const Emitter = struct {
         self.catalog_prelude = loadTargetRows(self.allocator, "prelude");
     }
 
-    /// Dual-answer against the declared `std/target:type(c)` rows — drift
-    /// on stderr, never silently: a missing catalog file is fine at the
-    /// advisory stage, but a row disagreeing with the emitter table (or a
-    /// key the table answers and the catalog lacks) is exactly the defect
-    /// the congruence rungs exist to expose.
-    fn checkCatalogType(self: *Emitter, koru_type: []const u8, emitted: []const u8) void {
+    /// The flat type table, catalog-sole-source: the declared
+    /// `type(c)` rows answer when the catalog is loaded, with the legacy
+    /// `cTypeOf` demoted to drift-check. A catalog miss on a name the
+    /// legacy table knows is a refusal (returns null + prints drift) —
+    /// never a silent fallback; the catalog's completeness IS what the
+    /// suite is proving. Catalog absent (file/env missing) → legacy.
+    fn catalogFlatType(self: *Emitter, koru_type: []const u8) ?[]const u8 {
         self.ensureCatalog();
-        const table = self.catalog_types orelse return;
-        const declared = table.get(koru_type) orelse {
-            std.debug.print("std/target drift: type row missing for `{s}` (emitter answers `{s}`)\n", .{ koru_type, emitted });
-            return;
-        };
-        if (!std.mem.eql(u8, declared, emitted)) {
-            std.debug.print("std/target drift: `{s}` emitter=`{s}` catalog=`{s}`\n", .{ koru_type, emitted, declared });
+        const t = std.mem.trim(u8, koru_type, " \t");
+        if (self.catalog_types) |table| {
+            if (table.get(t)) |declared| {
+                if (cTypeOf(t)) |legacy| {
+                    if (!std.mem.eql(u8, legacy, declared)) {
+                        std.debug.print("std/target drift: `{s}` emitter=`{s}` catalog=`{s}` (catalog wins)\n", .{ t, legacy, declared });
+                    }
+                }
+                return declared;
+            }
+            if (cTypeOf(t) != null) {
+                std.debug.print("std/target drift: type row missing for `{s}` — catalog is sole source\n", .{t});
+            }
+            return null;
         }
+        return cTypeOf(t);
     }
 
     /// A minted constant against its declared `name` row — called at the
@@ -809,10 +828,11 @@ const Emitter = struct {
     /// (the minted `typedef` binds it). Everything else stays refused.
     fn cTypeOfResolved(self: *Emitter, koru_type: []const u8) ?[]const u8 {
         const t = std.mem.trim(u8, koru_type, " \t");
-        if (cTypeOf(t)) |ct| {
-            self.checkCatalogType(t, ct);
-            return ct;
-        }
+        if (self.catalogFlatType(t)) |ct| return ct;
+        // Sole-source: a flat-table name the loaded catalog lacks refuses —
+        // it must not fall into the structural arms (`[]const u8` is both
+        // a flat row and `[]`-shaped).
+        if (self.catalog_types != null and cTypeOf(t) != null) return null;
         if (self.aliases.contains(t)) return t;
         // `*X` — a pointer cell. A proto terminal's typedef already binds
         // `X`, so `X *` points at the alias's own spelling; a primitive
@@ -837,13 +857,13 @@ const Emitter = struct {
             // the pointee is not a name; refuse rather than drop a level.
             if (inner.len == 0 or !codegen_utils.exprIdentChar(inner[0])) return null;
             const kw = if (pointee_const) "const " else "";
-            if (cTypeOf(inner)) |ct|
+            if (self.catalogFlatType(inner)) |ct|
                 return std.fmt.allocPrint(self.allocator, "{s}{s} *", .{ kw, ct }) catch null;
             // A proto terminal's `X` spells the typedef only when its scalar
             // actually minted one (`i64` does, `i128` does not) — otherwise
             // the same opaque `struct X *` arm applies.
             if (self.aliases.get(inner)) |scalar| {
-                if (cTypeOf(scalar) != null)
+                if (self.catalogFlatType(scalar) != null)
                     return std.fmt.allocPrint(self.allocator, "{s}{s} *", .{ kw, inner }) catch null;
             }
             const tag = mangleOpaqueName(self.allocator, inner) orelse return null;
@@ -984,7 +1004,7 @@ const Emitter = struct {
             if (event.input.fields.len > 0) {
                 try self.writeFmt("struct {s}_in {{\n", .{name});
                 for (event.input.fields) |f| {
-                    if (codegen_utils.cArrayType(f.type)) |at| {
+                    if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
                         try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
                         continue;
                     }
@@ -1016,7 +1036,7 @@ const Emitter = struct {
         if (event.input.fields.len > 0) {
             try self.writeFmt("struct {s}_in {{\n", .{name});
             for (event.input.fields) |f| {
-                if (codegen_utils.cArrayType(f.type)) |at| {
+                if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
                     try self.writeFmt("    {s} {s}{s};\n", .{ at.base, codegen_utils.cMemberName(self.allocator, f.name), at.dims });
                     continue;
                 }
@@ -1270,7 +1290,7 @@ const Emitter = struct {
     fn emitFieldBindings(self: *Emitter, event: *const ast.EventDecl) CEmitError!void {
         for (event.input.fields) |f| {
             const cm = codegen_utils.cMemberName(self.allocator, f.name);
-            if (codegen_utils.cArrayType(f.type)) |at| {
+            if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
                 // `[N]T` fields bind as pointers — C arrays are not
                 // assignable, and `arr[i]` indexes identically on
                 // `T *` (1-D) / `T (*)[M]` (N-D), so .kc bodies stay
@@ -2364,7 +2384,7 @@ const Emitter = struct {
         // `[N]T` field — `.arr = v` is not a C initializer (arrays are
         // not assignable). A `[N]T{…}` literal lowers its elements; any
         // other value expands by the declared dims: `{ v[0], v[1], … }`.
-        if (codegen_utils.cArrayType(f.type)) |at| {
+        if (codegen_utils.cArrayType(f.type, catalogCTypeResolver, self)) |at| {
             try self.write("{ ");
             const vt = std.mem.trim(u8, value, " \t\n");
             if (std.mem.indexOfScalar(u8, vt, '{')) |open| {
@@ -3188,7 +3208,7 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         for (td_names.items) |name| {
             const scalar = aliases.get(name).?;
             const host = if (std.mem.eql(u8, scalar, "string")) "[]const u8" else scalar;
-            if (cTypeOf(host)) |ct| try em.writeFmt("typedef {s} {s};\n", .{ ct, name });
+            if (em.catalogFlatType(host)) |ct| try em.writeFmt("typedef {s} {s};\n", .{ ct, name });
         }
     }
     try emitCellStructDefs(&em);

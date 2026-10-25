@@ -293,7 +293,7 @@ pub fn cTypeOf(koru_type: []const u8) ?[]const u8 {
 /// `[_]T`, non-literal bounds and non-typable bases return null — named
 /// refusals, not silent pointers.
 pub const CArrayType = struct { base: []const u8, dims: []const u8 };
-pub fn cArrayType(koru_type: []const u8) ?CArrayType {
+pub fn cArrayType(koru_type: []const u8, base_resolver: ?*const fn (?*anyopaque, []const u8) ?[]const u8, resolver_ctx: ?*anyopaque) ?CArrayType {
     const t = std.mem.trim(u8, koru_type, " \t");
     var i: usize = 0;
     while (i < t.len and t[i] == '[') {
@@ -304,7 +304,10 @@ pub fn cArrayType(koru_type: []const u8) ?CArrayType {
         i = close + 1;
     }
     if (i == 0 or i >= t.len) return null;
-    const base = cTypeOf(t[i..]) orelse return null;
+    const base = if (base_resolver) |r|
+        r(resolver_ctx, t[i..]) orelse return null
+    else
+        cTypeOf(t[i..]) orelse return null;
     return .{ .base = base, .dims = t[0..i] };
 }
 
@@ -971,6 +974,14 @@ pub const LowerDiag = struct {
     /// not resolve — leaves the op refused: no width, no wrap.
     resolve_int_ctype: ?*const fn (ctx: ?*anyopaque, name: []const u8) ?[]const u8 = null,
     int_width_ctx: ?*anyopaque = null,
+    /// C-lane sole-source type table: when the emitter has a declared
+    /// `std/target:type(c)` catalog loaded it fills this resolver — its
+    /// answer (or null) is authoritative for flat spellings, the
+    /// hardcoded `cTypeOf` table becomes the drift-check, and a catalog
+    /// miss on a name the legacy table knows is a refusal, not a silent
+    /// fallback. Unset → `cTypeOf` answers directly (dual-answer stage).
+    resolve_c_type: ?*const fn (ctx: ?*anyopaque, name: []const u8) ?[]const u8 = null,
+    c_type_ctx: ?*anyopaque = null,
 };
 
 /// Render Koru expression text for `target`. Caller owns the result.
@@ -4251,7 +4262,12 @@ fn lowerCBuiltin(
     const eql = std.mem.eql;
 
     if (eql(u8, name, "as")) {
-        const ctype = cTypeOf(first) orelse {
+        const ctype = blk: {
+            if (diag) |d| {
+                if (d.resolve_c_type) |r| break :blk r(d.c_type_ctx, first);
+            }
+            break :blk cTypeOf(first);
+        } orelse {
             if (diag) |d| d.unknown_builtin = text[at..j];
             return LowerError.UnsupportedBuiltin;
         };
