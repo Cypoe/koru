@@ -3068,3 +3068,366 @@ pub fn inlineEvent(ctx: *TransformContext, invocation: *ast.Invocation, proc: *a
 
     // TODO: Implement actual inlining logic
 }
+
+// ============================================================================
+// INVARIANT HOIST — a loop-invariant prefix of a `for ! each` body lifts out
+// of the loop.
+//
+//   for(0..n) ! each _ |> make(13): t |> check(t): c |> free-tree(t): _
+//                     |> captured { acc: g.acc + c }
+//
+// becomes
+//
+//   make(13): t |> check(t): c |> for(0..n) ! each _ |> captured {...}
+//   | done |> free-tree(t)
+//
+// The ruling: a step hoists when it does not mention the item or `__it`,
+// produces a binding, and its callee is hoist-clean — a same-module tor whose
+// reachable calls are all clean (no store/captured/io writes), or a mint
+// (`-> *T<owned!>` — a fresh owned allocation runs once legally). Invariant
+// steps consuming `<!owned>` bindings the prefix produced move to the loop's
+// `| done` arm and run once. The first non-hoistable step ends the prefix.
+// The hoisted prefix speculates once on empty ranges — legal because every
+// hoisted step is net-pure (fresh mints + pure reads only).
+// ============================================================================
+
+const HoistVerdict = enum { clean, dirty, visiting };
+
+const InvariantHoist = struct {
+    allocator: std.mem.Allocator,
+    main_module: []const u8,
+    events: std.StringHashMap(*const ast.EventDecl),
+    impls: std.StringHashMap(*const ast.Flow),
+    memo: std.StringHashMap(HoistVerdict),
+
+    fn init(allocator: std.mem.Allocator, main_module: []const u8) InvariantHoist {
+        return .{
+            .allocator = allocator,
+            .main_module = main_module,
+            .events = std.StringHashMap(*const ast.EventDecl).init(allocator),
+            .impls = std.StringHashMap(*const ast.Flow).init(allocator),
+            .memo = std.StringHashMap(HoistVerdict).init(allocator),
+        };
+    }
+
+    fn lastSeg(path: ast.DottedPath) []const u8 {
+        if (path.segments.len == 0) return "";
+        return path.segments[path.segments.len - 1];
+    }
+
+    fn norm(self: *InvariantHoist, name: []const u8) []const u8 {
+        // canonicalize_names ran already: `free-tree` decls land `free_tree`
+        // while call sites keep the source spelling — compare snake-side.
+        const n = self.allocator.dupe(u8, name) catch return name;
+        for (n) |*c| {
+            if (c.* == '-') c.* = '_';
+        }
+        return n;
+    }
+
+    fn buildMaps(self: *InvariantHoist, items: []const ast.Item) !void {
+        for (items) |*item| {
+            switch (item.*) {
+                .event_decl => |*ev| try self.events.put(self.norm(lastSeg(ev.path)), ev),
+                .flow => |*flow| {
+                    if (flow.impl_of) |p| try self.impls.put(self.norm(lastSeg(p)), flow);
+                },
+                .module_decl => |*m| try self.buildMaps(m.items),
+                else => {},
+            }
+        }
+    }
+
+    fn sameModule(self: *InvariantHoist, path: ast.DottedPath) bool {
+        const q = path.module_qualifier orelse return true;
+        return std.mem.eql(u8, q, self.main_module);
+    }
+
+    /// Denylist: last-segment names and qualifiers that are never hoistable.
+    fn denylisted(path: ast.DottedPath) bool {
+        const q = path.module_qualifier orelse "";
+        if (std.mem.indexOf(u8, q, "io") != null or
+            std.mem.indexOf(u8, q, "store") != null or
+            std.mem.indexOf(u8, q, "grid") != null or
+            std.mem.indexOf(u8, q, "field") != null) return true;
+        const names = [_][]const u8{ "captured", "stored", "insert", "take", "drain", "clear", "watch", "print", "eprint", "readln", "read-lines", "command", "free" };
+        const seg = lastSeg(path);
+        for (names) |n| if (std.mem.eql(u8, seg, n)) return true;
+        return false;
+    }
+
+    /// Is calling `name` hoist-safe? Mint returns (<owned!>) are clean;
+    /// flow-impl'd tors are clean when every transitive callee is clean.
+    fn isClean(self: *InvariantHoist, name: []const u8) bool {
+        if (self.memo.get(name)) |v| return v == .clean;
+        const decl = self.events.get(self.norm(name)) orelse {
+            self.memo.put(name, .dirty) catch {};
+            return false;
+        };
+        if (decl.return_phantom) |p| {
+            if (std.mem.indexOf(u8, p, "owned!") != null) {
+                self.memo.put(name, .clean) catch {};
+                return true;
+            }
+        }
+        const impl = self.impls.get(self.norm(name)) orelse {
+            self.memo.put(name, .dirty) catch {}; // opaque proc, no flow body
+            return false;
+        };
+        self.memo.put(name, .visiting) catch {};
+        var clean = true;
+        var calls = std.ArrayList(ast.DottedPath).initCapacity(self.allocator, 0) catch return false;
+        defer calls.deinit(self.allocator);
+        self.collectCalls(&impl.body, &calls) catch return false;
+        for (calls.items) |p| {
+            if (denylisted(p)) { clean = false; break; }
+            // control builtins (std.control:if/for/…) are structure, not
+            // effects — their arms' calls are already in the list.
+            if (p.module_qualifier) |q| {
+                if (std.mem.indexOf(u8, q, "control") != null) continue;
+            }
+            const callee = self.norm(lastSeg(p));
+            if (self.memo.get(callee) == .visiting) continue; // recursion
+            if (!self.sameModule(p) or !self.isClean(callee)) { clean = false; break; }
+        }
+        self.memo.put(name, if (clean) .clean else .dirty) catch {};
+        return clean;
+    }
+
+    fn collectCalls(self: *InvariantHoist, cont: *const ast.Continuation, out: *std.ArrayList(ast.DottedPath)) !void {
+        if (cont.node) |n| {
+            switch (n) {
+                .invocation => |inv| try out.append(self.allocator, inv.path),
+                .label_with_invocation => |li| try out.append(self.allocator, li.invocation.path),
+                else => {},
+            }
+        }
+        for (cont.continuations) |*c| try self.collectCalls(c, out);
+    }
+
+    fn argMentions(args: []const ast.Arg, needle: []const u8) bool {
+        if (needle.len == 0) return false;
+        for (args) |a| {
+            if (std.mem.indexOf(u8, a.value, needle) != null) return true;
+            if (std.mem.indexOf(u8, a.name, needle) != null) return true;
+        }
+        return false;
+    }
+
+    /// Does this step consume a `<!owned>` param bound to a hoisted name?
+    /// Match by value: a bare `free-tree(t)` arg needn't spell the field name.
+    fn isDischarge(self: *InvariantHoist, inv: *const ast.Invocation, hoisted: *std.StringHashMap(void)) bool {
+        const decl = self.events.get(self.norm(lastSeg(inv.path))) orelse return false;
+        var takes_owned = false;
+        for (decl.input.fields) |f| {
+            if (f.phantom) |p| {
+                if (std.mem.indexOf(u8, p, "!owned") != null) takes_owned = true;
+            }
+        }
+        if (!takes_owned) return false;
+        for (inv.args) |a| {
+            if (hoisted.contains(a.value)) return true;
+        }
+        return false;
+    }
+
+    fn visitCont(self: *InvariantHoist, cont: *ast.Continuation) !void {
+        // Bottom-up: nested fors hoist first so outer classification sees the
+        // post-rewrite body.
+        for (@constCast(cont.continuations)) |*c| try self.visitCont(c);
+        const n = cont.node orelse return;
+        switch (n) {
+            .invocation => |inv| {
+                if (std.mem.eql(u8, lastSeg(inv.path), "for")) try self.tryHoist(cont);
+            },
+            else => {},
+        }
+    }
+
+    fn tryHoist(self: *InvariantHoist, for_cont: *ast.Continuation) !void {
+        var each_cont: ?*ast.Continuation = null;
+        for (@constCast(for_cont.continuations)) |*c| {
+            if (c.kind == .effect and std.mem.eql(u8, c.branch, "each")) each_cont = c;
+        }
+        const each = each_cont orelse return;
+        if (each.node == null) return;
+        const item = each.binding orelse "_";
+
+        // The each-body chain: each.node is step 0; each unnamed-branch child
+        // continues it. A wrapper's own named arms forbid the hoist (v1).
+        var wrappers = try std.ArrayList(*ast.Continuation).initCapacity(self.allocator, 0);
+        defer wrappers.deinit(self.allocator);
+        try wrappers.append(self.allocator, each);
+        var cur = each;
+        while (true) {
+            var next: ?*ast.Continuation = null;
+            for (@constCast(cur.continuations)) |*cc| {
+                if (cc.branch.len == 0) { next = cc; break; }
+            }
+            if (next == null) break;
+            try wrappers.append(self.allocator, next.?);
+            cur = next.?;
+        }
+
+        var hoisted = std.StringHashMap(void).init(self.allocator);
+        defer hoisted.deinit();
+        var pre = try std.ArrayList(*ast.Node).initCapacity(self.allocator, 0);
+        defer pre.deinit(self.allocator);
+        var post = try std.ArrayList(*ast.Node).initCapacity(self.allocator, 0);
+        defer post.deinit(self.allocator);
+        var boundary: ?usize = null;
+
+        for (wrappers.items, 0..) |w, i| {
+            const wn = w.node orelse { boundary = i; break; };
+            const winv = switch (wn) {
+                .invocation => |iv| iv,
+                else => { boundary = i; break; },
+            };
+            // a hoisted step's own named arms would have to travel — refuse
+            var has_arms = false;
+            for (w.continuations) |cc| {
+                if (cc.branch.len != 0) has_arms = true;
+            }
+            if (i == 0) {
+                // each.continuations hold step0's arms mixed with the chain —
+                // an armed first step is never hoisted.
+                for (each.continuations) |cc| {
+                    if (cc.branch.len != 0) has_arms = true;
+                }
+            }
+            if (has_arms) { boundary = i; break; }
+            // invariance: no mention of the item or __it anywhere in args
+            if (argMentions(winv.args, "__it") or
+                (!std.mem.eql(u8, item, "_") and argMentions(winv.args, item))) {
+                boundary = i; break;
+            }
+            if (self.isDischarge(&winv, &hoisted)) {
+                try post.append(self.allocator, &w.node.?);
+                continue;
+            }
+            if (winv.return_binding != null and
+                self.sameModule(winv.path) and
+                self.isClean(self.norm(lastSeg(winv.path)))) {
+                try pre.append(self.allocator, &w.node.?);
+                if (winv.return_binding) |b| try hoisted.put(b, {});
+                continue;
+            }
+            boundary = i; break;
+        }
+        if (pre.items.len == 0) return;
+
+        // Splice: pre-steps run before the for; discharges append to `| done`.
+        const for_node = for_cont.node.?;
+        const old_arms = for_cont.continuations;
+        var tail = try self.allocator.create(ast.Continuation);
+        tail.* = .{
+            .branch = "",
+            .binding = null,
+            .condition = null,
+            .node = for_node,
+            .indent = for_cont.indent,
+            .continuations = old_arms,
+        };
+        var i = pre.items.len;
+        while (i > 1) {
+            i -= 1;
+            const next = tail;
+            tail = try self.allocator.create(ast.Continuation);
+            tail.* = .{
+                .branch = "",
+                .binding = null,
+                .condition = null,
+                .node = pre.items[i].*,
+                .indent = for_cont.indent,
+                .continuations = try self.allocator.alloc(ast.Continuation, 1),
+            };
+            @constCast(tail.continuations)[0] = next.*;
+            // free the intermediate heap cont — values copied, arena owns
+            self.allocator.destroy(next);
+        }
+        const chain = try self.allocator.alloc(ast.Continuation, 1);
+        chain[0] = tail.*;
+        self.allocator.destroy(tail);
+        for_cont.node = pre.items[0].*;
+        for_cont.continuations = chain;
+
+        // Remaining body: the boundary wrapper's content slides into `each`.
+        if (boundary) |bi| {
+            const bw = wrappers.items[bi];
+            each.node = bw.node;
+            each.continuations = bw.continuations;
+        } else {
+            each.node = null;
+            each.continuations = &.{};
+        }
+
+        // Discharges append to the for's `done` arm (create it when absent).
+        if (post.items.len > 0) {
+            var done_cont: ?*ast.Continuation = null;
+            for (@constCast(chain[0].continuations)) |*c| {
+                if (std.mem.eql(u8, c.branch, "done")) done_cont = c;
+            }
+            if (done_cont == null) {
+                const new_done = ast.Continuation{
+                    .branch = "done",
+                    .binding = null,
+                    .condition = null,
+                    .node = null,
+                    .indent = for_cont.indent,
+                    .continuations = &.{},
+                };
+                const grown = try self.allocator.alloc(ast.Continuation, chain[0].continuations.len + 1);
+                @memcpy(grown[0..chain[0].continuations.len], chain[0].continuations);
+                grown[chain[0].continuations.len] = new_done;
+                chain[0].continuations = grown;
+                done_cont = &grown[grown.len - 1];
+            }
+            const d = done_cont.?;
+            // prepend discharge chain: d.node = post[0], then chain rest
+            var dtail = try self.allocator.create(ast.Continuation);
+            dtail.* = .{ .branch = "", .binding = null, .condition = null, .node = d.node, .indent = d.indent, .continuations = d.continuations };
+            var j = post.items.len;
+            while (j > 1) {
+                j -= 1;
+                const prev = dtail;
+                dtail = try self.allocator.create(ast.Continuation);
+                dtail.* = .{ .branch = "", .binding = null, .condition = null, .node = post.items[j].*, .indent = d.indent, .continuations = try self.allocator.alloc(ast.Continuation, 1) };
+                @constCast(dtail.continuations)[0] = prev.*;
+                self.allocator.destroy(prev);
+            }
+            const dchain = try self.allocator.alloc(ast.Continuation, 1);
+            dchain[0] = dtail.*;
+            self.allocator.destroy(dtail);
+            d.node = post.items[0].*;
+            d.continuations = dchain;
+        }
+    }
+
+    fn visitItems(self: *InvariantHoist, items: []const ast.Item) !void {
+        for (items) |*item| {
+            switch (item.*) {
+                .flow => |*flow| try self.visitCont(@constCast(&flow.body)),
+                .module_decl => |*m| try self.visitItems(m.items),
+                else => {},
+            }
+        }
+    }
+};
+
+/// Loop-invariant prefix hoist — see InvariantHoist's doc comment for the
+/// ruling. Runs after purity marking, before emission.
+pub fn hoistInvariantLoopPrefix(
+    allocator: std.mem.Allocator,
+    source_file: *ast.Program,
+    reporter: *errors_mod.ErrorReporter,
+) !void {
+    _ = reporter;
+    var pass = InvariantHoist.init(allocator, source_file.main_module_name);
+    defer {
+        pass.events.deinit();
+        pass.impls.deinit();
+        pass.memo.deinit();
+    }
+    try pass.buildMaps(source_file.items);
+    try pass.visitItems(source_file.items);
+}

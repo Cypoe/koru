@@ -8678,6 +8678,11 @@ pub fn main() !void {
     defer purity_check.deinit();
     try purity_check.check(&source_file);
 
+    // Invariant hoist: a loop-invariant pure prefix of `for ! each` lifts
+    // out of the loop; discharges land on `| done`. Runs after purity
+    // marking, before the threaded flood sees the rewritten flow.
+    try ast_transform.hoistInvariantLoopPrefix(parse_allocator, &source_file, &parser.reporter);
+
     // Threaded-reachability pass — floods "dirty" forward from ~[threaded]
     // roots; consumed at codegen for lockset emission.
     var threaded_check = threaded_checker.ThreadedChecker.init(compile_allocator);
