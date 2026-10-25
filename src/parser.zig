@@ -939,7 +939,6 @@ pub const Parser = struct {
     module_name: []const u8, // Canonical module path (e.g., "input", "lib/fs")
 
     // Global inline flow counter - must match emitter's global numbering
-    inline_flow_counter: u32,
     // Monotonic counter for the synthetic temp a bind-position destructure
     // (`~f(): { x } |>`) binds the return to before emitting per-field consts.
     destructure_ret_counter: u32 = 0,
@@ -1192,7 +1191,6 @@ pub const Parser = struct {
             .is_compiler_library = false, // Default to false, caller can set if needed
             .is_k = is_k,
             .module_name = module_name,
-            .inline_flow_counter = 0, // Global counter across all procs
             .fail_fast = false, // Default to lenient mode (continue past errors)
             .registry_transferred = false,
             .compiler_flags = compiler_flags, // Flags for conditional imports
@@ -3710,7 +3708,7 @@ pub const Parser = struct {
             raw_body_owned = false;
             break :blk FlowExtractionResult{ .flows = &.{}, .modified_body = raw_body };
         } else blk: {
-            const result = try self.extractInlineFlows(raw_body, path, body_start_line);
+            const result = try self.extractInlineFlows(raw_body, body_start_line);
             self.allocator.free(raw_body);
             raw_body_owned = false;
             break :blk result;
@@ -3833,7 +3831,7 @@ pub const Parser = struct {
             raw_body_owned = false;
             break :blk FlowExtractionResult{ .flows = &.{}, .modified_body = raw_body };
         } else blk: {
-            const result = try self.extractInlineFlows(raw_body, path, body_start_line);
+            const result = try self.extractInlineFlows(raw_body, body_start_line);
             self.allocator.free(raw_body);
             raw_body_owned = false;
             break :blk result;
@@ -3875,7 +3873,7 @@ pub const Parser = struct {
         flows: []ast.Flow,
     };
 
-    fn extractInlineFlows(self: *Parser, body: []const u8, proc_path: ast.DottedPath, body_start_line: usize) !FlowExtractionResult {
+    fn extractInlineFlows(self: *Parser, body: []const u8, body_start_line: usize) !FlowExtractionResult {
         var extracted_flows = try std.ArrayList(ast.Flow).initCapacity(self.allocator, 0);
         errdefer {
             for (extracted_flows.items) |*flow| {
@@ -3898,7 +3896,6 @@ pub const Parser = struct {
 
         // Process line by line
         var i: usize = 0;
-        // Note: Using self.inline_flow_counter (global) instead of local counter
         // This ensures numbering matches the emitter's global numbering
 
         while (i < body_lines.items.len) {
@@ -3957,227 +3954,7 @@ pub const Parser = struct {
                 return error.ParseError;
             }
 
-            if (false) {
-                // Found an inline flow!
-
-                // Collect all lines belonging to this flow
-                var flow_lines = try std.ArrayList([]const u8).initCapacity(self.allocator, 8);
-                defer flow_lines.deinit(self.allocator);
-
-                // Add the first line (the ~ line)
-                try flow_lines.append(self.allocator, line);
-                i += 1;
-
-                // Collect continuation lines (including nested ones)
-                var brace_depth: i32 = 0;
-
-                // Check if the first line has unmatched braces (skip braces in strings/comments)
-                brace_depth += lexer.countBraceDepthChange(trimmed);
-
-                while (i < body_lines.items.len) {
-                    const next_line = body_lines.items[i];
-                    const next_trimmed = lexer.trim(next_line);
-                    const next_indent = lexer.getIndent(next_line);
-
-                    // A line belongs to the flow if:
-                    // 1. It starts with | and has indent > the flow's indent (continuation)
-                    // 2. It's part of a multi-line constructor (brace_depth > 0)
-                    // 3. It's an empty line or comment within the flow structure
-                    if (next_trimmed.len == 0 or lexer.startsWith(next_trimmed, "//")) {
-                        // Could be part of the flow - check if we should continue
-                        // Look ahead to see if there are more flow lines
-                        var j = i + 1;
-                        var found_more_flow = false;
-                        while (j < body_lines.items.len) {
-                            const peek_line = body_lines.items[j];
-                            const peek_trimmed = lexer.trim(peek_line);
-                            const peek_indent = lexer.getIndent(peek_line);
-
-                            if (peek_trimmed.len > 0 and !lexer.startsWith(peek_trimmed, "//")) {
-                                if (lexer.startsWith(peek_trimmed, "|") and peek_indent >= current_indent) {
-                                    found_more_flow = true;
-                                }
-                                break;
-                            }
-                            j += 1;
-                        }
-
-                        if (found_more_flow) {
-                            try flow_lines.append(self.allocator, next_line);
-
-                            // Update brace depth for empty/comment lines (skip braces in strings/comments)
-                            brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                            i += 1;
-                        } else {
-                            break;
-                        }
-                    } else if (lexer.startsWith(next_trimmed, "|") and next_indent >= current_indent) {
-                        // This is a continuation at same or greater indent
-                        try flow_lines.append(self.allocator, next_line);
-
-                        // Update brace depth for continuation lines (skip braces in strings/comments)
-                        brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                        i += 1;
-                    } else if (brace_depth > 0) {
-                        // We're inside a multi-line constructor
-                        // Check if this line is part of the constructor (field or closing brace)
-                        const is_valid_constructor_line = blk: {
-                            // Check if it's a closing brace
-                            if (std.mem.eql(u8, next_trimmed, "}")) {
-                                break :blk true;
-                            }
-                            // For lines with greater indent, check if it looks like a field
-                            if (next_indent > current_indent) {
-                                // Check if it looks like a field definition (name: value)
-                                if (std.mem.indexOf(u8, next_trimmed, ":") != null) {
-                                    // Make sure it's not a Zig statement like const x: Type
-                                    if (!lexer.startsWith(next_trimmed, "const ") and
-                                        !lexer.startsWith(next_trimmed, "var ") and
-                                        !lexer.startsWith(next_trimmed, "fn ") and
-                                        !lexer.startsWith(next_trimmed, "if ") and
-                                        !lexer.startsWith(next_trimmed, "while ") and
-                                        !lexer.startsWith(next_trimmed, "for "))
-                                    {
-                                        break :blk true;
-                                    }
-                                }
-                            }
-                            break :blk false;
-                        };
-
-                        if (is_valid_constructor_line) {
-                            try flow_lines.append(self.allocator, next_line);
-
-                            // Update brace depth (skip braces in strings/comments)
-                            brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                            i += 1;
-                        } else {
-                            // Not a valid constructor line, stop collecting
-                            break;
-                        }
-                    } else {
-                        // Not a continuation, end of flow
-                        break;
-                    }
-                }
-
-                // Parse the collected flow
-                var parsed_flow = try self.parseCollectedFlow(flow_lines.items, current_indent);
-
-                // Use UnionCollector to analyze branches and build SuperShape
-                const union_collector = @import("union_collector");
-                var collector = union_collector.UnionCollector.init(self.allocator);
-                var collection_result = try collector.collectFromFlow(&parsed_flow);
-                defer collection_result.deinit(self.allocator);
-
-                // Transfer ownership of super_shape to the flow
-                if (collection_result.transferSuperShape()) |super_shape| {
-                    parsed_flow.super_shape = super_shape;
-                }
-
-                // Check for conflicts and report them
-                if (collection_result.has_conflicts) {
-                    for (collection_result.conflicts) |_| {
-                        // TODO: Report as semantic error - branch has conflicting shapes
-                        // For now, we'll continue but the code generator will need to handle this
-                    }
-                }
-
-                try extracted_flows.append(self.allocator, parsed_flow);
-
-                // Generate a unique name for this flow (global counter)
-                self.inline_flow_counter += 1;
-                const flow_name = try std.fmt.allocPrint(self.allocator, "__inline_flow_{d}", .{self.inline_flow_counter});
-                defer self.allocator.free(flow_name);
-
-                // Generate replacement based on the pattern
-                const replacement = blk: {
-                    // Create indentation string
-                    const indent_str = try self.allocator.alloc(u8, current_indent);
-                    defer self.allocator.free(indent_str);
-                    @memset(indent_str, ' ');
-
-                    // INLINE FLOW FIX: Pass ALL proc parameters, not just first invocation's args
-                    // Look up the proc's event to get its full input shape
-                    const proc_path_str = try self.pathToString(proc_path);
-                    defer self.allocator.free(proc_path_str);
-
-                    const args_str = if (self.registry.getEventType(proc_path_str)) |event_type| blk2: {
-                        // Event found! Use its input shape to generate ALL parameter passing
-                        if (event_type.input_shape) |input_shape| {
-                            var args_buf = try std.ArrayList(u8).initCapacity(self.allocator, 128);
-                            defer args_buf.deinit(self.allocator);
-
-                            // Generate .{ .field1 = field1, .field2 = field2, ... }
-                            try args_buf.appendSlice(self.allocator, ".{ ");
-                            for (input_shape.fields, 0..) |field, idx| {
-                                if (idx > 0) {
-                                    try args_buf.appendSlice(self.allocator, ", ");
-                                }
-                                try args_buf.appendSlice(self.allocator, ".");
-                                try args_buf.appendSlice(self.allocator, field.name);
-                                try args_buf.appendSlice(self.allocator, " = ");
-                                try args_buf.appendSlice(self.allocator, field.name);
-                            }
-                            try args_buf.appendSlice(self.allocator, " }");
-
-                            break :blk2 try args_buf.toOwnedSlice(self.allocator);
-                        } else {
-                            // No input shape (event has no parameters)
-                            break :blk2 try self.allocator.dupe(u8, ".{}");
-                        }
-                    } else try self.allocator.dupe(u8, ".{}");
-                    defer self.allocator.free(args_str);
-
-                    if (lexer.startsWith(trimmed, "return ~")) {
-                        // Terminal flow: return ~... -> return __inline_flow_N(args)
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}return {s}({s});", .{ indent_str, flow_name, args_str });
-                    } else if (lexer.startsWith(trimmed, "const ")) {
-                        // Assignment flow: const x = ~... -> const x = __inline_flow_N(args)
-                        const eq_idx = std.mem.indexOf(u8, trimmed, " = ~") orelse unreachable;
-                        const var_decl = trimmed[0 .. eq_idx + 3]; // "const x = "
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}{s}{s}({s});", .{ indent_str, var_decl, flow_name, args_str });
-                    } else {
-                        // Direct flow: ~...
-                        // Check if this is the last non-empty statement in the proc body
-                        // If yes, it should implicitly return; otherwise assign to result_N
-                        const is_terminal = blk2: {
-                            // Look ahead from current position (i) to see if there are more statements
-                            var j = i;
-                            while (j < body_lines.items.len) : (j += 1) {
-                                const remaining_line = body_lines.items[j];
-                                const remaining_trimmed = lexer.trim(remaining_line);
-
-                                // Skip empty lines and comments
-                                if (remaining_trimmed.len == 0 or lexer.startsWith(remaining_trimmed, "//")) {
-                                    continue;
-                                }
-
-                                // Found a non-empty, non-comment line after this flow
-                                break :blk2 false;
-                            }
-                            // No more statements found - this is terminal!
-                            break :blk2 true;
-                        };
-
-                        if (is_terminal) {
-                            // Terminal flow with implicit return
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s}return {s}({s});", .{ indent_str, flow_name, args_str });
-                        } else {
-                            // Non-terminal flow: assign to result variable
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s}const result_{d} = {s}({s});", .{ indent_str, self.inline_flow_counter, flow_name, args_str });
-                        }
-                    }
-                };
-                defer self.allocator.free(replacement);
-
-                try modified_body.appendSlice(self.allocator, replacement);
-                try modified_body.append(self.allocator, '\n');
-            } else {
-                // Not a flow, keep line as-is
+{                // Not a flow, keep line as-is
                 try modified_body.appendSlice(self.allocator, line);
                 try modified_body.append(self.allocator, '\n');
                 i += 1;
@@ -4193,69 +3970,6 @@ pub const Parser = struct {
             .modified_body = try modified_body.toOwnedSlice(self.allocator),
             .flows = try extracted_flows.toOwnedSlice(self.allocator),
         };
-    }
-
-    fn parseCollectedFlow(self: *Parser, flow_lines: [][]const u8, base_indent: usize) anyerror!ast.Flow {
-        // Adjust indentation - make it relative to base_indent
-        var adjusted_lines = try std.ArrayList([]const u8).initCapacity(self.allocator, flow_lines.len);
-        defer adjusted_lines.deinit(self.allocator);
-
-        for (flow_lines, 0..) |line, idx| {
-            const line_indent = lexer.getIndent(line);
-            const relative_indent = if (line_indent >= base_indent) line_indent - base_indent else 0;
-
-            // Get the trimmed line
-            var trimmed = lexer.trim(line);
-
-            // For the first line, strip any prefix (return, const x = )
-            if (idx == 0) {
-                if (lexer.startsWith(trimmed, "return ~")) {
-                    trimmed = trimmed[7..]; // Skip "return "
-                } else if (lexer.startsWith(trimmed, "const ")) {
-                    if (std.mem.indexOf(u8, trimmed, " = ~")) |eq_idx| {
-                        trimmed = trimmed[eq_idx + 3 ..]; // Skip "const x = "
-                    }
-                }
-            }
-
-            // Create new line with adjusted indentation
-            const spaces = try self.allocator.alloc(u8, relative_indent);
-            defer self.allocator.free(spaces);
-            @memset(spaces, ' ');
-
-            const adjusted_line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ spaces, trimmed });
-            try adjusted_lines.append(self.allocator, adjusted_line);
-        }
-
-        // Create a temporary parser with these lines
-        var context_stack = try std.ArrayList(Context).initCapacity(self.allocator, 8);
-        defer context_stack.deinit(self.allocator);
-        try context_stack.append(self.allocator, .in_proc); // We're in a proc context
-
-        var temp_parser = Parser{
-            .allocator = self.allocator,
-            .lines = adjusted_lines.items,
-            .current = 0,
-            .reporter = self.reporter,
-            .context_stack = context_stack,
-            .registry = self.registry,
-            .is_compiler_library = self.is_compiler_library,
-            .module_name = self.module_name,
-            .inline_flow_counter = self.inline_flow_counter, // Inherit parent's counter
-            .fail_fast = self.fail_fast, // Inherit parent's fail_fast mode
-            .compiler_flags = self.compiler_flags, // Inherit parent's compiler flags
-            .resolver = self.resolver, // Inherit parent's resolver
-        };
-
-        // Parse the flow (no annotations in embedded context)
-        const flow = try temp_parser.parseFlow(&[_][]const u8{});
-
-        // Clean up adjusted lines
-        for (adjusted_lines.items) |line| {
-            self.allocator.free(line);
-        }
-
-        return flow;
     }
 
     fn pathToString(self: *Parser, path: ast.DottedPath) ![]const u8 {
