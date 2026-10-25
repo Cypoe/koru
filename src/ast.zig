@@ -649,6 +649,10 @@ pub const ProcDecl = struct {
     // Threading: root marker from ~[threaded]; dirty when any threaded path reaches it
     is_threaded: bool = false,
     is_threaded_dirty: bool = false,
+    // Dirty AND reachable from itself through the call graph — a recursive
+    // proc re-entering its own non-recursive mutex would deadlock, so the
+    // emitter exempts it from the entry lock.
+    is_threaded_recursive: bool = false,
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },

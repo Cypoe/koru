@@ -852,6 +852,170 @@ fn buildCondBinds(
     return buf.toOwnedSlice(allocator);
 }
 
+/// [parallel] partition spec collection — the capture transform has already
+/// dissolved `captured { f: expr }` into `.assignment` nodes whose `target`
+/// is the cell var. Under `[parallel]` each written cell becomes a per-chunk
+/// partial, so the walk collects (cell, written-field, expr) triples out of
+/// the continuation subtree. Only nodes are inspected; terminal arms never
+/// reach this walk (the caller filters them — they run after the join and
+/// write the real cell).
+/// One partitioned cell: `real` is the outer cell var the join combines
+/// into; `fields` are the written fields with per-field fold legality.
+const ParallelCellSpec = struct {
+    real: []const u8,
+    fields: std.ArrayList(*liquid.Context),
+};
+
+/// Identifier-boundary rewrite of `from` → `to` inside expression text,
+/// skipping string/char literals. Used to point a captured write's RHS at
+/// the worker-local cell.
+fn renameCellRef(allocator: std.mem.Allocator, text: []const u8, from: []const u8, to: []const u8) ![]const u8 {
+    if (from.len == 0 or std.mem.eql(u8, from, to)) return text;
+    var out = try std.ArrayList(u8).initCapacity(allocator, text.len + 16);
+    var i: usize = 0;
+    while (i < text.len) {
+        const ch = text[i];
+        if (ch == '"' or ch == '\'') {
+            try out.append(allocator, ch);
+            i += 1;
+            while (i < text.len and text[i] != ch) {
+                try out.append(allocator, text[i]);
+                if (text[i] == '\\' and i + 1 < text.len) {
+                    i += 1;
+                    try out.append(allocator, text[i]);
+                }
+                i += 1;
+            }
+            if (i < text.len) {
+                try out.append(allocator, text[i]);
+                i += 1;
+            }
+            continue;
+        }
+        const left_ok = i == 0 or !(std.ascii.isAlphanumeric(text[i - 1]) or text[i - 1] == '_');
+        if (left_ok and std.mem.startsWith(u8, text[i..], from)) {
+            const after = i + from.len;
+            if (after >= text.len or !(std.ascii.isAlphanumeric(text[after]) or text[after] == '_')) {
+                try out.appendSlice(allocator, to);
+                i = after;
+                continue;
+            }
+        }
+        try out.append(allocator, ch);
+        i += 1;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn collectParallelCells(
+    allocator: std.mem.Allocator,
+    cont: *const ast.Continuation,
+    cells: *std.StringArrayHashMap(ParallelCellSpec),
+) !void {
+    if (cont.node) |*step| {
+        if (step.* == .assignment) {
+            const asgn = @constCast(&step.assignment);
+            // Writes under [parallel] retarget to a synthesized worker-local
+            // name (`__koru_parcell_<cell>`): inside the spawned worker fn the
+            // user's cell name can't be rebound (Zig's no-shadow rule) nor
+            // referenced (namespace boundary), so the partition locals carry
+            // a fresh name while `real` stays the outer cell the join
+            // combines into. The retarget mutates the node the emitter will
+            // resolve — the continuations slice IS the live AST (the same one
+            // inlined_link resolves against).
+            const real = if (std.mem.startsWith(u8, asgn.target, "__koru_parcell_"))
+                asgn.target["__koru_parcell_".len..]
+            else
+                asgn.target;
+            const par_name = try std.fmt.allocPrint(allocator, "__koru_parcell_{s}", .{real});
+            for (asgn.fields) |f| {
+                const expr = f.expression_str orelse "";
+                const gop = try cells.getOrPut(par_name);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{ .real = real, .fields = .empty };
+                }
+                var dup = false;
+                for (gop.value_ptr.fields.items) |fc| {
+                    if (fc.get("name")) |v| {
+                        if (v == .string and std.mem.eql(u8, v.string, f.name)) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                }
+                if (dup) continue;
+                const fc = try allocator.create(liquid.Context);
+                fc.* = liquid.Context.init(allocator);
+                try fc.put("name", .{ .string = f.name });
+                try fc.put("expr", .{ .string = expr });
+                // Legality is proved against whatever name the expression
+                // references NOW — the user's cell name on first render, the
+                // worker name on a re-render of an already-retargeted node.
+                try fc.put("ok", .{ .string = if (isAdditiveCellWrite(expr, asgn.target, f.name)) "1" else "" });
+                try gop.value_ptr.fields.append(allocator, fc);
+            }
+            // Retarget the node's target and cell references so the emitted
+            // write hits the worker-local cell, not the (invisible) outer one.
+            if (!std.mem.eql(u8, asgn.target, par_name)) {
+                for (@constCast(asgn.fields)) |*f| {
+                    if (f.expression_str) |e| {
+                        f.expression_str = try renameCellRef(allocator, e, real, par_name);
+                    }
+                }
+                asgn.target = par_name;
+            }
+        }
+    }
+    for (cont.continuations) |*nested| try collectParallelCells(allocator, nested, cells);
+}
+
+/// The write `cell.f = <expr>` counts as a provably additive fold iff the
+/// field's own cell value is an operand of the OUTERMOST `+`: the text
+/// `<cell>.<f> + …` or `… + <cell>.<f>`. `a.acc + p` qualifies; `a.acc * p`,
+/// `max(a.acc, p)`, and bare `p` do not — `+=`-combining them at the join
+/// would produce a silently wrong cell. Conservative by design: it is a text
+/// check, so anything it cannot see is refused and the refusal teaches the
+/// additive spelling.
+fn isAdditiveCellWrite(expr: []const u8, target: []const u8, field: []const u8) bool {
+    const t = std.mem.trim(u8, expr, " \t\n\r");
+    var head_buf: [256]u8 = undefined;
+    const head = std.fmt.bufPrint(&head_buf, "{s}.{s}", .{ target, field }) catch return false;
+    if (std.mem.startsWith(u8, t, head)) {
+        const rest = std.mem.trimLeft(u8, t[head.len..], " \t");
+        if (rest.len >= 2 and rest[0] == '+' and rest[1] != '+' and rest[1] != '=') return true;
+    }
+    if (std.mem.endsWith(u8, t, head)) {
+        const pre = std.mem.trimRight(u8, t[0 .. t.len - head.len], " \t");
+        if (pre.len >= 2 and pre[pre.len - 1] == '+' and pre[pre.len - 2] != '+' and pre[pre.len - 2] != '=') return true;
+    }
+    return false;
+}
+
+/// `for(lo..hi)` under `[parallel]` splits the range arithmetically — a
+/// 200k-item fold can't afford to materialize N first. Detect a bare `lo..hi`
+/// (the `..` at nesting depth 0); anything else materializes as before.
+fn splitRangeExpr(expr: []const u8) ?struct { lo: []const u8, hi: []const u8 } {
+    const t = std.mem.trim(u8, expr, " \t\n\r");
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i + 1 < t.len) : (i += 1) {
+        switch (t[i]) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => depth -|= 1,
+            '.' => {
+                if (depth == 0 and t[i + 1] == '.' and (i == 0 or t[i - 1] != '.')) {
+                    const lo = std.mem.trim(u8, t[0..i], " \t");
+                    const hi = std.mem.trim(u8, t[i + 2 ..], " \t");
+                    if (lo.len == 0 or hi.len == 0) return null;
+                    return .{ .lo = lo, .hi = hi };
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
 /// Render a `[template]` proc for one invocation, returning the rendered
 /// inline_body (with the inline_stmt marker), or null if the invocation doesn't
 /// resolve to a per-call template proc. Shared by top-level flows and nested
@@ -943,6 +1107,59 @@ pub fn renderTemplateInvocation(
         if (key.len > 0) {
             try ctx.put(key, .{ .string = text });
         }
+    }
+
+    // `__range_lo`/`__range_hi`: a bare `lo..hi` iterable splits by
+    // arithmetic instead of materializing — a fold over N items can't
+    // afford an N-deep buffer. Empty strings for any other expr shape.
+    var par_lo: []const u8 = "";
+    var par_hi: []const u8 = "";
+    if (parallel_text.len > 0) {
+        if (ctx.get("expr")) |v| {
+            if (v == .string) {
+                if (splitRangeExpr(v.string)) |r| {
+                    par_lo = r.lo;
+                    par_hi = r.hi;
+                }
+            }
+        }
+    }
+    try ctx.put("__range_lo", .{ .string = par_lo });
+    try ctx.put("__range_hi", .{ .string = par_hi });
+
+    // `__cells`: the capture cells this scope partitions — one entry per
+    // `.assignment` target found under the effect arms, each carrying the
+    // written fields with a per-field fold-legality flag. Workers fold a
+    // private copy (written fields start at the additive identity, the rest
+    // inherit the fork's value); the join combines written fields with `+=`.
+    // A write that is not provably additive renders as a @compileError at
+    // the site — partitioning without a combine law would silently produce
+    // a wrong cell. Terminal arms are excluded: they run after the join and
+    // write the real cell.
+    {
+        var par_cells = std.StringArrayHashMap(ParallelCellSpec).init(allocator);
+        defer par_cells.deinit();
+        if (parallel_text.len > 0) {
+            for (continuations) |*cont| {
+                if (cont.kind != .effect) continue;
+                try collectParallelCells(allocator, cont, &par_cells);
+            }
+        }
+        const arr = try allocator.alloc(*liquid.Context, par_cells.count());
+        var cell_it = par_cells.iterator();
+        var ci: usize = 0;
+        while (cell_it.next()) |entry| {
+            const c = try allocator.create(liquid.Context);
+            c.* = liquid.Context.init(allocator);
+            // `name`: the worker-local / cap-field name (the assignment's
+            // post-rename target); `real`: the outer cell var.
+            try c.put("name", .{ .string = entry.key_ptr.* });
+            try c.put("real", .{ .string = entry.value_ptr.real });
+            try c.put("fields", .{ .array = try entry.value_ptr.fields.toOwnedSlice(allocator) });
+            arr[ci] = c;
+            ci += 1;
+        }
+        try ctx.put("__cells", .{ .array = arr });
     }
 
     // `binds`: the whole dispatch's binder preamble, emitted once ahead of the

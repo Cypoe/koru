@@ -3433,7 +3433,10 @@ pub const VisitorEmitter = struct {
                                 // local-static struct var gives a shared mutex with
                                 // function-scope naming (per-handler granularity for
                                 // the spike; lockset/module resolution is the next tier).
-                                if (proc.is_threaded_dirty) {
+                                // Recursive dirty procs are exempt: re-entering the
+                                // same non-recursive mutex mid-flight deadlocks (the
+                                // checker flags them is_threaded_recursive).
+                                if (proc.is_threaded_dirty and !proc.is_threaded_recursive) {
                                     try self.code_emitter.writeIndent();
                                     try self.code_emitter.write("const __koru_lockscope = struct { var m: @import(\"std\").Thread.Mutex = .{}; };\n");
                                     try self.code_emitter.writeIndent();

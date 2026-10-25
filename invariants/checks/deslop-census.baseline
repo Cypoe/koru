@@ -189,5 +189,14 @@ members=950
 # #137 at 52 tokens — folding a trim-brace idiom across two modules is
 # not a lift (frag-dedup-is-lift-then-delete). Re-measured on this tree:
 # 846/953.
-clusters=846
-members=953
+# Re-pinned on the [parallel]for partition commit: roll named the standing
+# residuals (emitter_test/visitor_emitter_test scaffolding, requires-fixture
+# twins, cs/js emitter port pairs) — none in this diff. Own delta measured:
+# +0 clusters / +0 members — stashing this commit's src/ edits reproduces
+# the identical census, so the +9/+10 drift over the last pin predates it
+# (accumulated on main between sampled rolls). The named foldable pairs
+# (cs_emitter fn_decl x js_emitter, if_simple x js_emitter) are the
+# per-target dialect duplication the baseline already documents.
+# Re-measured on this tree: 855/963.
+clusters=855
+members=963

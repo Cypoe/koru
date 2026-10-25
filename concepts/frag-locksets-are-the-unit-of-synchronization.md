@@ -44,11 +44,43 @@ nested continuation subtree (the loop body) threaded; ruled 2026-10-24 and
 pinned in parser.zig's "[parallel] lands on a for-invocation's annotations"
 unit test (invocation.annotations, the same slot `[size(16k)]` rides).
 The lowering, ruled 2026-10-24: `[parallel]for` emits a chunk-split driver
-— materialize the range, spawn one `std.Thread` per chunk running the body's
-handlers serially over its slice, join, then `done` runs. Spike limits:
-usize ranges, 8192 buffer cap, fixed 4-way split, no capture partitioning —
-a capture-writing body under `[parallel]` fails to compile until
-partition+combine lands:
+— a bare `lo..hi` range splits arithmetically, anything else materializes
+into a buffer — spawn one `std.Thread` per chunk running the body's
+handlers serially over its share, join, then `done` runs. Spike limits:
+usize ranges, 8192 buffer cap for non-range iterables, fixed 4-way split.
+
+**Capture cells partition, never share — ruled 2026-10-25.** The fold
+idiom `! as a |> [parallel]for(..) / ! each i |> captured { acc: a.acc + p }`
+runs each worker against a *private copy* of the cell: written fields start
+at the additive identity, unwritten fields inherit the fork's value, and
+the join combines written fields into the real cell with `+=`. This is the
+Bend shape — partials per chunk, one combine — and it makes the captured
+write answer "do reads lock" trivially: there is nothing shared to lock.
+Two consequences are part of the ruling, not implementation detail:
+
+- *Combine legality is proved, not assumed.* A `captured` write is legal
+  under `[parallel]` only when the field's own cell value is an operand of
+  the write's outermost `+` (`acc: a.acc + <expr>` or `<expr> + a.acc`).
+  Anything else — `max`, `*`, last-wins — emits a `@compileError` naming
+  the field and the additive spelling. Partition without a combine law is
+  a wrong answer, not a missing feature. Pin: `400_218`.
+- *The worker name is synthesized, never the user's.* Zig's no-shadow rule
+  forbids redeclaring `a` inside a worker fn lexically nested in the flow
+  fn, so `template_processor`'s partition collection retargets the
+  `.assignment` nodes — target and cell references in the RHS alike — to
+  `__koru_parcell_<cell>` and recovers the real name by the prefix.
+  Pin: `400_217` (checksum through real threads). Recursive dirty procs
+  are exempt from the entry lock — re-acquiring their own non-recursive
+  mutex mid-flight deadlocks (`is_threaded_recursive`, checker-flagged);
+  a recursive proc that also writes shared state is a deferred ruling.
+
+Measured: `koru/primes` (fold kernel, `expected.txt` oracle) runs
+checksum-identical under `[parallel]` — 20M range: 3.99s serial vs 1.42s
+parallel wall on a 4-way split. Known gap: the dirty flood only walks
+`proc_decl` items — an event impl written `name = <flow>` never enters
+the call graph, so a shared-state write inside that shape would take no
+lock. The partitioned-capture surface never produces one; the gap matters
+when shared-cell writes arrive.
 
 - nothing declared → module mutex (process-lifetime static, coarse, safe —
   state that races usually lives in the same module's internals);
@@ -106,8 +138,10 @@ is the heavier form.
 
 **Open rulings.**
 
-- Cyclic calls under `@threaded` re-acquire a non-reentrant mutex —
-  refuse with teaching (graph is static) vs recursive mutexes.
+- Cyclic calls under `@threaded`: the spike exempts recursive dirty procs
+  from the entry lock (`is_threaded_recursive`) — deadlock impossible,
+  protection absent. The deferred answer is still open: refuse with
+  teaching vs recursive mutexes vs partition-aware uncoloring.
 - Opaque-pointer escapes exit the lockset's enumerable membership —
   unsafe-boundary residue.
 - norun/transform code is outside the call graph by construction.

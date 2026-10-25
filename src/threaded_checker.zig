@@ -38,13 +38,55 @@ pub const ThreadedChecker = struct {
     }
 
     /// Phase 1: build the call graph. Phase 2: flood dirty forward from
-    /// is_threaded roots to fixpoint.
+    /// is_threaded roots to fixpoint. Phase 3: flag dirty procs that reach
+    /// themselves — a recursive proc re-entering its own non-recursive mutex
+    /// would deadlock, so the emitter exempts it from the entry lock. (A
+    /// recursive proc that ALSO writes shared state is a v1-deferred ruling:
+    /// the partitioned-capture surface never produces one.)
     pub fn check(self: *ThreadedChecker, source: *ast.Program) !void {
         try self.buildCallGraph(source);
         try self.seedParallelScopes(source.items);
         try self.floodDirty(source);
+        try self.markRecursiveDirty(source.items);
         if (std.posix.getenv("KORU_DEBUG_THREADED") != null)
             try self.dumpDirty(source.items);
+    }
+
+    /// DFS each dirty proc through proc→event→impl-proc edges; reaching
+    /// itself flags is_threaded_recursive. Impl procs share their event's
+    /// path — the same resolution dirtyImplsOf uses.
+    fn markRecursiveDirty(self: *ThreadedChecker, items: []const ast.Item) !void {
+        for (items) |*item| {
+            switch (item.*) {
+                .proc_decl => |*proc| {
+                    if (!proc.is_threaded_dirty) continue;
+                    const proc_name = try self.pathToString(proc.path);
+                    var visited = std.StringHashMap(void).init(self.allocator);
+                    defer visited.deinit();
+                    var stack = std.ArrayList([]const u8).initCapacity(self.allocator, 8) catch unreachable;
+                    defer stack.deinit(self.allocator);
+                    if (self.call_graph.get(proc_name)) |ci| {
+                        for (ci.calls.items) |called| try stack.append(self.allocator, called);
+                    }
+                    while (stack.pop()) |node| {
+                        if (visited.contains(node)) continue;
+                        try visited.put(node, {});
+                        if (std.mem.eql(u8, node, proc_name)) {
+                            @constCast(proc).is_threaded_recursive = true;
+                            break;
+                        }
+                        // node is an event name; its impl procs share the path,
+                        // so the proc's own call-graph entry is the next hop.
+                        if (self.call_graph.get(node)) |ci| {
+                            for (ci.calls.items) |called| try stack.append(self.allocator, called);
+                        }
+                    }
+                    self.allocator.free(proc_name);
+                },
+                .module_decl => |*module| try self.markRecursiveDirty(module.items),
+                else => {},
+            }
+        }
     }
 
     /// Seed: a [parallel]-annotated invocation (e.g. `[parallel]for`) marks
