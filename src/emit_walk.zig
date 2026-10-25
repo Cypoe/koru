@@ -102,11 +102,27 @@ fn constructKey(path: *const ast.DottedPath) ![]const u8 {
         for (mq) |ch| try buf.append(a, if (ch == '.') '/' else ch);
         try buf.append(a, ':');
     }
-    for (path.segments, 0..) |seg, i| {
+    try appendDottedSegments(&buf, a, path.segments);
+    return buf.toOwnedSlice(a);
+}
+
+fn appendDottedSegments(buf: *std.ArrayList(u8), a: std.mem.Allocator, segments: []const []const u8) !void {
+    for (segments, 0..) |seg, i| {
         if (i > 0) try buf.append(a, '.');
         try buf.appendSlice(a, seg);
     }
-    return buf.toOwnedSlice(a);
+}
+
+/// `module:seg.seg` — the canonical event key the lanes' proc/impl
+/// indexes and stub texts share. Generic path serialization, not a
+/// spelling question, so the walk owns it.
+pub fn pathKey(allocator: std.mem.Allocator, path: ast.DottedPath) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    if (path.module_qualifier) |mq| try buf.appendSlice(allocator, mq);
+    try buf.append(allocator, ':');
+    try appendDottedSegments(&buf, allocator, path.segments);
+    return buf.toOwnedSlice(allocator);
 }
 
 /// The construct-row positive check, scoped to the row's own vocabulary:
@@ -304,6 +320,14 @@ pub const CDeclWriter = struct {
     manglePath: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.DottedPath) ?[]const u8,
     /// The bound input parameter's spelling (`__koru_in` on the oracle).
     inputParam: []const u8 = "__koru_in",
+    // -- definition-body slots (null on a decl-only writer) -------------
+    /// The event's `|c` proc body text — null when no proc declares one.
+    procBody: ?*const fn (ctx: ?*anyopaque, event: *const ast.EventDecl) ?[]const u8 = null,
+    /// Immediate `->` impl — renders its produce; false = none declared.
+    renderImmediateImpl: ?*const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl) anyerror!bool = null,
+    /// Subflow impl — renders the impl flow's body; false = none
+    /// declared; a `!=1` impls refusal rides anyerror through.
+    renderImplFlow: ?*const fn (ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl) anyerror!bool = null,
 };
 
 fn writeInStruct(
@@ -416,6 +440,86 @@ fn writeTaggedResultDecl(
         try out.print(allocator, "    {s} {s};\n", .{ ptype, codegen_utils.cPayloadMember(allocator, b.name) });
     }
     try out.appendSlice(allocator, "};\n");
+}
+
+/// `const <ct> <f> = __koru_in.<f>;` per input field — the binding
+/// convention, grammar plus spelling answers. The oracle's version also
+/// registers `int_bindings` for later passes; during dual-answer that
+/// side effect rides the oracle — the walk only renders text.
+fn writeFieldBindings(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    w: *const CDeclWriter,
+    event: *const ast.EventDecl,
+) error{OutOfMemory, UnsupportedConstruct}!void {
+    for (event.input.fields) |f| {
+        const cm = w.memberName(w.ctx, allocator, f.name);
+        if (codegen_utils.cArrayType(f.type, w.typeOf, w.ctx)) |at| {
+            try out.print(allocator, "    {s} = {s}.{s};\n", .{ codegen_utils.cArrayPtrDecl(allocator, at, cm), w.inputParam, cm });
+            continue;
+        }
+        const ct = w.typeOf(w.ctx, f.type) orelse return error.UnsupportedConstruct;
+        try out.print(allocator, "    {s} const {s} = {s}.{s};\n", .{ ct, cm, w.inputParam, cm });
+    }
+}
+
+/// One event DEFINITION — signature plus body. The check order is the
+/// oracle's own, not declShape's: stub def → effect events emit no
+/// function at all (a `|c` proc must exist or it is NoCProcBody) →
+/// wildcard input refuses → signature + impl resolution. Impl order is
+/// the agnostic rule: |c proc > immediate `->` > subflow impl (exactly
+/// one) > refuse.
+pub fn writeEventDef(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    event: *const ast.EventDecl,
+    w: *const CDeclWriter,
+) anyerror!void {
+    const name = w.manglePath(w.ctx, allocator, event.path) orelse return error.UnsupportedConstruct;
+    if (declStub(event)) {
+        try out.print(allocator, "static void {s}(void) {{\n", .{name});
+        try out.print(allocator, "    __koru_unreachable(\"{s}: transform/comptime tor invoked on the C lane\");\n}}\n\n", .{try pathKey(allocator, event.path)});
+        return;
+    }
+    // `!` events are never C functions — their `|c` body is per-call-site
+    // inline text. Decl yes, call never; a `!` event without a |c proc
+    // body is the lane's NoCProcBody refusal.
+    if (hasEffectBranch(event)) {
+        const proc = (w.procBody orelse return error.NoCProcBody)(w.ctx, event);
+        if (proc == null) return error.NoCProcBody;
+        return;
+    }
+    if (event.input.is_wildcard) return error.UnsupportedConstruct;
+    const ret = if (event.branches.len > 0)
+        try std.fmt.allocPrint(allocator, "struct {s}_res", .{name})
+    else if (event.return_type) |rt|
+        w.typeOf(w.ctx, rt) orelse return error.UnsupportedConstruct
+    else
+        "void";
+    try out.print(allocator, "static {s} {s}(", .{ ret, name });
+    try writeInParam(out, allocator, w, event, name);
+    try out.appendSlice(allocator, ") {\n");
+    try writeFieldBindings(out, allocator, w, event);
+    if (w.procBody) |pb| {
+        if (pb(w.ctx, event)) |text| {
+            try out.appendSlice(allocator, text);
+            try out.appendSlice(allocator, "\n}\n\n");
+            return;
+        }
+    }
+    if (w.renderImmediateImpl) |ri| {
+        if (try ri(w.ctx, out, event)) {
+            try out.appendSlice(allocator, "}\n\n");
+            return;
+        }
+    }
+    if (w.renderImplFlow) |rf| {
+        if (try rf(w.ctx, out, event)) {
+            try out.appendSlice(allocator, "}\n\n");
+            return;
+        }
+    }
+    return error.NoCProcBody;
 }
 
 /// One event declaration — `struct <n>_in`, tagged-result decl, forward

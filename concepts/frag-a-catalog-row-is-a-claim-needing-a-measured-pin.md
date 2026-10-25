@@ -80,3 +80,21 @@ hole, `__type_ref` unwrap, mixed-payload refusal) intact, and the
 writer slot collapsed to `typeOf`/`memberName`/`manglePath`. When a
 slot turns out to hold only sequencing, the honest move is to delete
 the slot, not template it.
+
+The event *definition* path then corrected a lazy assumption: the def
+check order is not `declShape`'s — effect events return before the
+wildcard check (a `!` event emits no function at all, and missing `|c`
+proc is `NoCProcBody`, not a decl refusal), and body availability, not
+declared shape, drives the path. The impl-resolution cascade
+(`|c` proc > immediate `->` > exactly-one subflow > refuse) is agnostic
+sequencing over lane-owned lookups, so the writer gained a second slot
+kind: not a spelling answer but an *operation* that answers "does this
+impl path exist" and renders it when it does (`renderImplFlow` rides
+the oracle's `!=1` impls refusal through anyerror). And the rung
+measured a subtler requirement of dual-answer itself: the oracle's
+render is not a pure function of the event — it mints `__koru_res_N`
+off `res_counter`, so the walk compared against a counter the oracle
+had already advanced and "drifted" on `res_1` vs `res_2` alone.
+Dual-answer is state isolation, not byte compare: snapshot the minting
+state, render both against it, keep the oracle's end state for
+downstream emission.

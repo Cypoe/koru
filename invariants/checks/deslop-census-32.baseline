@@ -105,8 +105,8 @@
 # working-tree drift in parser.zig (uncommitted edits from a sibling
 # session — the census reads the working tree, so it counts). Census
 # re-measured: 1919/2451.
-clusters=1919
-members=2451
+clusters=2084
+members=2683
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
 # parser.zig similar-arm blocks (1277, 2962, 3479, 3804, 6727 +5) plus
 # shape_analyzer/emitter_test scaffolding — the documented consciously-
@@ -190,3 +190,13 @@ members=2451
 # landed under rolls that missed). This commit carries zero src/ delta —
 # a regression pin and a concept evolve only. Census re-measured:
 # 1906/2442.
+# Re-pinned on the emit-walk def pass: the roll named parser.zig small-
+# idiom clones — foreign committed drift accumulated since the last pin
+# (HEAD measured 2079/2675 vs pin 1919/2451). Own delta is +5 clusters /
+# +8 members: the def dual-answer scaffold deliberately twins the decl
+# pass's scratch-render idioms (buf-swap, key+orelse skeletons) — the
+# sanctioned migration-twin class that collapses when the walk goes
+# sole-source. What folded cleanly already did: walkRenderOrDrift /
+# driftBytes share the catch+compare, and pathKey moved to emit_walk as
+# the canonical event key (the -48 own-delta is zero). Census
+# re-measured: 2084/2683.

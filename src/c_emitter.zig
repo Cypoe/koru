@@ -57,17 +57,7 @@ const INPUT_PARAM = "__koru_in";
 
 /// Canonical lookup key for a dotted path: `"std.io:print.ln"`.
 fn pathKey(allocator: std.mem.Allocator, path: ast.DottedPath) ![]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    if (path.module_qualifier) |mq| {
-        try buf.appendSlice(allocator, mq);
-    }
-    try buf.append(allocator, ':');
-    for (path.segments, 0..) |seg, i| {
-        if (i > 0) try buf.append(allocator, '.');
-        try buf.appendSlice(allocator, seg);
-    }
-    return buf.toOwnedSlice(allocator);
+    return emit_walk.pathKey(allocator, path);
 }
 
 /// C identifier for an event/function — module-qualified by construction so
@@ -326,6 +316,44 @@ fn cDeclMemberName(ctx: ?*anyopaque, allocator: std.mem.Allocator, name: []const
 fn cDeclManglePath(ctx: ?*anyopaque, allocator: std.mem.Allocator, path: ast.DottedPath) ?[]const u8 {
     _ = ctx;
     return mangle(allocator, path) catch null;
+}
+
+// The definition-body slots — the same emitter internals, reached through
+// the walk's vtable. Each swaps em.buf so the lane-owned body machinery
+// renders into the walk's buffer untouched.
+fn cDefProcBody(ctx: ?*anyopaque, event: *const ast.EventDecl) ?[]const u8 {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return null));
+    const key = pathKey(em.allocator, event.path) catch return null;
+    defer em.allocator.free(key);
+    const p = em.cProcOf(key) orelse return null;
+    return p.body.text;
+}
+
+fn cDefImmediateImpl(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl) anyerror!bool {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return false));
+    const key = try pathKey(em.allocator, event.path);
+    defer em.allocator.free(key);
+    const ii = em.impls.get(key) orelse return false;
+    const saved = em.buf;
+    em.buf = out;
+    defer em.buf = saved;
+    try em.emitProduce(&ii.value, "    ");
+    return true;
+}
+
+fn cDefImplFlow(ctx: ?*anyopaque, out: *std.ArrayList(u8), event: *const ast.EventDecl) anyerror!bool {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return false));
+    const key = try pathKey(em.allocator, event.path);
+    defer em.allocator.free(key);
+    const flist = em.impl_flows.get(key) orelse return false;
+    // `!=1` impls is the oracle's variant-selection refusal — the same
+    // error rides the slot.
+    if (flist.items.len != 1) return CEmitError.UnsupportedConstruct;
+    const saved = em.buf;
+    em.buf = out;
+    defer em.buf = saved;
+    try em.emitImplFlowBody(flist.items[0]);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +824,9 @@ const Emitter = struct {
         .typeOf = cDeclTypeOf,
         .memberName = cDeclMemberName,
         .manglePath = cDeclManglePath,
+        .procBody = cDefProcBody,
+        .renderImmediateImpl = cDefImmediateImpl,
+        .renderImplFlow = cDefImplFlow,
     },
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,
@@ -1336,27 +1367,7 @@ self.checkCatalogFragment("missing-target-proc-body");
                 return CEmitError.UnsupportedConstruct;
             }
             try self.emitFieldBindings(event);
-            // An impl flow carries transform output the same way a top-level
-            // flow does: `flow.inline_body` — the print family's reroute lands
-            // here too, and emitSite alone would miss it and call the [norun]
-            // stub. Splice like emitFlow does, continuations resolved.
-            const implf = flist.items[0];
-            // A `//@koru:stmt_scope` preamble (~capture) is fn-local and the
-            // head call is consumed — emit it here, then walk only the
-            // dissolved continuations. A file-scope preamble on an impl is
-            // still dropped — const|c has no impl author today.
-            if (if (implf.preamble_code) |pre| stripStmtScopeMarker(pre) else null) |sp| {
-                try self.emitCapPreamble(sp, "    ");
-                try self.emitUnconsumedContinuations(implf.body.continuations, 0, "    ", .in_impl);
-            } else if (implf.inline_body) |body| {
-                if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
-                    var consumed: u64 = 0;
-                    try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), implf.body.continuations, "    ", .in_impl, &consumed);
-                    try self.emitUnconsumedContinuations(implf.body.continuations, consumed, "    ", .in_impl);
-                }
-            } else {
-                try self.emitSite(&implf.body, "    ", .in_impl);
-            }
+            try self.emitImplFlowBody(flist.items[0]);
             try self.write("}\n\n");
             return;
         }
@@ -1364,6 +1375,30 @@ self.checkCatalogFragment("missing-target-proc-body");
         self.checkCatalogFragment("missing-target-proc-body");
             self.checkCatalogConstruct(key);
         return CEmitError.NoCProcBody;
+    }
+
+    /// An impl flow's body — `flow.inline_body` is transform output the
+    /// same way a top-level flow's is (the print family's reroute lands
+    /// here too, and emitSite alone would miss it and call the [norun]
+    /// stub). Splice like emitFlow does, continuations resolved. A
+    /// `//@koru:stmt_scope` preamble (~capture) is fn-local and the head
+    /// call is consumed — emit it, then walk only dissolved continuations.
+    /// A file-scope preamble on an impl is still dropped — const|c has no
+    /// impl author today. The impl-resolution path and the walk's
+    /// write-stage adapter share this — one cascade, one truth.
+    fn emitImplFlowBody(self: *Emitter, implf: *const ast.Flow) CEmitError!void {
+        if (if (implf.preamble_code) |pre| stripStmtScopeMarker(pre) else null) |sp| {
+            try self.emitCapPreamble(sp, "    ");
+            try self.emitUnconsumedContinuations(implf.body.continuations, 0, "    ", .in_impl);
+        } else if (implf.inline_body) |body| {
+            if (stripFileScopeMarker(stripInlineStmtMarker(body)) == null) {
+                var consumed: u64 = 0;
+                try self.emitInlineBodyResolvingContinuations(stripInlineStmtMarker(body), implf.body.continuations, "    ", .in_impl, &consumed);
+                try self.emitUnconsumedContinuations(implf.body.continuations, consumed, "    ", .in_impl);
+            }
+        } else {
+            try self.emitSite(&implf.body, "    ", .in_impl);
+        }
     }
 
     fn findBranch(event: *const ast.EventDecl, name: []const u8) ?*const ast.Branch {
@@ -3240,6 +3275,49 @@ fn rewriteSliceAccessors(
     }
 }
 
+/// Dual-answer scaffolding, shared by the decl and def passes: run the
+/// walk's render beside the oracle's — a walk-side refusal is drift
+/// (the oracle's text is what emits), and the label names which pass
+/// asked.
+fn walkRenderOrDrift(
+    comptime label: []const u8,
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    event: *const ast.EventDecl,
+    w: *const emit_walk.CDeclWriter,
+    comptime render: fn (*std.ArrayList(u8), std.mem.Allocator, *const ast.EventDecl, *const emit_walk.CDeclWriter) anyerror!void,
+) bool {
+    render(out, allocator, event, w) catch |e| {
+        const key = pathKey(allocator, event.path) catch "?";
+        driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` errored {s} (oracle wins)\n", .{ key, @errorName(e) });
+        return false;
+    };
+    return true;
+}
+
+/// Byte-compare the walk's render against the oracle's; a mismatch is
+/// drift and both texts land beside `catalog_drift.log` so the
+/// divergence is inspectable without rerunning.
+fn driftBytes(
+    comptime label: []const u8,
+    allocator: std.mem.Allocator,
+    event: *const ast.EventDecl,
+    oracle_bytes: []const u8,
+    walk_bytes: []const u8,
+) void {
+    if (std.mem.eql(u8, oracle_bytes, walk_bytes)) return;
+    const key = pathKey(allocator, event.path) catch "?";
+    driftLog("std/target drift: emit-walk " ++ label ++ " `{s}` bytes differ (oracle wins)\n", .{key});
+    const oname = std.fmt.allocPrint(allocator, "drift_oracle_{s}.c", .{std.fs.path.basename(key)}) catch null;
+    const wname = std.fmt.allocPrint(allocator, "drift_walk_{s}.c", .{std.fs.path.basename(key)}) catch null;
+    if (oname) |n| {
+        std.fs.cwd().writeFile(.{ .sub_path = n, .data = oracle_bytes }) catch {};
+    }
+    if (wname) |n| {
+        std.fs.cwd().writeFile(.{ .sub_path = n, .data = walk_bytes }) catch {};
+    }
+}
+
 pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: bool) CEmitError![]const u8 {
     if (library) {
         std.debug.print("error[KORU047]: C lane: --library emission is outside the first fragment\n", .{});
@@ -3459,21 +3537,36 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
         }
         var walkbuf: std.ArrayList(u8) = .empty;
         defer walkbuf.deinit(allocator);
-        var walk_ok = true;
-        emit_walk.writeEventDecl(&walkbuf, allocator, event, &em.decl_writer) catch |e| {
-            walk_ok = false;
-            const key = pathKey(allocator, event.path) catch "?";
-            driftLog("std/target drift: emit-walk decl `{s}` errored {s} (oracle wins)\n", .{ key, @errorName(e) });
-        };
-        if (walk_ok and !std.mem.eql(u8, oracle.items, walkbuf.items)) {
-            const key = pathKey(allocator, event.path) catch "?";
-            driftLog("std/target drift: emit-walk decl `{s}` bytes differ (oracle wins)\n", .{key});
-        }
+        const walk_ok = walkRenderOrDrift("decl", &walkbuf, allocator, event, &em.decl_writer, emit_walk.writeEventDecl);
+        if (walk_ok) driftBytes("decl", allocator, event, oracle.items, walkbuf.items);
         try em.write(oracle.items);
     }
     try em.write("\n");
     for (reached_events.items) |event| {
-        try em.emitEventDecl(event);
+        // Same dual-answer as the declaration pass: the walk renders the
+        // definition (signature + impl-resolution body) beside the
+        // oracle's — a mismatch or walk-side refusal is drift, the
+        // oracle's text is what emits.
+        var oracle_def: std.ArrayList(u8) = .empty;
+        defer oracle_def.deinit(allocator);
+        // Body rendering mints `__koru_res_N` off `res_counter`: the walk must
+        // render against the counter state the oracle saw, and downstream defs
+        // must keep the numbering the oracle's single render produced.
+        const rc_saved = em.res_counter;
+        {
+            const saved = em.buf;
+            em.buf = &oracle_def;
+            try em.emitEventDecl(event);
+            em.buf = saved;
+        }
+        const rc_oracle_end = em.res_counter;
+        em.res_counter = rc_saved;
+        var walkbuf_def: std.ArrayList(u8) = .empty;
+        defer walkbuf_def.deinit(allocator);
+        const walk_def_ok = walkRenderOrDrift("def", &walkbuf_def, allocator, event, &em.decl_writer, emit_walk.writeEventDef);
+        if (walk_def_ok) driftBytes("def", allocator, event, oracle_def.items, walkbuf_def.items);
+        em.res_counter = rc_oracle_end;
+        try em.write(oracle_def.items);
     }
 
     // Top-level flows → flow functions + one main driving them in order.
