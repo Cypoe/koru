@@ -127,8 +127,20 @@
 # containsTokenLocal port pair) and emitter_test test_decl scaffolding.
 # Growth landed between re-pins — committed src/ drift from the
 # cells/nodes and board commits — not in this diff.
-clusters=842
-members=945
+# Re-pinned 842/945 -> 912/1033 (2026-10-25): the roll fired on the
+# std/emit provenance commit — zero src/ files staged (koru_std
+# transforms + catalog + one concept). This session's own src/ files
+# (emit_walk.zig new, codegen_utils.zig edits) appear nowhere in the
+# census. The named offenders are the documented classes: the
+# continuation_codegen:300-329 x emitter_helpers:7223-7252 fn_decl twin
+# (intentional port pair), emitter_test/visitor_emitter_test
+# test_decl + simple_var_decl scaffolding, package_requires/
+# compiler_requires fixture ASTs, phantom_semantic_checker test items.
+# The +70/+88 is committed src/ drift landed between re-pins — the
+# largest single jump on this pin, worth a deslop sweep of its own —
+# not this diff.
+clusters=912
+members=1033
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
 # named containsTokenLocal x containsToken (continuation_codegen /
 # emitter_helpers) and an emitter_test test_decl pair — none of those

@@ -118,6 +118,10 @@ const QTail = struct {
             .path = H.mkPathH(alloc, home_ns, srun_name),
             .args = cap.args,
             .source_module = alloc.dupe(u8, flow.module) catch unreachable,
+            // @from_construct — the ruled provenance mark (e13ec1845): internal,
+            // never authorable surface syntax; backed by the "supported"
+            // row measured on the C lane (690_070, 690_075).
+            .marks = &.{"@from_construct(\"std/store:query\")"},
         };
         return .{ .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(srun_inv, tail, flow.location),

@@ -37,6 +37,11 @@ const PTail = struct {
         const sweep_inv = ast.Invocation{
             .path = H.mkPathH(alloc, home_ns, qsweep_name),
             .args = &[_]ast.Arg{},
+            // @from_construct — the ruled provenance mark (e13ec1845): internal,
+            // never authorable surface syntax. DORMANT by design: no
+            // C-pinned test exercises preorder yet, so the catalog
+            // carries no "supported" row — provenance, not a claim.
+            .marks = &.{"@from_construct(\"std/store:preorder\")"},
         };
         return .{ .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(sweep_inv, tail.items, flow.location),

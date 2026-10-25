@@ -55,6 +55,11 @@
     const stripe_inv = ast.Invocation{
         .path = H.mkPathH(allocator, home_ns, stripe_name),
         .args = &[_]ast.Arg{},
+        // @from_construct — the ruled provenance mark (e13ec1845): internal,
+        // never authorable surface syntax. DORMANT by design: no
+        // C-pinned test exercises stripe yet, so the catalog carries
+        // no "supported" row — provenance without a support claim.
+        .marks = &.{"@from_construct(\"std/store:stripe\")"},
     };
     // The chain tail joins the rewritten call (690_028's `stored` contract):
     // `stripe(s) |> tail` runs the tail after the sweep, never swallows it.

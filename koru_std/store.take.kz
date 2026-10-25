@@ -107,6 +107,10 @@
     const call_inv = ast.Invocation{
         .path = H.mkPathH(allocator, home_ns, take_name),
         .args = call_args,
+        // @from_construct — the ruled provenance mark (e13ec1845): internal,
+        // never authorable surface syntax; this stamp is backed by the
+        // "supported" row measured on the C lane (690_070).
+        .marks = &.{"@from_construct(\"std/store:take\")"},
     };
 
     // The take site is usually NESTED (under insert's `| row r`); its own

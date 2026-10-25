@@ -220,6 +220,11 @@ pub const Catalog = struct {
 // `#include <x>` and `static ... __koru_<name>(` definition reaching
 // output must appear here — the emitted set is a subset of the
 // declared set, never the other way.
+// Helper rows name what the emitted C actually contains — the four
+// `__koru_*_items` helpers are minted by the take/query sweep paths and
+// were caught undeclared by the drift artifact on 690_070; they are
+// declared here because they legitimately emit, not to hide the check.
+
 ~std/target:prelude(c) {
     "includes": ["stdio.h", "stdlib.h", "string.h", "stdint.h", "stdbool.h", "errno.h"],
     "helpers": [
@@ -239,7 +244,11 @@ pub const Catalog = struct {
         "__koru_intcast",
         "__koru_intcast_u",
         "__koru_max_ll",
-        "__koru_min_ll"
+        "__koru_min_ll",
+        "__koru_materialize_items",
+        "__koru_row_of_items",
+        "__koru_handle_of_items",
+        "__koru_resolve_items"
     ],
     "state": [
         "__koru_argc",
@@ -268,13 +277,22 @@ pub const Catalog = struct {
 // is the one its positive check can answer. (Rows are a strict JSON map —
 // no comments inside the braces or the whole family silently voids.)
 
+// Store verb rows are each backed by a measured C pin, not asserted:
+// insert 690_011/022/043 · query 690_070/075 · rule 690_336 (drain-sweep
+// pin) · stored 690_001/010 · take 690_070 · watch 690_001. stripe and
+// preorder carry @from_construct stamps but deliberately NO row — no
+// C-pinned test exercises them yet.
+
 ~std/target:construct(c) {
     "std/io:print.ln": "supported",
     "std/io:eprint.ln": "supported",
     "std/io:print.impl": "supported",
     "std/store:new": "supported",
     "std/store:insert": "supported",
+    "std/store:query": "supported",
+    "std/store:rule": "supported",
     "std/store:stored": "supported",
+    "std/store:take": "supported",
     "std/store:watch": "supported",
     "std/switch:char": "supported"
 }
