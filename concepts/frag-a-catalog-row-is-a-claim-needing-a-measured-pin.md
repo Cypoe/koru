@@ -51,3 +51,13 @@ builtins still hit the arms unchanged; an absent catalog disables the
 whole consult. The delegation shape matters: `rule:as` declares *that* an
 arm owns `@as`, not *what* it emits — bounds checks stay semantic, not
 spelling.
+
+The `prelude(c)` family then took the same shape one level up: `defs`
+rows carry the emitted text verbatim and the object walk is
+insertion-ordered, so declared order IS emit order — the catalog is the
+preamble's sole source (the literal stays only as the absent-catalog
+fallback, verified byte-identical). A `"minted"` value is the third
+shape: declared coverage with no fixed text, for the
+`__koru_*_<store>` helper families parameterized by names the catalog
+cannot know. Text and coverage are different claim kinds and the row
+says which it makes.

@@ -228,36 +228,34 @@ pub const Catalog = struct {
 
 ~std/target:prelude(c) {
     "includes": ["stdio.h", "stdlib.h", "string.h", "stdint.h", "stdbool.h", "errno.h"],
-    "helpers": [
-        "__koru_concat",
-        "__koru_stdout_write",
-        "__koru_stderr_write",
-        "__koru_len_str",
-        "__koru_streq",
-        "__koru_str_i64",
-        "__koru_stdout_write_i64",
-        "__koru_stderr_write_i64",
-        "__koru_stdout_write_f64",
-        "__koru_stderr_write_f64",
-        "__koru_stdout_write_f64_prec",
-        "__koru_stderr_write_f64_prec",
-        "__koru_unreachable",
-        "__koru_intcast",
-        "__koru_intcast_u",
-        "__koru_max_ll",
-        "__koru_min_ll",
-        "__koru_materialize_*",
-        "__koru_row_of_*",
-        "__koru_handle_of_*",
-        "__koru_resolve_*"
-    ],
-    "state": [
-        "__koru_argc",
-        "__koru_argv",
-        "__koru_readln_buf",
-        "__koru_comptime_Expression",
-        "__koru_comptime_Source"
-    ]
+    "defs": {
+        "__koru_concat": "static char *__koru_concat(const char *a, const char *b) {\n    size_t la = strlen(a), lb = strlen(b);\n    char *r = (char *)malloc(la + lb + 1);\n    if (!r) { fputs(\"koru: out of memory\\n\", stderr); abort(); }\n    memcpy(r, a, la);\n    memcpy(r + la, b, lb + 1);\n    return r;\n}",
+        "__koru_stdout_write": "static void __koru_stdout_write(const char *s) { fputs(s, stdout); }",
+        "__koru_stderr_write": "static void __koru_stderr_write(const char *s) { fputs(s, stderr); }",
+        "__koru_len_str": "static long long __koru_len_str(const char *s) { return (long long)strlen(s); }",
+        "__koru_streq": "static int __koru_streq(const char *a, const char *b) { return strcmp(a, b) == 0; }",
+        "__koru_str_i64": "static char *__koru_str_i64(long long v) {\n    char buf[32];\n    snprintf(buf, sizeof buf, \"%lld\", v);\n    return __koru_concat(buf, \"\");\n}",
+        "__koru_stdout_write_i64": "static void __koru_stdout_write_i64(long long v) { printf(\"%lld\", v); }",
+        "__koru_stderr_write_i64": "static void __koru_stderr_write_i64(long long v) { fprintf(stderr, \"%lld\", v); }",
+        "__koru_stdout_write_f64": "static void __koru_stdout_write_f64(double v) { printf(\"%g\", v); }",
+        "__koru_stderr_write_f64": "static void __koru_stderr_write_f64(double v) { fprintf(stderr, \"%g\", v); }",
+        "__koru_stdout_write_f64_prec": "static void __koru_stdout_write_f64_prec(double v, int prec) { printf(\"%.*f\", prec, v); }",
+        "__koru_stderr_write_f64_prec": "static void __koru_stderr_write_f64_prec(double v, int prec) { fprintf(stderr, \"%.*f\", prec, v); }",
+        "__koru_argc": "static int __koru_argc;",
+        "__koru_argv": "static char **__koru_argv;",
+        "__koru_readln_buf": "static char __koru_readln_buf[8192];",
+        "__koru_comptime_Expression": "struct __koru_comptime_Expression { char __koru_comptime; };",
+        "__koru_comptime_Source": "struct __koru_comptime_Source { char __koru_comptime; };",
+        "__koru_unreachable": "static _Noreturn void __koru_unreachable(const char *what) {\n    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)\n    fprintf(stderr, \"koru: %s\\n\", what);\n    abort();\n}",
+        "__koru_intcast": "static long long __koru_intcast(long long v, long long lo, long long hi) {\n    if (v < lo || v > hi) __koru_unreachable(\"@intCast out of range\");\n    return v;\n}",
+        "__koru_intcast_u": "static unsigned long long __koru_intcast_u(unsigned long long v, unsigned long long lo, unsigned long long hi) {\n    if (v < lo || v > hi) __koru_unreachable(\"@intCast out of range\");\n    return v;\n}",
+        "__koru_max_ll": "static long long __koru_max_ll(long long a, long long b) { return a > b ? a : b; }",
+        "__koru_min_ll": "static long long __koru_min_ll(long long a, long long b) { return a < b ? a : b; }",
+        "__koru_materialize_*": "minted",
+        "__koru_row_of_*": "minted",
+        "__koru_handle_of_*": "minted",
+        "__koru_resolve_*": "minted"
+    }
 }
 
 // ============================================================================

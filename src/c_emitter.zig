@@ -127,15 +127,14 @@ fn mangleOpaqueName(allocator: std.mem.Allocator, text: []const u8) ?[]const u8 
 // ---------------------------------------------------------------------------
 
 /// Harvest `~std/target:<verb>(c)` site rows out of `koru_std/target.kz`.
-/// The catalog is compiler-owned data, not user content — the backend
-/// parses the file directly rather than demanding a program import.
-/// Returns null when the file or env is absent: dual-answer is advisory,
-/// a missing catalog never breaks emission. Rows are JSON-shaped objects
-/// (`{ "i64": "long long", ... }`); non-string values are skipped.
-fn loadTargetRows(
+/// Collect the raw `source` texts of every `std/target:<verb>(c)` flow,
+/// in declared order — the shared walk for the flat-row harvester and
+/// the ordered prelude loader. Null = catalog file absent/unparseable:
+/// dual-answer is advisory, a missing catalog never breaks emission.
+fn loadTargetSources(
     allocator: std.mem.Allocator,
     verb: []const u8,
-) ?std.StringHashMap([]const u8) {
+) ?[][]const u8 {
     const home = compiler_env.CompilerEnv.koru_home;
     if (home.len == 0) {
         std.debug.print("std/target catalog: koru_home empty\n", .{});
@@ -156,7 +155,7 @@ fn loadTargetRows(
         std.debug.print("std/target catalog: parse {s}: {s}\n", .{ path, @errorName(e) });
         return null;
     };
-    var table = std.StringHashMap([]const u8).init(allocator);
+    var sources: std.ArrayList([]const u8) = .empty;
     for (result.source_file.items) |*item| {
         if (item.* != .flow) continue;
         const inv = item.flow.inv();
@@ -176,6 +175,20 @@ fn loadTargetRows(
         }
         if (!is_c) continue;
         const src = source_text orelse continue;
+        sources.append(allocator, src) catch continue;
+    }
+    return sources.toOwnedSlice(allocator) catch null;
+}
+
+/// Rows are JSON-shaped objects (`{ "i64": "long long", ... }`);
+/// non-string values are skipped.
+fn loadTargetRows(
+    allocator: std.mem.Allocator,
+    verb: []const u8,
+) ?std.StringHashMap([]const u8) {
+    const sources = loadTargetSources(allocator, verb) orelse return null;
+    var table = std.StringHashMap([]const u8).init(allocator);
+    for (sources) |src| {
         const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return table;
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch |e| {
             // A malformed row block must not silently void the family —
@@ -211,6 +224,68 @@ fn loadTargetRows(
     }
     std.debug.print("std/target catalog: `{s}` rows harvested: {d}\n", .{ verb, table.count() });
     return table;
+}
+
+/// One prelude def row — `text` null marks a minted family (declared
+/// coverage, no fixed text: the `__koru_*_<store>` helpers the take/query
+/// sweeps mint per store name). Rows whose value is `"minted"` declare
+/// that shape; anything else is verbatim def text, emitted in declared
+/// order (the JSON object walk is insertion-ordered).
+const PreludeDef = struct { name: []const u8, text: ?[]const u8 };
+const PreludeRows = struct {
+    includes: [][]const u8,
+    defs: []PreludeDef,
+};
+
+/// The prelude family, ordered and text-carrying: `includes` names render
+/// as `#include <x>` lines, `defs` render verbatim in row order. This is
+/// the catalog-as-sole-source shape — the preamble's text lives in the
+/// rows; the emitter only sequences them.
+fn loadPreludeRows(allocator: std.mem.Allocator) ?PreludeRows {
+    const sources = loadTargetSources(allocator, "prelude") orelse return null;
+    var includes: std.ArrayList([]const u8) = .empty;
+    var defs: std.ArrayList(PreludeDef) = .empty;
+    for (sources) |src| {
+        const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return null;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch |e| {
+            std.debug.print("std/target catalog: `prelude` row block failed to parse: {s}\n", .{@errorName(e)});
+            continue;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        var it = parsed.value.object.iterator();
+        while (it.next()) |e| {
+            const key = e.key_ptr.*;
+            switch (e.value_ptr.*) {
+                .array => |arr| {
+                    if (!std.mem.eql(u8, key, "includes")) continue;
+                    for (arr.items) |elem| {
+                        if (elem != .string) continue;
+                        includes.append(allocator, allocator.dupe(u8, elem.string) catch continue) catch {};
+                    }
+                },
+                .object => |obj| {
+                    if (!std.mem.eql(u8, key, "defs")) continue;
+                    var dit = obj.iterator();
+                    while (dit.next()) |de| {
+                        if (de.value_ptr.* != .string) continue;
+                        const name = allocator.dupe(u8, de.key_ptr.*) catch continue;
+                        const val = de.value_ptr.string;
+                        defs.append(allocator, .{
+                            .name = name,
+                            .text = if (std.mem.eql(u8, val, "minted")) null else allocator.dupe(u8, val) catch null,
+                        }) catch {};
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    std.debug.print("std/target catalog: `prelude` rows harvested: {d} includes, {d} defs\n", .{ includes.items.len, defs.items.len });
+    return .{
+        .includes = includes.toOwnedSlice(allocator) catch return null,
+        .defs = defs.toOwnedSlice(allocator) catch return null,
+    };
 }
 
 /// The LowerDiag/cArrayType resolver shape — hands the emitter's
@@ -695,6 +770,9 @@ const Emitter = struct {
     catalog_names: ?std.StringHashMap([]const u8) = null,
     catalog_builtins: ?std.StringHashMap([]const u8) = null,
     catalog_prelude: ?std.StringHashMap([]const u8) = null,
+    /// The prelude family, ordered + text-carrying — sole source of the
+    /// emitted preamble when loaded (defs render in row order).
+    prelude_rows: ?PreludeRows = null,
     catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_constructs: ?std.StringHashMap([]const u8) = null,
     catalog_loaded: bool = false,
@@ -759,7 +837,17 @@ const Emitter = struct {
         self.catalog_types = loadTargetRows(self.allocator, "type");
         self.catalog_names = loadTargetRows(self.allocator, "name");
         self.catalog_builtins = loadTargetRows(self.allocator, "builtin");
-        self.catalog_prelude = loadTargetRows(self.allocator, "prelude");
+        // One parse, two views: ordered defs for emission, a flat
+        // membership map (include names + def keys) for the coverage
+        // check. Absent rows → both stay null → advisory-off, like the
+        // other families.
+        if (loadPreludeRows(self.allocator)) |pr| {
+            self.prelude_rows = pr;
+            var membership = std.StringHashMap([]const u8).init(self.allocator);
+            for (pr.includes) |inc| membership.put(inc, "includes") catch {};
+            for (pr.defs) |d| membership.put(d.name, "defs") catch {};
+            self.catalog_prelude = membership;
+        }
         self.catalog_fragment = loadTargetRows(self.allocator, "fragment");
         self.catalog_constructs = loadTargetRows(self.allocator, "construct");
     }
@@ -3213,60 +3301,75 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     };
 
     // Preamble — includes plus the runtime surface the lowering and the |c
-    // transforms write against.
-    try em.write(
-        \\#include <stdio.h>
-        \\#include <stdlib.h>
-        \\#include <string.h>
-        \\#include <stdint.h>
-        \\#include <stdbool.h>
-        \\#include <errno.h>
-        \\
-        \\static char *__koru_concat(const char *a, const char *b) {
-        \\    size_t la = strlen(a), lb = strlen(b);
-        \\    char *r = (char *)malloc(la + lb + 1);
-        \\    if (!r) { fputs("koru: out of memory\n", stderr); abort(); }
-        \\    memcpy(r, a, la);
-        \\    memcpy(r + la, b, lb + 1);
-        \\    return r;
-        \\}
-        \\static void __koru_stdout_write(const char *s) { fputs(s, stdout); }
-        \\static void __koru_stderr_write(const char *s) { fputs(s, stderr); }
-        \\static long long __koru_len_str(const char *s) { return (long long)strlen(s); }
-        \\static int __koru_streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
-        \\static char *__koru_str_i64(long long v) {
-        \\    char buf[32];
-        \\    snprintf(buf, sizeof buf, "%lld", v);
-        \\    return __koru_concat(buf, "");
-        \\}
-        \\static void __koru_stdout_write_i64(long long v) { printf("%lld", v); }
-        \\static void __koru_stderr_write_i64(long long v) { fprintf(stderr, "%lld", v); }
-        \\static void __koru_stdout_write_f64(double v) { printf("%g", v); }
-        \\static void __koru_stderr_write_f64(double v) { fprintf(stderr, "%g", v); }
-        \\static void __koru_stdout_write_f64_prec(double v, int prec) { printf("%.*f", prec, v); }
-        \\static void __koru_stderr_write_f64_prec(double v, int prec) { fprintf(stderr, "%.*f", prec, v); }
-        \\static int __koru_argc;
-        \\static char **__koru_argv;
-        \\static char __koru_readln_buf[8192];
-        \\struct __koru_comptime_Expression { char __koru_comptime; };
-        \\struct __koru_comptime_Source { char __koru_comptime; };
-        \\static _Noreturn void __koru_unreachable(const char *what) {
-        \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
-        \\    fprintf(stderr, "koru: %s\n", what);
-        \\    abort();
-        \\}
-        \\static long long __koru_intcast(long long v, long long lo, long long hi) {
-        \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
-        \\    return v;
-        \\}
-        \\static unsigned long long __koru_intcast_u(unsigned long long v, unsigned long long lo, unsigned long long hi) {
-        \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
-        \\    return v;
-        \\}
-        \\static long long __koru_max_ll(long long a, long long b) { return a > b ? a : b; }
-        \\static long long __koru_min_ll(long long a, long long b) { return a < b ? a : b; }
-        \\
-    );
+    // transforms write against. Catalog loaded → the `prelude(c)` rows are
+    // the sole source: includes render as `#include <x>`, `defs` render
+    // verbatim in declared order, minted families carry no text. Absent →
+    // the legacy literal.
+    em.ensureCatalog();
+    if (em.prelude_rows) |pr| {
+        for (pr.includes) |inc| try em.writeFmt("#include <{s}>\n", .{inc});
+        try em.write("\n");
+        for (pr.defs) |d| {
+            const t = d.text orelse continue;
+            try em.write(t);
+            try em.write("\n");
+        }
+        try em.write("\n");
+    } else {
+        try em.write(
+            \\#include <stdio.h>
+            \\#include <stdlib.h>
+            \\#include <string.h>
+            \\#include <stdint.h>
+            \\#include <stdbool.h>
+            \\#include <errno.h>
+            \\
+            \\static char *__koru_concat(const char *a, const char *b) {
+            \\    size_t la = strlen(a), lb = strlen(b);
+            \\    char *r = (char *)malloc(la + lb + 1);
+            \\    if (!r) { fputs("koru: out of memory\n", stderr); abort(); }
+            \\    memcpy(r, a, la);
+            \\    memcpy(r + la, b, lb + 1);
+            \\    return r;
+            \\}
+            \\static void __koru_stdout_write(const char *s) { fputs(s, stdout); }
+            \\static void __koru_stderr_write(const char *s) { fputs(s, stderr); }
+            \\static long long __koru_len_str(const char *s) { return (long long)strlen(s); }
+            \\static int __koru_streq(const char *a, const char *b) { return strcmp(a, b) == 0; }
+            \\static char *__koru_str_i64(long long v) {
+            \\    char buf[32];
+            \\    snprintf(buf, sizeof buf, "%lld", v);
+            \\    return __koru_concat(buf, "");
+            \\}
+            \\static void __koru_stdout_write_i64(long long v) { printf("%lld", v); }
+            \\static void __koru_stderr_write_i64(long long v) { fprintf(stderr, "%lld", v); }
+            \\static void __koru_stdout_write_f64(double v) { printf("%g", v); }
+            \\static void __koru_stderr_write_f64(double v) { fprintf(stderr, "%g", v); }
+            \\static void __koru_stdout_write_f64_prec(double v, int prec) { printf("%.*f", prec, v); }
+            \\static void __koru_stderr_write_f64_prec(double v, int prec) { fprintf(stderr, "%.*f", prec, v); }
+            \\static int __koru_argc;
+            \\static char **__koru_argv;
+            \\static char __koru_readln_buf[8192];
+            \\struct __koru_comptime_Expression { char __koru_comptime; };
+            \\struct __koru_comptime_Source { char __koru_comptime; };
+            \\static _Noreturn void __koru_unreachable(const char *what) {
+            \\    fflush(NULL); // buffered stdout must land before the trap (zig flushes; abort does not)
+            \\    fprintf(stderr, "koru: %s\n", what);
+            \\    abort();
+            \\}
+            \\static long long __koru_intcast(long long v, long long lo, long long hi) {
+            \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
+            \\    return v;
+            \\}
+            \\static unsigned long long __koru_intcast_u(unsigned long long v, unsigned long long lo, unsigned long long hi) {
+            \\    if (v < lo || v > hi) __koru_unreachable("@intCast out of range");
+            \\    return v;
+            \\}
+            \\static long long __koru_max_ll(long long a, long long b) { return a > b ? a : b; }
+            \\static long long __koru_min_ll(long long a, long long b) { return a < b ? a : b; }
+            \\
+        );
+    }
 
     // Cell-definition pre-pass — resolving every declared type on the
     // reached events (and every proto's whole field table) registers each
