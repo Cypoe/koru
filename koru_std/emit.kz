@@ -1,0 +1,58 @@
+// Koru Standard Library: emit — the generic emission walker.
+//
+// Companion to `std/target` (the catalog): target owns the DECLARED half —
+// what a backend target says about itself as data rows; this module owns
+// the ENGINE half — the target-blind traversal that asks the catalog
+// questions in source order and writes what it answers. The ruling is
+// concepts/frag-a-target-is-a-catalog-entry-not-a-module.md and
+// docs/std-target.md: one walker, many arms.
+//
+// Mirrors std/realize the way target.kz does: vocabulary declared first,
+// consumer second. Nothing here emits yet — the file names the walk the
+// way target.kz named the rows.
+//
+// The walk the engine performs (the visitor_emitter shape, generalized):
+//
+//   program → items → module_decl | event_decl | proc_decl | impl | flow
+//   flow    → invocation | continuations | inline_body
+//   site    → produce | call | assign | guard | branch | text
+//
+// At each node the walker asks the catalog:
+//   emit.type(name)    — std/target:type     — how a Koru type spells here
+//   emit.name(key)     — std/target:name     — which minted constant
+//   emit.builtin(name) — std/target:builtin  — lowered, or refused?
+//   emit.prelude()     — std/target:prelude  — the static surface
+//   emit.fragment(k)   — std/target:fragment — is this construct refused?
+//   emit.construct(p)  — std/target:construct— does this proc exist here?
+//
+// A query the catalog cannot answer is a refusal-shaped null, never a
+// guess — the same contract the c emitter enforces today, made generic.
+
+// The node kinds the walker visits — one per walk level above. Declared
+// as data so a second arm (a JS walker, a pretty-printer) rides the same
+// traversal without re-deriving the shape from code.
+pub const WalkNode = struct {
+    kind: []const u8,   // "item" | "decl" | "flow" | "site"
+    name: []const u8,   // "event_decl", "produce", …
+};
+
+// A catalog query the walker performs at a node — the walk-shape's own
+// rows: which verb it asks, with what key material, and what an
+// unanswered query means at this point in the walk (refuse | skip | raw).
+pub const WalkQuery = struct {
+    node: []const u8,        // the WalkNode that asks
+    verb: []const u8,        // "type" | "name" | "builtin" | "prelude" | "fragment" | "construct"
+    key: []const u8,         // "field.type", "inv.segments[0]", …
+    on_miss: []const u8,     // "refuse" | "skip" | "raw-text"
+};
+
+// The walk itself: an ordered list of (node, query) obligations. The
+// engine's correctness IS this table — the catalog answers data, the
+// walk table owns the order questions get asked in.
+pub const Walk = struct {
+    nodes: std.ArrayList(WalkNode),
+    queries: std.ArrayList(WalkQuery),
+};
+
+const std = @import("std");
+const ast = @import("ast");
