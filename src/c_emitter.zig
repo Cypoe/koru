@@ -449,16 +449,26 @@ fn isConcurrencyPath(path: ast.DottedPath) bool {
 /// Print one line per applicable axis and return RefusedConstruct. The
 /// pinned phrases are the refusal table's own wording — the regression
 /// cells grep stderr for them (400_217/209/210).
-fn refuseAxes(census: *const AxisCensus) CEmitError {
+fn checkFragmentRow(fragment: ?*const std.StringHashMap([]const u8), key: []const u8) void {
+    const table = fragment orelse return;
+    if (!table.contains(key)) {
+        std.debug.print("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
+    }
+}
+
+fn refuseAxes(census: *const AxisCensus, fragment: ?*const std.StringHashMap([]const u8)) CEmitError {
     std.debug.print("error[KORU047]: C lane refusal — program uses constructs outside the CompCert-verified fragment:\n", .{});
     if (census.resumable) |loc| {
         std.debug.print("  - `!` effect arms: resume semantics out of oracle scope ({s}:{d})\n", .{ loc.file, loc.line });
+        checkFragmentRow(fragment, "resumable-!");
     }
     if (census.host_lines) |loc| {
         std.debug.print("  - raw host lines: Zig host text has no C lowering — cannot lower to C ({s}:{d})\n", .{ loc.file, loc.line });
+        checkFragmentRow(fragment, "raw-host-lines");
     }
     if (census.concurrency) |loc| {
         std.debug.print("  - pump / rings / worker.spawn: CompCert is a sequential C subset — no verified concurrency ({s}:{d})\n", .{ loc.file, loc.line });
+        checkFragmentRow(fragment, "concurrency-runtime");
     }
     return CEmitError.RefusedConstruct;
 }
@@ -663,6 +673,7 @@ const Emitter = struct {
     catalog_names: ?std.StringHashMap([]const u8) = null,
     catalog_builtins: ?std.StringHashMap([]const u8) = null,
     catalog_prelude: ?std.StringHashMap([]const u8) = null,
+    catalog_fragment: ?std.StringHashMap([]const u8) = null,
     catalog_loaded: bool = false,
     /// The event whose handler body is emitting — `=> name` produce nodes
     /// build its `struct <name>_res` literal.
@@ -724,6 +735,7 @@ const Emitter = struct {
         self.catalog_names = loadTargetRows(self.allocator, "name");
         self.catalog_builtins = loadTargetRows(self.allocator, "builtin");
         self.catalog_prelude = loadTargetRows(self.allocator, "prelude");
+        self.catalog_fragment = loadTargetRows(self.allocator, "fragment");
     }
 
     /// The flat type table, catalog-sole-source: the declared
@@ -780,6 +792,18 @@ const Emitter = struct {
         };
         if (std.mem.eql(u8, declared, "lowered")) {
             std.debug.print("std/target drift: builtin `{s}` catalog=`lowered` but emitter refuses\n", .{key});
+        }
+    }
+
+    /// The fragment refusal boundary — every construct refusal the emitter
+    /// names must be a key in the declared `refuses` list. A refusal the
+    /// catalog does not carry is an undeclared boundary — same contract
+    /// the builtin row holds, one altitude up.
+    fn checkCatalogFragment(self: *Emitter, key: []const u8) void {
+        self.ensureCatalog();
+        const table = self.catalog_fragment orelse return;
+        if (!table.contains(key)) {
+            std.debug.print("std/target drift: fragment refusal `{s}` not catalog-declared\n", .{key});
         }
     }
 
@@ -1090,6 +1114,7 @@ const Emitter = struct {
         if (eventHasEffectBranch(event)) {
             if (self.cProcOf(key) == null) {
                 std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
+self.checkCatalogFragment("missing-target-proc-body");
                 return CEmitError.NoCProcBody;
             }
             return;
@@ -1164,6 +1189,7 @@ const Emitter = struct {
             return;
         }
         std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
+        self.checkCatalogFragment("missing-target-proc-body");
         return CEmitError.NoCProcBody;
     }
 
@@ -1514,6 +1540,7 @@ const Emitter = struct {
                 const cont = &continuations[idx];
                 if (cont.destructure.len != 0) {
                     std.debug.print("error[KORU047]: C lane: destructured effect binding — outside the first fragment\n", .{});
+self.checkCatalogFragment("destructure");
                     return CEmitError.UnsupportedConstruct;
                 }
                 try self.write("{ ");
@@ -1565,10 +1592,12 @@ const Emitter = struct {
         defer self.allocator.free(name);
         const cproc = self.cProcOf(key) orelse {
             std.debug.print("error[KORU047]: C lane: {s} has no |c proc body and no Koru impl (NoCProcBody)\n", .{key});
+            self.checkCatalogFragment("missing-target-proc-body");
             return CEmitError.NoCProcBody;
         };
         if (inv.return_destructure.len != 0) {
             std.debug.print("error[KORU047]: C lane: {s} destructure at the bind — outside the first fragment\n", .{key});
+self.checkCatalogFragment("destructure");
             return CEmitError.UnsupportedConstruct;
         }
         for (site.continuations) |*c| {
@@ -1826,6 +1855,7 @@ const Emitter = struct {
             installed += 1;
             if (cont.destructure.len != 0) {
                 std.debug.print("error[KORU047]: C lane: destructured effect binding — outside the first fragment\n", .{});
+                self.checkCatalogFragment("destructure");
                 return CEmitError.UnsupportedConstruct;
             }
             try self.write("{ ");
@@ -1910,6 +1940,7 @@ const Emitter = struct {
                 // spelled by the `__koru_cap_<cell>` preamble convention.
                 if (!self.cap_cells.contains(asgn.target)) {
                     std.debug.print("error[KORU047]: C lane: `.assignment` target `{s}` names no declared capture cell — a `//@koru:stmt_scope` preamble mints `struct __koru_cap_<cell>` first\n", .{asgn.target});
+self.checkCatalogFragment("unregistered-assignment-target");
                     return CEmitError.UnsupportedConstruct;
                 }
                 if (asgn.fields.len == 0) return 0;
@@ -2161,6 +2192,7 @@ const Emitter = struct {
         try self.write(indent);
         if (inv.return_destructure.len != 0) {
             std.debug.print("error[KORU047]: C lane: {s} destructure at the bind — outside the first fragment\n", .{key});
+            self.checkCatalogFragment("destructure");
             return CEmitError.UnsupportedConstruct;
         }
         if (inv.return_binding) |bind| {
@@ -2239,6 +2271,7 @@ const Emitter = struct {
         }
         if (inv.return_destructure.len != 0) {
             std.debug.print("error[KORU047]: C lane: {s} destructure at the tagged bind — outside the first fragment\n", .{key});
+self.checkCatalogFragment("destructure");
             return CEmitError.UnsupportedConstruct;
         }
         for (event.branches) |*b| {
@@ -2325,6 +2358,7 @@ const Emitter = struct {
             if (std.mem.eql(u8, df.name, "_")) continue;
             if (df.sub.len != 0) {
                 std.debug.print("error[KORU047]: C lane: nested destructure at `| {s}` — outside the first fragment\n", .{cont.branch});
+self.checkCatalogFragment("destructure");
                 return CEmitError.UnsupportedConstruct;
             }
             const b = findBranch(event, cont.branch).?;
@@ -3064,7 +3098,11 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     const census_ctx = CensusCtx{ .allocator = allocator, .events = &events };
     try axisRefusalItems(program.items, program.main_module_name, &census, &census_ctx);
     if (census.host_lines != null or census.resumable != null or census.concurrency != null) {
-        return refuseAxes(&census);
+        // The pre-flight runs before an Emitter exists — the fragment
+        // table loads standalone, same file the emitter's lazier checks
+        // harvest.
+        var frag = loadTargetRows(allocator, "fragment");
+        return refuseAxes(&census, if (frag) |*f| f else null);
     }
 
     var reached = Reached.init(allocator);
