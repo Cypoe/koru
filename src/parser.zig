@@ -12863,3 +12863,48 @@ test "item gate filters event decls at parse time" {
     try std.testing.expect(parse_result.source_file.items.len == 1);
     try std.testing.expect(parse_result.source_file.items[0] == .event_decl);
 }
+
+test "parser lands [parallel] on a for-invocation's annotations" {
+    const allocator = std.testing.allocator;
+
+    // Pin: `! as a |> [parallel]for(1..4)` — the bracketed annotation prefix on
+    // the invocation lands in invocation.annotations (["parallel"]), the same
+    // slot [size(16k)] rides on std/fmt:ln calls. This is the @threaded-scope
+    // surface marker the threaded checker seeds from (frag: locksets).
+    const source =
+        \\~capture { acc: 0[i64] }
+        \\! as a |> [parallel]for(1..4)
+        \\    ! each i |> captured { acc: i }
+    ;
+
+    var parser = try Parser.init(allocator, source, "test.kz", &[_][]const u8{}, null);
+    defer parser.deinit();
+
+    var parse_result = try parser.parse();
+    defer parse_result.deinit();
+
+    try std.testing.expect(parse_result.source_file.items.len == 1);
+    const item = parse_result.source_file.items[0];
+    try std.testing.expect(item == .flow);
+
+    const flow = item.flow;
+    try std.testing.expect(flow.body.continuations.len >= 1);
+
+    // Find the `for` continuation and assert the annotation landed.
+    var found = false;
+    for (flow.body.continuations) |*cont| {
+        if (cont.node) |*step| {
+            const inv = switch (step.*) {
+                .invocation => step.invocation,
+                .label_with_invocation => step.label_with_invocation.invocation,
+                else => continue,
+            };
+            if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "for")) {
+                try std.testing.expectEqual(@as(usize, 1), inv.annotations.len);
+                try std.testing.expectEqualStrings("parallel", inv.annotations[0]);
+                found = true;
+            }
+        }
+    }
+    try std.testing.expect(found);
+}

@@ -41,9 +41,72 @@ pub const ThreadedChecker = struct {
     /// is_threaded roots to fixpoint.
     pub fn check(self: *ThreadedChecker, source: *ast.Program) !void {
         try self.buildCallGraph(source);
+        try self.seedParallelScopes(source.items);
         try self.floodDirty(source);
         if (std.posix.getenv("KORU_DEBUG_THREADED") != null)
             try self.dumpDirty(source.items);
+    }
+
+    /// Seed: a [parallel]-annotated invocation (e.g. `[parallel]for`) marks
+    /// every tor invoked in its nested continuation subtree — the loop body —
+    /// as a threaded root. The subtree IS the scope.
+    fn seedParallelScopes(self: *ThreadedChecker, items: []const ast.Item) !void {
+        for (items) |*item| {
+            switch (item.*) {
+                .flow => |*flow| try self.seedFromFlow(flow),
+                .proc_decl => |*proc| {
+                    for (proc.inline_flows) |*flow| try self.seedFromFlow(flow);
+                },
+                .module_decl => |*module| try self.seedParallelScopes(module.items),
+                else => {},
+            }
+        }
+    }
+
+    fn seedFromFlow(self: *ThreadedChecker, flow: *const ast.Flow) !void {
+        const first_inv = flow.inv();
+        if (self.hasParallel(first_inv)) {
+            for (flow.body.continuations) |*cont|
+                try self.markContinuationTreeDirty(cont);
+        }
+        for (flow.body.continuations) |*cont|
+            try self.seedFromContinuation(cont);
+    }
+
+    fn seedFromContinuation(self: *ThreadedChecker, cont: *const ast.Continuation) !void {
+        if (cont.node) |*step| {
+            const inv = if (step.* == .invocation) step.invocation else if (step.* == .label_with_invocation) step.label_with_invocation.invocation else null;
+            if (inv) |i| {
+                if (self.hasParallel(&i)) {
+                    for (cont.continuations) |*nested|
+                        try self.markContinuationTreeDirty(nested);
+                }
+            }
+        }
+        for (cont.continuations) |*nested| try self.seedFromContinuation(nested);
+    }
+
+    /// Every tor invoked anywhere in this continuation subtree goes dirty.
+    fn markContinuationTreeDirty(self: *ThreadedChecker, cont: *const ast.Continuation) !void {
+        if (cont.node) |*step| {
+            const inv = if (step.* == .invocation) step.invocation else if (step.* == .label_with_invocation) step.label_with_invocation.invocation else null;
+            if (inv) |i| {
+                const name = try self.pathToString(i.path);
+                defer self.allocator.free(name);
+                if (self.events.get(name)) |ev| {
+                    if (!ev.is_threaded_dirty) @constCast(ev).is_threaded_dirty = true;
+                }
+            }
+        }
+        for (cont.continuations) |*nested| try self.markContinuationTreeDirty(nested);
+    }
+
+    fn hasParallel(self: *ThreadedChecker, inv: *const ast.Invocation) bool {
+        _ = self;
+        for (inv.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) return true;
+        }
+        return false;
     }
 
     /// Spike oracle: print the dirty set to stderr.

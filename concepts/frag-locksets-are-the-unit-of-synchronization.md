@@ -38,9 +38,11 @@ never duplicated trees, never call-time flags), computed by a forward
 flood-fill over the `purity_checker`-shaped call graph from the `@threaded`
 surface marker. Codegen reads flag × declaration. The spike's concrete root
 spelling is `~[threaded]` on a proc — an internal compile-time marker naming
-"a threaded path enters here"; the user-facing parallel-scope spelling
-(`parallel for` or whatever it becomes) lowers onto the same flag and stays
-Lars's to rule:
+"a threaded path enters here". The user-facing parallel-scope spelling is
+`[parallel]` on the invocation — `[parallel]for(1..N)` marks the for-step's
+nested continuation subtree (the loop body) threaded; ruled 2026-10-24 and
+pinned in parser.zig's "[parallel] lands on a for-invocation's annotations"
+unit test (invocation.annotations, the same slot `[size(16k)]` rides):
 
 - nothing declared → module mutex (process-lifetime static, coarse, safe —
   state that races usually lives in the same module's internals);
