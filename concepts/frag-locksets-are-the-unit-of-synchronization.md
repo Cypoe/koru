@@ -42,7 +42,13 @@ spelling is `~[threaded]` on a proc — an internal compile-time marker naming
 `[parallel]` on the invocation — `[parallel]for(1..N)` marks the for-step's
 nested continuation subtree (the loop body) threaded; ruled 2026-10-24 and
 pinned in parser.zig's "[parallel] lands on a for-invocation's annotations"
-unit test (invocation.annotations, the same slot `[size(16k)]` rides):
+unit test (invocation.annotations, the same slot `[size(16k)]` rides).
+The lowering, ruled 2026-10-24: `[parallel]for` emits a chunk-split driver
+— materialize the range, spawn one `std.Thread` per chunk running the body's
+handlers serially over its slice, join, then `done` runs. Spike limits:
+usize ranges, 8192 buffer cap, fixed 4-way split, no capture partitioning —
+a capture-writing body under `[parallel]` fails to compile until
+partition+combine lands:
 
 - nothing declared → module mutex (process-lifetime static, coarse, safe —
   state that races usually lives in the same module's internals);

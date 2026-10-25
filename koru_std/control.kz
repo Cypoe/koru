@@ -121,14 +121,8 @@ const std = @import("std");
 ! ?else *
 | ?done
 
-~[template]proc for|zig {
-    for ({{ expr }}) |__koru_item{{ __site }}| {
-        {% if keep != "" %}if (!({{ keep }})) break;
-        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
-        {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
-    }
-    {{ continuations["done"].continue }}
-}
+~part for
+
 
 
 

@@ -1,0 +1,46 @@
+~[template]proc for|zig {
+    {% if __parallel != "" %}{
+        // [parallel]for — chunk the range, spawn one thread per chunk, fold
+        // each serially, join. Spike shape: materialize items into a stack
+        // buffer (range only, usize items, 8192 cap) then split. Captures are
+        // NOT partitioned yet — bodies writing captured cells won't compile
+        // here (chunk fns can't see outer locals); partition+combine is the
+        // follow-up.
+        const __koru_par_body{{ __site }} = struct {
+            fn run(__koru_par_slice: []const usize) void {
+                for (__koru_par_slice) |__koru_item{{ __site }}| {
+                    {% if keep != "" %}if (!({{ keep }})) break;
+                    {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+                    {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
+                }
+            }
+        };
+        var __koru_par_buf: [8192]usize = undefined;
+        var __koru_par_n: usize = 0;
+        for ({{ expr }}) |__koru_par_it| {
+            __koru_par_buf[__koru_par_n] = __koru_par_it;
+            __koru_par_n += 1;
+        }
+        const __koru_par_items = __koru_par_buf[0..__koru_par_n];
+        const __koru_par_C = 4;
+        var __koru_par_threads: [__koru_par_C]@import("std").Thread = undefined;
+        var __koru_par_spawned: usize = 0;
+        for (0..__koru_par_C) |__koru_par_c| {
+            const __koru_par_lo = __koru_par_c * __koru_par_items.len / __koru_par_C;
+            const __koru_par_hi = (__koru_par_c + 1) * __koru_par_items.len / __koru_par_C;
+            if (__koru_par_lo < __koru_par_hi) {
+                if (@import("std").Thread.spawn(.{}, __koru_par_body{{ __site }}.run, .{__koru_par_items[__koru_par_lo..__koru_par_hi]})) |__koru_par_t| {
+                    __koru_par_threads[__koru_par_spawned] = __koru_par_t;
+                    __koru_par_spawned += 1;
+                } else |_| {}
+            }
+        }
+        for (__koru_par_threads[0..__koru_par_spawned]) |__koru_par_t| __koru_par_t.join();
+    }
+    {% else %}for ({{ expr }}) |__koru_item{{ __site }}| {
+        {% if keep != "" %}if (!({{ keep }})) break;
+        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+        {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
+    }
+    {% endif %}{{ continuations["done"].continue }}
+}

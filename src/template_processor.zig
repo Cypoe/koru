@@ -894,6 +894,15 @@ pub fn renderTemplateInvocation(
     render_site_counter += 1;
     try ctx.put("__site", .{ .string = try std.fmt.allocPrint(allocator, "{d}", .{render_site_counter}) });
 
+    // `[parallel]` on the invocation — the parallel-scope marker (ruled in
+    // frag-locksets-are-the-unit-of-synchronization). Templates see it as
+    // `__parallel` ("parallel" or "") and may emit a chunk-split lowering.
+    var parallel_text: []const u8 = "";
+    for (invocation.annotations) |ann| {
+        if (std.mem.eql(u8, ann, "parallel")) parallel_text = "parallel";
+    }
+    try ctx.put("__parallel", .{ .string = parallel_text });
+
     const event_decl = findEventDeclByLastSegment(allocator, all_items, &invocation.path);
 
     // The scrutinee of a `cond` (`~cond(expr)`) — the first arg's text. Threaded
