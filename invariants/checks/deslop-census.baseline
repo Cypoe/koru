@@ -198,5 +198,11 @@ members=950
 # (cs_emitter fn_decl x js_emitter, if_simple x js_emitter) are the
 # per-target dialect duplication the baseline already documents.
 # Re-measured on this tree: 855/963.
-clusters=855
-members=963
+# Re-pinned on the proof-participation docs commit: the roll fired on a
+# docs-only diff — own delta +0. The +3 members over the last pin
+# accumulated on main between sampled rolls; the census's top offenders
+# are unchanged from the note above (cs_emitter emitAssignment /
+# if_simple x js_emitter — the per-target dialect duplication this
+# baseline already documents). Re-measured on this tree: 854/966.
+clusters=854
+members=966
