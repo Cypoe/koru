@@ -176,17 +176,17 @@ pub const Catalog = struct {
 // "lowered" is drift (overpromise), a refusal the catalog does not name
 // at all is drift too (the boundary stays declared, fragment-style).
 ~std/target:builtin(c) {
-    "@as": "lowered",
-    "@intCast": "lowered",
-    "@floatFromInt": "lowered",
-    "@intFromFloat": "lowered",
-    "@floatCast": "lowered",
-    "@intFromBool": "lowered",
-    "@divTrunc": "lowered",
-    "@rem": "lowered",
-    "@mod": "lowered",
-    "@max": "lowered",
-    "@min": "lowered",
+    "@as": "rule:as",
+    "@intCast": "({1})",
+    "@floatFromInt": "((double)({1}))",
+    "@intFromFloat": "((long long)({1}))",
+    "@floatCast": "((double)({1}))",
+    "@intFromBool": "({1})",
+    "@divTrunc": "(({1}) / ({2}))",
+    "@rem": "(({1}) % ({2}))",
+    "@mod": "(((({1}) % ({2})) + ({2})) % ({2}))",
+    "@max": "__koru_max_ll(({1}), ({2}))",
+    "@min": "__koru_min_ll(({1}), ({2}))",
     "@panic": "refused",
     "@ptrCast": "refused",
     "@bitCast": "refused",
@@ -220,8 +220,9 @@ pub const Catalog = struct {
 // `#include <x>` and `static ... __koru_<name>(` definition reaching
 // output must appear here — the emitted set is a subset of the
 // declared set, never the other way.
-// Helper rows name what the emitted C actually contains — the four
-// `__koru_*_items` helpers are minted by the take/query sweep paths and
+// Helper rows name what the emitted C actually contains — the
+// `__koru_{materialize,row_of,handle_of,resolve}_*` helper families are
+// minted per store by the take/query sweep paths and
 // were caught undeclared by the drift artifact on 690_070; they are
 // declared here because they legitimately emit, not to hide the check.
 
@@ -245,10 +246,10 @@ pub const Catalog = struct {
         "__koru_intcast_u",
         "__koru_max_ll",
         "__koru_min_ll",
-        "__koru_materialize_items",
-        "__koru_row_of_items",
-        "__koru_handle_of_items",
-        "__koru_resolve_items"
+        "__koru_materialize_*",
+        "__koru_row_of_*",
+        "__koru_handle_of_*",
+        "__koru_resolve_*"
     ],
     "state": [
         "__koru_argc",

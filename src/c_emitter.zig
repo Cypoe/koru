@@ -221,6 +221,17 @@ fn catalogCTypeResolver(ctx: ?*anyopaque, koru_type: []const u8) ?[]const u8 {
     return em.catalogFlatType(koru_type);
 }
 
+/// The builtin table's resolver — the row IS the answer: a `{1}`/`{2}`
+/// template is the lowering, `rule:` names an emitter-owned arm,
+/// `refused` is the boundary as data. Absent catalog → null → arms.
+fn catalogBuiltinResolver(ctx: ?*anyopaque, name: []const u8) ?[]const u8 {
+    const em: *Emitter = @ptrCast(@alignCast(ctx orelse return null));
+    em.ensureCatalog();
+    const table = em.catalog_builtins orelse return null;
+    const key = std.fmt.allocPrint(em.allocator, "@{s}", .{name}) catch return null;
+    return table.get(key);
+}
+
 /// Drift lines: stderr + `catalog_drift.log` in CWD — codegen_utils owns
 /// the writer (the std/emit shadow walk shares it).
 const driftLog = codegen_utils.driftLog;
@@ -715,6 +726,8 @@ const Emitter = struct {
         diag.int_width_ctx = self;
         diag.resolve_c_type = catalogCTypeResolver;
         diag.c_type_ctx = self;
+        diag.resolve_builtin = catalogBuiltinResolver;
+        diag.builtin_ctx = self;
         const lowered = codegen_utils.lowerKoruExpr(self.allocator, text, .c, .koru_expr, &diag) catch |err| {
             if (err == error.UnsupportedBuiltin) {
                 if (diag.unsupported_op.len != 0) {
@@ -793,18 +806,25 @@ const Emitter = struct {
     }
 
     /// The builtin refusal boundary — called where a builtin refuses.
-    /// `lowered` in the row but refused here is an overpromise; a refusal
-    /// the row does not name at all keeps the boundary from being data.
+    /// A row that claims a lowering (`rule:` or a template) but refuses
+    /// here is an overpromise; a refusal the row does not name at all
+    /// keeps the boundary from being data.
     fn checkCatalogBuiltinRefusal(self: *Emitter, name: []const u8) void {
         self.ensureCatalog();
         const table = self.catalog_builtins orelse return;
-        const key = std.fmt.allocPrint(self.allocator, "@{s}", .{name}) catch return;
+        const key = if (name.len > 0 and name[0] == '@') blk: {
+            // `unknown_builtin` carries the whole call (`@sqrt(x)`) — the
+            // row key is the name only.
+            var e: usize = 1;
+            while (e < name.len and (std.ascii.isAlphanumeric(name[e]) or name[e] == '_')) e += 1;
+            break :blk std.fmt.allocPrint(self.allocator, "{s}", .{name[0..e]}) catch return;
+        } else std.fmt.allocPrint(self.allocator, "@{s}", .{name}) catch return;
         const declared = table.get(key) orelse {
             driftLog("std/target drift: builtin refusal `{s}` not catalog-declared\n", .{key});
             return;
         };
-        if (std.mem.eql(u8, declared, "lowered")) {
-            driftLog("std/target drift: builtin `{s}` catalog=`lowered` but emitter refuses\n", .{key});
+        if (!std.mem.eql(u8, declared, "refused")) {
+            driftLog("std/target drift: builtin `{s}` catalog=`{s}` but emitter refuses\n", .{ key, declared });
         }
     }
 
@@ -831,6 +851,19 @@ const Emitter = struct {
                 driftLog("std/target drift: construct `{s}` catalog=`supported` but emitter refuses\n", .{key});
             }
         }
+    }
+
+    /// `__koru_foo_*` in a row declares the whole minted family — the
+    /// take/query sweep names its helpers per store (`__koru_row_of_todos`)
+    /// so a literal row can never enumerate them.
+    fn preludePatternDeclared(table: *const std.StringHashMap([]const u8), full: []const u8) bool {
+        var it = table.keyIterator();
+        while (it.next()) |k| {
+            const key = k.*;
+            if (key.len > 1 and key[key.len - 1] == '*' and
+                std.mem.startsWith(u8, full, key[0 .. key.len - 1])) return true;
+        }
+        return false;
     }
 
     /// Post-emit prelude coverage — every `#include <x>` and
@@ -867,7 +900,7 @@ const Emitter = struct {
             rest = after[n..];
             if (is_def) {
                 const full = std.fmt.allocPrint(self.allocator, "__koru_{s}", .{ident}) catch continue;
-                if (!table.contains(full)) {
+                if (!table.contains(full) and !preludePatternDeclared(&table, full)) {
                     driftLog("std/target drift: helper `{s}` emitted but not catalog-declared\n", .{full});
                 }
             }

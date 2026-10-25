@@ -997,6 +997,14 @@ pub const LowerDiag = struct {
     /// fallback. Unset → `cTypeOf` answers directly (dual-answer stage).
     resolve_c_type: ?*const fn (ctx: ?*anyopaque, name: []const u8) ?[]const u8 = null,
     c_type_ctx: ?*anyopaque = null,
+    /// C-lane sole-source builtin table: when the emitter has a declared
+    /// `std/target:builtin(c)` catalog loaded it fills this resolver — the
+    /// row is the answer: a `{1}`/`{2}` template IS the lowering, `rule:`
+    /// names an emitter-owned arm, `refused` is the boundary as data. The
+    /// bespoke arms remain the absent-catalog fallback and the dual-answer
+    /// drift-check. Unset → arms answer (the resolver is never consulted).
+    resolve_builtin: ?*const fn (ctx: ?*anyopaque, name: []const u8) ?[]const u8 = null,
+    builtin_ctx: ?*anyopaque = null,
 };
 
 /// Render Koru expression text for `target`. Caller owns the result.
@@ -4235,6 +4243,90 @@ const C_INTCAST_BOUNDS = [_]struct { t: []const u8, lo: []const u8, hi: []const 
     .{ .t = "usize", .lo = "0", .hi = "9223372036854775807ULL", .unsigned = true },
 };
 
+/// Apply a `builtin(c)` template row — `{N}` placeholders take the lowered
+/// nth argument, everything else verbatim. Arity is part of the answer: a
+/// call whose argument count is not the template's is a named refusal,
+/// never a dropped or invented operand (the arms this replaces ignored a
+/// trailing argument silently). Dual-answer stage: the displaced arm
+/// renders the same call into scratch — a byte mismatch is drift, and
+/// the catalog wins.
+fn cBuiltinTemplate(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    row: []const u8,
+    name: []const u8,
+    text: []const u8,
+    at: usize,
+    j: usize,
+    args_start: usize,
+    args_end: usize,
+    first: []const u8,
+    second: []const u8,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!usize {
+    var args: [8][]const u8 = undefined;
+    var nargs: usize = 0;
+    var arity_ok = true;
+    if (std.mem.trim(u8, text[args_start..args_end], " \t").len != 0) {
+        var depth: usize = 0;
+        var seg = args_start;
+        var i = args_start;
+        while (i <= args_end) : (i += 1) {
+            if (i == args_end or (depth == 0 and text[i] == ',')) {
+                if (nargs == args.len) {
+                    arity_ok = false;
+                    break;
+                }
+                args[nargs] = std.mem.trim(u8, text[seg..i], " \t");
+                if (args[nargs].len == 0) arity_ok = false;
+                nargs += 1;
+                seg = i + 1;
+            } else switch (text[i]) {
+                '(', '[', '{' => depth += 1,
+                ')', ']', '}' => depth -= 1,
+                else => {},
+            }
+        }
+    }
+    var arity: usize = 0;
+    var k: usize = 0;
+    while (k < row.len) : (k += 1) {
+        if (row[k] == '{' and k + 2 < row.len and
+            std.ascii.isDigit(row[k + 1]) and row[k + 2] == '}')
+        {
+            arity = @max(arity, row[k + 1] - '0');
+        }
+    }
+    if (!arity_ok or arity != nargs) {
+        if (diag) |d| d.unknown_builtin = text[at..j];
+        return LowerError.UnsupportedBuiltin;
+    }
+    var tmpl: std.ArrayList(u8) = .empty;
+    defer tmpl.deinit(allocator);
+    k = 0;
+    while (k < row.len) : (k += 1) {
+        if (row[k] == '{' and k + 2 < row.len and
+            std.ascii.isDigit(row[k + 1]) and row[k + 2] == '}')
+        {
+            try lowerCInto(&tmpl, allocator, args[row[k + 1] - '0' - 1], mode, diag);
+            k += 2;
+        } else {
+            try tmpl.append(allocator, row[k]);
+        }
+    }
+    // Dual-answer: the arm the row displaced renders the same call into
+    // scratch — a byte mismatch is drift (catalog wins), never silence.
+    var legacy: std.ArrayList(u8) = .empty;
+    defer legacy.deinit(allocator);
+    const had_arm = lowerCBuiltinArms(&legacy, allocator, text, at, j, name, first, second, mode, diag) catch false;
+    if (!had_arm or !std.mem.eql(u8, legacy.items, tmpl.items)) {
+        driftLog("std/target drift: builtin @{s} catalog=`{s}` arm=`{s}` (catalog wins)\n", .{ name, tmpl.items, if (had_arm) legacy.items else "<no arm / arm refused>" });
+    }
+    try out.appendSlice(allocator, tmpl.items);
+    return j;
+}
+
 /// The C arm's builtin table — `lowerBuiltin`'s sibling for the oracle lane.
 /// Handled: `@as` (plain cast; `T, @intCast(v)` checked; `T, @floatFromInt(v)`
 /// direct so no double rounding), bare `@intCast` (the use site's conversion
@@ -4274,6 +4366,43 @@ fn lowerCBuiltin(
     const args_end = j - 1;
     const first = std.mem.trim(u8, text[args_start .. split orelse args_end], " \t");
     const second = if (split) |s| std.mem.trim(u8, text[s + 1 .. args_end], " \t") else "";
+
+    // `builtin(c)` catalog consult — sole source where loaded: a template
+    // row IS the lowering, `rule:` names an emitter-owned arm below,
+    // `refused` is the boundary as data. Absent row or resolver → the arms.
+    if (diag) |d| {
+        if (d.resolve_builtin) |r| {
+            if (r(d.builtin_ctx, name)) |row| {
+                if (std.mem.eql(u8, row, "refused")) {
+                    d.unknown_builtin = text[at..j];
+                    return LowerError.UnsupportedBuiltin;
+                }
+                if (!std.mem.startsWith(u8, row, "rule:")) {
+                    return try cBuiltinTemplate(out, allocator, row, name, text, at, j, args_start, args_end, first, second, mode, diag);
+                }
+            }
+        }
+    }
+    if (try lowerCBuiltinArms(out, allocator, text, at, j, name, first, second, mode, diag)) return j;
+    return null;
+}
+
+/// The emitter-owned builtin rules — the arms a `rule:` row names (today
+/// only `@as`, which needs type resolution and checked-cast bounds no
+/// template can carry) plus the absent-catalog legacy path for every
+/// template row. `true` = handled; `false` = the caller refuses.
+fn lowerCBuiltinArms(
+    out: *std.ArrayList(u8),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    at: usize,
+    j: usize,
+    name: []const u8,
+    first: []const u8,
+    second: []const u8,
+    mode: ExprMode,
+    diag: ?*LowerDiag,
+) LowerError!bool {
     const eql = std.mem.eql;
 
     if (eql(u8, name, "as")) {
@@ -4299,7 +4428,7 @@ fn lowerCBuiltin(
                         try out.appendSlice(allocator, ", ");
                         try out.appendSlice(allocator, b.hi);
                         try out.appendSlice(allocator, ")))");
-                        return j;
+                        return true;
                     }
                 }
                 // i64-domain and float targets: the cast itself is faithful —
@@ -4315,7 +4444,7 @@ fn lowerCBuiltin(
                     try out.appendSlice(allocator, ")(");
                     try lowerCInto(out, allocator, ic.inner, mode, diag);
                     try out.appendSlice(allocator, "))");
-                    return j;
+                    return true;
                 }
                 if (diag) |d| d.unknown_builtin = text[at..j];
                 return LowerError.UnsupportedBuiltin;
@@ -4330,7 +4459,7 @@ fn lowerCBuiltin(
                 try out.appendSlice(allocator, ")(");
                 try lowerCInto(out, allocator, fc.inner, mode, diag);
                 try out.appendSlice(allocator, "))");
-                return j;
+                return true;
             }
         }
         try out.appendSlice(allocator, "((");
@@ -4338,7 +4467,7 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, ")(");
         try lowerCInto(out, allocator, second, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     // Bare `@intCast(v)` — the result type is contextual, and the C use site
     // (index, assignment, argument) already converts. Emitted unadorned: an
@@ -4348,13 +4477,13 @@ fn lowerCBuiltin(
         try out.append(allocator, '(');
         try lowerCInto(out, allocator, first, mode, diag);
         try out.append(allocator, ')');
-        return j;
+        return true;
     }
     if (eql(u8, name, "floatFromInt")) {
         try out.appendSlice(allocator, "((double)(");
         try lowerCInto(out, allocator, first, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "intFromFloat")) {
         // Truncation toward zero — the same rounding C's cast gives; an
@@ -4363,20 +4492,20 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, "((long long)(");
         try lowerCInto(out, allocator, first, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "floatCast")) {
         try out.appendSlice(allocator, "((double)(");
         try lowerCInto(out, allocator, first, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "intFromBool")) {
         // A C bool already IS 0/1 — the cast is the operand itself.
         try out.append(allocator, '(');
         try lowerCInto(out, allocator, first, mode, diag);
         try out.append(allocator, ')');
-        return j;
+        return true;
     }
     if (eql(u8, name, "divTrunc")) {
         try out.appendSlice(allocator, "((");
@@ -4384,7 +4513,7 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, ") / (");
         try lowerCInto(out, allocator, second, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "rem")) {
         try out.appendSlice(allocator, "((");
@@ -4392,7 +4521,7 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, ") % (");
         try lowerCInto(out, allocator, second, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "mod")) {
         // Euclidean — Zig's @mod is non-negative for a positive divisor, C's
@@ -4406,7 +4535,7 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, ")) % (");
         try lowerCInto(out, allocator, second, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
     if (eql(u8, name, "max") or eql(u8, name, "min")) {
         // Helper call, not a `?:` chain — the chain spells each operand
@@ -4418,9 +4547,9 @@ fn lowerCBuiltin(
         try out.appendSlice(allocator, "), (");
         try lowerCInto(out, allocator, second, mode, diag);
         try out.appendSlice(allocator, "))");
-        return j;
+        return true;
     }
-    return null;
+    return false;
 }
 
 /// Render Koru expression text as C. See the block comment above for the

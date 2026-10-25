@@ -37,3 +37,17 @@ the walk sees the site once `impl_of` flows are descended (they emit
 through their event; the emitter's skip is only its standalone-flow
 enumeration). The stamp answers why the site exists; the head's own
 std-qualified name still answers what it emits — both are asked.
+
+Evolved on the builtin-solver rung: `builtin(c)` rows stopped being
+`"lowered"` statuses and became claims with three shapes — a `{1}`/`{2}`
+template *is* the declared lowering, a `rule:<arm>` value names an
+emitter-owned rule the catalog explicitly delegates, and `"refused"` is
+the boundary as data. The emitter asks the catalog first
+(`diag.resolve_builtin`) and applies the template verbatim; a template is
+pinned by dual-answer — the emitter still runs the legacy arm into
+scratch and drift-logs any byte mismatch, so the row cannot diverge
+from the oracle it replaced without leaving an artifact. Unrowed
+builtins still hit the arms unchanged; an absent catalog disables the
+whole consult. The delegation shape matters: `rule:as` declares *that* an
+arm owns `@as`, not *what* it emits — bounds checks stay semantic, not
+spelling.
