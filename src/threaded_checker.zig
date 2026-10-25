@@ -204,6 +204,19 @@ pub const ThreadedChecker = struct {
                     }
                     try self.call_graph.put(proc_name, call_info);
                 },
+                // Impl-by-assignment (`fib = if(...)`) is a `.flow` carrying
+                // impl_of — without a node its callees (the recursion itself)
+                // never enter the graph, and the flood can't reach them.
+                // Keyed on the tor name, so a tor's proc impls and flow
+                // impls merge into one outgoing-edge set.
+                .flow => |*flow| {
+                    if (flow.impl_of) |impl_path| {
+                        const ev_name = try self.pathToString(impl_path);
+                        const gop = try self.call_graph.getOrPut(ev_name);
+                        if (!gop.found_existing) gop.value_ptr.* = try CallInfo.init(self.allocator);
+                        try self.collectFlowInvocations(flow, &gop.value_ptr.calls);
+                    }
+                },
                 .module_decl => |*module| {
                     try self.buildCallGraphRecursive(module.items);
                 },
@@ -270,9 +283,24 @@ pub const ThreadedChecker = struct {
                 },
                 .event_decl => |*event| {
                     if (!event.is_threaded_dirty) continue;
-                    // A dirty event dirties every proc implementing it —
-                    // impl procs share the event's path suffix.
+                    // A dirty tor dirties every proc implementing it —
+                    // impl procs share the tor's path suffix.
                     try self.dirtyImplsOf(event.path, items, changed);
+                    // And everything its impls call — flow impls register
+                    // under the tor name, so a dirty tor floods its
+                    // body out through the same edges a dirty proc uses.
+                    const ev_name = try self.pathToString(event.path);
+                    defer self.allocator.free(ev_name);
+                    if (self.call_graph.get(ev_name)) |ci| {
+                        for (ci.calls.items) |called| {
+                            if (self.events.get(called)) |ev| {
+                                if (!ev.is_threaded_dirty) {
+                                    @constCast(ev).is_threaded_dirty = true;
+                                    changed.* = true;
+                                }
+                            }
+                        }
+                    }
                 },
                 .module_decl => |*module| {
                     try self.floodItems(module.items, changed);
@@ -296,6 +324,19 @@ pub const ThreadedChecker = struct {
                     if (std.mem.eql(u8, proc_name, event_name)) {
                         @constCast(proc).is_threaded_dirty = true;
                         changed.* = true;
+                    }
+                },
+                // Flow impls (`fib = if(...)`) dirty with their tor — the
+                // flag codegen reads when the body is a fork/join surface.
+                .flow => |*flow| {
+                    if (flow.is_threaded_dirty) continue;
+                    if (flow.impl_of) |impl_path| {
+                        const impl_name = try self.pathToString(impl_path);
+                        defer self.allocator.free(impl_name);
+                        if (std.mem.eql(u8, impl_name, event_name)) {
+                            @constCast(flow).is_threaded_dirty = true;
+                            changed.* = true;
+                        }
                     }
                 },
                 .module_decl => |*module| {
