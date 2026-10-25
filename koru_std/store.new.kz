@@ -6225,8 +6225,17 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } };
+            // Provenance stamp (internal `@from_construct` mark — ruled,
+            // never parsed surface syntax): the impl head IS the watch
+            // arm's own call, so the site says why it exists. Backed by
+            // the C watch-arm events emitted above; measured 690_001.
+            var whead = wa.cont.node.?.invocation;
+            const wmarks = allocator.alloc([]const u8, whead.marks.len + 1) catch unreachable;
+            @memcpy(wmarks[0..whead.marks.len], whead.marks);
+            wmarks[whead.marks.len] = "@from_construct(\"std/store:watch\")";
+            whead.marks = wmarks;
             c_appended[7 + c_wn * 2] = ast.Item{ .flow = ast.Flow{
-                .body = ast.rootSite(wa.cont.node.?.invocation, wa.cont.continuations, flow.location),
+                .body = ast.rootSite(whead, wa.cont.continuations, flow.location),
                 .pre_label = null,
                 .impl_of = mkPath(allocator, home_ns, wev_name),
                 .super_shape = null,

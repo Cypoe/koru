@@ -135,17 +135,7 @@ fn markedConstruct(marks: []const []const u8) ?[]const u8 {
     return null;
 }
 
-fn siteQuery(stats: *Stats, constructs: ?*const CatalogTypes, module: []const u8, iv: *const ast.Invocation) void {
-    const table = constructs orelse return;
-    const path = &iv.path;
-    var key: []const u8 = "";
-    if (markedConstruct(iv.marks)) |mk| {
-        key = mk;
-    } else {
-        const mq = path.module_qualifier orelse return;
-        if (!std.mem.startsWith(u8, mq, "std.") and !std.mem.startsWith(u8, mq, "std/")) return;
-        key = constructKey(path) catch return;
-    }
+fn siteAsk(stats: *Stats, table: *const CatalogTypes, module: []const u8, key: []const u8) void {
     stats.construct_queries += 1;
     if (table.get(key)) |_| {
         stats.construct_answered += 1;
@@ -155,6 +145,18 @@ fn siteQuery(stats: *Stats, constructs: ?*const CatalogTypes, module: []const u8
             std.debug.print("std/emit shadow: site `{s}` (in {s}) has no construct row\n", .{ key, module });
         }
     }
+}
+
+fn siteQuery(stats: *Stats, constructs: ?*const CatalogTypes, module: []const u8, iv: *const ast.Invocation) void {
+    const table = constructs orelse return;
+    const path = &iv.path;
+    // A stamp names why the site exists; the canonical name (when still
+    // std-qualified) names what it emits. Both can be true — a stamped
+    // watch impl head is still a `print` site — so ask both.
+    if (markedConstruct(iv.marks)) |mk| siteAsk(stats, table, module, mk);
+    const mq = path.module_qualifier orelse return;
+    if (!std.mem.startsWith(u8, mq, "std.") and !std.mem.startsWith(u8, mq, "std/")) return;
+    siteAsk(stats, table, module, constructKey(path) catch return);
 }
 
 fn walkNode(n: *const ast.Node, stats: *Stats, cat: *const Catalog, module: []const u8) void {
@@ -239,7 +241,13 @@ fn walkItems(items: []const ast.Item, stats: *Stats, cat: *const Catalog, main_m
             },
             .flow => |*f| {
                 stats.flows += 1;
-                if (!flowEmitted(f, main_module)) continue;
+                if (f.impl_of != null) {
+                    // `impl_of` skips only the emitter's standalone flow
+                    // enumeration — the body still emits through its event
+                    // (c_emitter impl_flows), so a stamped or std-qualified
+                    // site inside an impl is a real emitted construct.
+                    if (!std.mem.eql(u8, f.module, main_module)) continue;
+                } else if (!flowEmitted(f, main_module)) continue;
                 walkContinuation(&f.body, stats, cat, f.module);
             },
             else => {},

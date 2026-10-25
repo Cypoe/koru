@@ -47,10 +47,20 @@
 # are committed drift under rolls that missed: proto.kz's 12-member
 # event_decl self-cluster, the channel/io/node/pump event_decl cluster,
 # interpreter/store import_decl twins — none in this diff.
-clusters=118
-members=198
+# Re-pinned 118/198 -> 134/210 (2026-10-27): the roll fired on the
+# watch-provenance commit. This diff's own delta measured ZERO —
+# store.new.kz appears in no cluster (its change is inside a |zig host
+# block, invisible to the Koru-AST census) and emit_walk.zig is a
+# Zig file this census never reads. The +16/+12 is drift landed under
+# rolls that missed: the named #8 offender is the supervisor.decl/
+# bridge.grants/interpreter.trace/list/store.qcols import_decl quad
+# (121 leaves, same part-file decl-shell class as every prior entry)
+# alongside the list.* event_decl shells and pump/interpreter/store
+# preamble clusters.
+clusters=134
+members=210
 skipped=2
-spellings=45
+spellings=53
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
 # 71/113: bulkjoin's import-preamble clone (joined 2026-10-14) + in-flight
 # pump/channel work in the shared checkout; re-pinning records the working

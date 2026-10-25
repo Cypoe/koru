@@ -29,7 +29,11 @@ The ruling, decided with the provenance rung it landed on:
   `stripe` and `preorder` are stamped and deliberately rowless — no C test
   exercises them yet.
 
-Open questions: `watch` lowers into tap-spliced code — no surviving
-invocation carries its stamp, so its provenance is latent until the walk
-grows a path that sees splices. Whether that wants a stamp of its own or a
-different provenance shape is undecided.
+Resolved open question (the splice vocabulary was unnecessary): on the
+C lane `watch` does not tap-splice at all — `store.new.kz` mints one
+`__store_watch_<s>_<f>_<ord>` event per arm, and the impl flow's head is
+the arm's own call. Provenance lands on a cloned stamp of that head, so
+the walk sees the site once `impl_of` flows are descended (they emit
+through their event; the emitter's skip is only its standalone-flow
+enumeration). The stamp answers why the site exists; the head's own
+std-qualified name still answers what it emits — both are asked.
