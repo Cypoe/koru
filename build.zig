@@ -1413,6 +1413,21 @@ pub fn build(b: *std.Build) void {
     const auto_discharge_test_step = b.step("test-auto-discharge", "Run auto-discharge inserter tests");
     auto_discharge_test_step.dependOn(&run_auto_discharge_inserter_tests.step);
 
+    // AST transform tests — hoistInvariantLoopPrefix structural pins
+    const ast_transform_tests = b.addTest(.{
+        .name = "ast_transform_tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ast_transform_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    ast_transform_tests.root_module.addImport("ast", ast_module);
+    ast_transform_tests.root_module.addImport("parser", parser_module);
+    ast_transform_tests.root_module.addImport("errors", errors_module);
+    ast_transform_tests.root_module.addImport("ast_transform", ast_transform_module);
+    const run_ast_transform_tests = b.addRunArtifact(ast_transform_tests);
+
     // Comptime evaluator tests — expression core of the comptime interpreter
     const comptime_eval_tests = b.addTest(.{
         .name = "comptime_eval_tests",
@@ -1512,6 +1527,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_ast_functional_tests.step);
     test_step.dependOn(&run_phantom_semantic_checker_tests.step);
     test_step.dependOn(&run_auto_discharge_inserter_tests.step);
+    test_step.dependOn(&run_ast_transform_tests.step);
     test_step.dependOn(&run_visitor_emitter_tests.step);
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_shape_checker_integration_tests.step);
