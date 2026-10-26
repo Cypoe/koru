@@ -50,6 +50,19 @@ Lookup spelling ruled 2026-10-24: `std/target(name)` — `pub tor
 default` makes the module name itself callable; the catalog IS the
 lookup, no `std/target:of` helper.
 
+First live consumer measured (2026-11): `compiler:emission`'s dispatch
+now asks the catalog — `target-of`'s `c` arm checks `target(c)` is
+declared (absent catalog advisory, missing row on a loaded catalog is
+`driftLog` drift while the arm still wins, matching the dual-answer
+phasing) and `emit-c` returns the row's declared `artifact` field, which
+`emit-c-artifact` hands `write-artifact` — the artifact name is no
+longer a literal in the chain. The catalog loaders themselves moved out
+of `c_emitter` into the walk's engine (`emit_walk`), target-parametrized
+— the lane supplies `"c"`, the engine owns the reading. zig/js/cs arms
+still route by literal lang names; their rows are declared after the
+fact by design, and the arm list stays a declared variant list until
+the rows exist.
+
 Two parts rather than one because the differences are real: catalog rows
 are data that changes per target and per added arm; the walker is
 semantics machinery that changes rarely and dangerously — one file means

@@ -545,8 +545,6 @@ const Allocator = std.mem.Allocator;
     c_emitter_module.addImport("file_types", file_types_module);
     c_emitter_module.addImport("codegen_utils", codegen_utils_module);
     c_emitter_module.addImport("struct_literal", struct_literal_module);
-    c_emitter_module.addImport("parser", parser_module);
-    c_emitter_module.addImport("compiler_env", compiler_env_module);
 
     // std/emit's engine — the write walk (src/emit_walk.zig) is the C lane's
     // emitter of record for events and the driver; the audit (emit_audit.zig)
@@ -559,6 +557,8 @@ const Allocator = std.mem.Allocator;
     });
     emit_walk_module.addImport("ast", ast_module);
     emit_walk_module.addImport("codegen_utils", codegen_utils_module);
+    emit_walk_module.addImport("parser", parser_module);
+    emit_walk_module.addImport("compiler_env", compiler_env_module);
     c_emitter_module.addImport("emit_walk", emit_walk_module);
     const emit_audit_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_audit.zig" },
@@ -683,6 +683,7 @@ const Allocator = std.mem.Allocator;
     backend_output_module.addImport("js_emitter", js_emitter_module);
     backend_output_module.addImport("cs_emitter", cs_emitter_module);
     backend_output_module.addImport("c_emitter", c_emitter_module);
+    backend_output_module.addImport("emit_walk", emit_walk_module);
     backend_output_module.addImport("emit_build_zig", emit_build_zig_module);
     backend_output_module.addImport("post_transform_weld", post_transform_weld_module);
     backend_output_module.addImport("ast_serializer", ast_serializer_module);

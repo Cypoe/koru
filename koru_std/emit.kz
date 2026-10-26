@@ -31,8 +31,7 @@
 // guess — the same contract the c emitter enforces today, made generic.
 
 // The node kinds the walker visits — one per walk level above. Declared
-// as data so a second arm (a JS walker, a pretty-printer) rides the same
-// traversal without re-deriving the shape from code.
+// as data so a second arm (a JS walker, a pretty-printer) rides it too.
 pub const WalkNode = struct {
     kind: []const u8,   // "item" | "decl" | "flow" | "site"
     name: []const u8,   // "event_decl", "produce", …
@@ -59,13 +58,11 @@ pub const Walk = struct {
 const std = @import("std");
 const ast = @import("ast");
 
-// The C lane's pipeline address — selected under --lang=c. The lane is a
-// composed chain of pass tors over one emission session: open builds the
-// indexes + preamble, decls/defs/driver run the walk's three passes,
-// close runs the post-passes and returns the code. Ordinary tors, so a
-// user emission override can drop, reorder, or interpose on any of them —
-// the engine (src/c_emitter.zig + src/emit_walk.zig) stays the engine.
-~[comptime] pub tor emit-c { ctx: std/compiler:CompilerContext } -> { ctx: std/compiler:CompilerContext, code: string }
+// The C lane's pipeline address — selected under --lang=c. A composed
+// chain of pass tors over one emission session: open builds indexes +
+// preamble, decls/defs/driver run the walk's passes, close runs the
+// post-passes and returns code + the declared artifact name.
+~[comptime] pub tor emit-c { ctx: std/compiler:CompilerContext } -> { ctx: std/compiler:CompilerContext, code: string, artifact: string }
 
 ~emit-c = emit-c-open(ctx): s1
 |> emit-c-decls(s1.ctx, s1.session): s2
@@ -73,8 +70,7 @@ const ast = @import("ast");
 |> emit-c-driver(s3.ctx, s3.session): s4
 |> emit-c-close(s4.ctx, s4.session): e -> e
 
-// The session crosses tors as an opaque usize — the Emitter lives in the
-// engine; the pipeline threads the handle, never the struct.
+// The session crosses tors as an opaque usize — the pipeline threads the handle.
 ~[comptime] pub tor emit-c-open { ctx: std/compiler:CompilerContext } -> { ctx: std/compiler:CompilerContext, session: usize }
 
 ~proc emit-c-open|zig {
@@ -134,18 +130,22 @@ const ast = @import("ast");
     return .{ .ctx = updated_ctx, .session = session };
 }
 
-~[comptime] pub tor emit-c-close { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, code: string }
+~[comptime] pub tor emit-c-close { ctx: std/compiler:CompilerContext, session: usize } -> { ctx: std/compiler:CompilerContext, code: string, artifact: string }
 
 ~proc emit-c-close|zig {
     const c_emitter = @import("c_emitter");
+    const emit_walk = @import("emit_walk");
     const s: *c_emitter.Session = @ptrFromInt(session);
     const code = c_emitter.sessionClose(s) catch |err| {
         std.debug.print("error[KORU047]: C emission failed at close: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
     c_emitter.sessionDestroy(s);
+    // The artifact name is the target row's claim — the literal is the
+    // pre-catalog spelling, kept while the catalog is advisory.
+    const artifact = emit_walk.targetField(ctx.allocator, "c", "artifact") orelse "output_emitted.c";
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";
-    return .{ .ctx = updated_ctx, .code = code };
+    return .{ .ctx = updated_ctx, .code = code, .artifact = artifact };
 }
