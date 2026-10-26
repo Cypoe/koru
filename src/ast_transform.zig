@@ -3299,6 +3299,61 @@ const InvariantHoist = struct {
         return true;
     }
 
+    /// `std/<lane>:<verb>` — the qualified-lane check shared by the hoist's
+    /// lane-aware classifications (dispose as consume, fold as clean value).
+    fn isTreeLaneVerb(path: ast.DottedPath, name: []const u8) bool {
+        if (path.segments.len != 1 or !std.mem.eql(u8, path.segments[0], name)) return false;
+        const mq = path.module_qualifier orelse return false;
+        return std.mem.eql(u8, mq, "std.tree") or std.mem.eql(u8, mq, "std/tree");
+    }
+
+    /// `| node`/`| null` on a `std/tree:fold` site are the lane's own
+    /// vocabulary — the transform consumes them, they are not control flow.
+    /// Any other named arm still forbids the hoist.
+    fn foldArmVocab(inv: *const ast.Invocation, branch: []const u8) bool {
+        return isTreeLaneVerb(inv.path, "fold") and
+            (std.mem.eql(u8, branch, "node") or std.mem.eql(u8, branch, "null"));
+    }
+
+    /// The arm expressions are the fold's args-in-disguise — `| node n ->
+    /// n.f + item` reads the loop item and is variant even when `fold`'s
+    /// args don't mention it.
+    fn foldArmsMention(w: *const ast.Continuation, item: []const u8) bool {
+        for (w.continuations) |cc| {
+            if (cc.branch.len == 0) continue;
+            if (!std.mem.eql(u8, cc.branch, "node") and !std.mem.eql(u8, cc.branch, "null")) continue;
+            if (cc.node) |cn| {
+                const txt = switch (cn) {
+                    .expression => |e| e,
+                    else => continue,
+                };
+                if (std.mem.indexOf(u8, txt, "__it") != null) return true;
+                if (!std.mem.eql(u8, item, "_") and std.mem.indexOf(u8, txt, item) != null) return true;
+            }
+        }
+        return false;
+    }
+
+    /// The continuations a hoisted wrapper keeps: its named arms (fold's
+    /// node/null vocabulary — any other named arm never reaches here) plus
+    /// the splice-supplied `next` chain link.
+    fn namedPlusNext(self: *InvariantHoist, w: *const ast.Continuation, next: ast.Continuation) ![]ast.Continuation {
+        var n: usize = 0;
+        for (w.continuations) |cc| {
+            if (cc.branch.len != 0) n += 1;
+        }
+        const out = try self.allocator.alloc(ast.Continuation, n + 1);
+        var k: usize = 0;
+        for (w.continuations) |cc| {
+            if (cc.branch.len != 0) {
+                out[k] = cc;
+                k += 1;
+            }
+        }
+        out[n] = next;
+        return out;
+    }
+
     /// Does this step consume a `<!owned>` param bound to a hoisted name?
     /// Match by value: a bare `free-tree(t)` arg needn't spell the field name.
     fn isDischarge(self: *InvariantHoist, inv: *const ast.Invocation, hoisted: *std.StringHashMap(void)) bool {
@@ -3307,15 +3362,11 @@ const InvariantHoist = struct {
         // `dispose-Node`, so the event lookup below sees the transform's own
         // signature (no `!owned`). The lane contract is fixed: the arg is the
         // discharged root — match by value like any other consume.
-        if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "dispose")) {
-            if (inv.path.module_qualifier) |mq| {
-                if (std.mem.eql(u8, mq, "std.tree") or std.mem.eql(u8, mq, "std/tree")) {
-                    for (inv.args) |a| {
-                        if (hoisted.contains(a.value)) return true;
-                    }
-                    return false;
-                }
+        if (isTreeLaneVerb(inv.path, "dispose")) {
+            for (inv.args) |a| {
+                if (hoisted.contains(a.value)) return true;
             }
+            return false;
         }
         const decl = self.events.get(self.norm(lastSeg(inv.path))) orelse return false;
         var takes_owned = false;
@@ -3371,7 +3422,9 @@ const InvariantHoist = struct {
 
         var hoisted = std.StringHashMap(void).init(self.allocator);
         defer hoisted.deinit();
-        var pre = try std.ArrayList(*ast.Node).initCapacity(self.allocator, 0);
+        // Wrappers, not bare nodes — a hoisted `std/tree:fold` must carry
+        // its `| node`/`| null` arm continuations to the splice point.
+        var pre = try std.ArrayList(*ast.Continuation).initCapacity(self.allocator, 0);
         defer pre.deinit(self.allocator);
         var post = try std.ArrayList(*ast.Node).initCapacity(self.allocator, 0);
         defer post.deinit(self.allocator);
@@ -3383,33 +3436,48 @@ const InvariantHoist = struct {
                 .invocation => |iv| iv,
                 else => { boundary = i; break; },
             };
-            // a hoisted step's own named arms would have to travel — refuse
+            // a hoisted step's own named arms would have to travel — refuse,
+            // except `| node`/`| null` on a fold: they ARE the verb's spec,
+            // consumed by the transform wherever the step lands.
+            const is_fold = isTreeLaneVerb(winv.path, "fold");
             var has_arms = false;
             for (w.continuations) |cc| {
-                if (cc.branch.len != 0) has_arms = true;
+                if (cc.branch.len != 0 and !(is_fold and foldArmVocab(&winv, cc.branch))) has_arms = true;
             }
             if (i == 0) {
                 // each.continuations hold step0's arms mixed with the chain —
                 // an armed first step is never hoisted.
                 for (each.continuations) |cc| {
-                    if (cc.branch.len != 0) has_arms = true;
+                    if (cc.branch.len != 0 and !(is_fold and foldArmVocab(&winv, cc.branch))) has_arms = true;
                 }
             }
             if (has_arms) { boundary = i; break; }
-            // invariance: no mention of the item or __it anywhere in args
+            // invariance: no mention of the item or __it anywhere in args;
+            // for a fold the arm expressions are args too — a `| node n`
+            // body that reads the loop item is variant, fold or not.
             if (argMentions(winv.args, "__it") or
-                (!std.mem.eql(u8, item, "_") and argMentions(winv.args, item))) {
+                (!std.mem.eql(u8, item, "_") and argMentions(winv.args, item)) or
+                (is_fold and foldArmsMention(w, item))) {
                 boundary = i; break;
             }
             if (self.isDischarge(&winv, &hoisted)) {
                 try post.append(self.allocator, &w.node.?);
                 continue;
             }
+            // `std/tree:fold` — the lane's value verb: reads a hoisted name,
+            // returns a value, clean by contract (same door dispose walks
+            // from the consume side; the event lookup can't help — this pass
+            // sees the transform's own signature, not the synthesized tor).
+            if (is_fold and winv.return_binding != null) {
+                try pre.append(self.allocator, w);
+                if (winv.return_binding) |b| try hoisted.put(b, {});
+                continue;
+            }
             if (winv.return_binding != null and
                 self.sameModule(winv.path) and
                 self.isClean(self.norm(lastSeg(winv.path))) and
                 self.ownedArgsLifted(&winv, &hoisted)) {
-                try pre.append(self.allocator, &w.node.?);
+                try pre.append(self.allocator, w);
                 if (winv.return_binding) |b| try hoisted.put(b, {});
                 continue;
             }
@@ -3473,18 +3541,16 @@ const InvariantHoist = struct {
                 .branch = "",
                 .binding = null,
                 .condition = null,
-                .node = pre.items[i].*,
+                .node = pre.items[i].node.?,
                 .indent = for_cont.indent,
-                .continuations = try self.allocator.alloc(ast.Continuation, 1),
+                .continuations = try self.namedPlusNext(pre.items[i], next.*),
             };
-            @constCast(tail.continuations)[0] = next.*;
             // free the intermediate heap cont — values copied, arena owns
             self.allocator.destroy(next);
         }
-        const chain = try self.allocator.alloc(ast.Continuation, 1);
-        chain[0] = tail.*;
+        const chain = try self.namedPlusNext(pre.items[0], tail.*);
         self.allocator.destroy(tail);
-        for_cont.node = pre.items[0].*;
+        for_cont.node = pre.items[0].node.?;
         for_cont.continuations = chain;
 
         // Remaining body: the boundary wrapper's content slides into `each`.

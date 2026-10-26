@@ -47,6 +47,18 @@ through machinery Koru already had, rather than assumed by a runtime:
   rebinds them under fresh names (`__koru_parenv_<n>`) inside `run`
   (400_224). Same law as capture cells: what crosses into a worker crosses
   as a parameter, never as a captured name.
+- **Lane verbs declare their hoist contract on the verb.** The pass runs
+  before transforms expand, so classification can't read the synthesized
+  tor — it reads the lane spelling. `std/tree:dispose` is a consume;
+  `std/tree:fold` reads a hoisted name and produces a value, clean by
+  contract (`isTreeLaneVerb` is the shared door). What looked like a
+  dispose-only workaround is now a protocol: any lane verb that reads,
+  produces, or consumes under `for ! each` states its shape up front.
+- **Arms that are a verb's own vocabulary travel.** `fold`'s `| node`/`| null`
+  are spec, not control flow — `pre` carries whole continuations so the
+  arms move with the step, and the arm bodies join the invariance scan
+  (`| node n -> n.f + item` is variant). A named arm that isn't the lane's
+  declared vocabulary still refuses the hoist.
 - **Template renders baked before `.main` transforms are stale.** `capture`
   dissolves `captured{}` → `.assignment` at `.main`, after
   `process-template-procs` — so `[parallel]` cell partitioning only ever
@@ -84,5 +96,6 @@ motion. Expect more passes to land here — the flood is the shared engine.
 - If a `<!owned>` discharge can have drop-order effects (destructors with
   observable behavior beyond reclamation), moving it to `| done` is not
   observably identical.
-- Arm-carrying steps and non-`each` loops are unhandled (v1 refuses them) —
-  widening, not correction, unless a case shows the refusal was wrong.
+- Non-`each` loops and arms that aren't a verb's declared vocabulary are
+  still unhandled — widening, not correction, unless a case shows the
+  refusal was wrong.
