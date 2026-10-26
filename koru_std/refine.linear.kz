@@ -1,0 +1,519 @@
+// Koru Standard Library: the `linear` part of refine.kz — joined via
+// `~part linear`; members land in koru_refine. This part owns the
+// `&`-chain atom grammar end to end: the meet parser (bounds, clamps,
+// alts, relational atoms), the relational row machinery, and the
+// feasibility check. The grammar (`term (± term)*` over `N` | `name` |
+// `N*name`) and the Fourier–Motzkin engine are spec's — koru_spec is
+// emitted with the compiler core while koru_refine is opt-in, so
+// everything the claims pass and this fold both need parses one
+// spelling with one parser.
+
+const kspec = koru_std.koru_spec;
+const LinPart = kspec.LinPart;
+// A relational atom's named coefficient — `a + b <= c` folds to
+// terms {a:1, b:1, c:-1}. Canonical: sorted by name, combined,
+// nonzero; constants fold into the row's bound. The row types and
+// their normalize/spell/feasibility machinery are spec's — the
+// contract vocabulary owns the decidable fragment and the claims
+// pass runs where koru_refine isn't emitted.
+const LinTerm = kspec.LinTerm;
+const LinRow = kspec.LinRow;
+const LinFeas = kspec.LinFeas;
+const Op = enum { gt, ge, lt, le, eq };
+
+// Parse `name: base & atom…` lines (or comma-joined marker text)
+// into a meet keyed by field name. `strict` refuses loudly on
+// `<op><int literal>` and nothing else — the pure bound form that
+// stays on the bound path. Anything else carrying a comparison is
+// the relational atom.
+fn pureBoundAtom(atom: []const u8) bool {
+    var rest: []const u8 = atom;
+    if (std.mem.startsWith(u8, rest, ">=") or std.mem.startsWith(u8, rest, "<=") or std.mem.startsWith(u8, rest, "==")) {
+        rest = rest[2..];
+    } else if (std.mem.startsWith(u8, rest, ">") or std.mem.startsWith(u8, rest, "<")) {
+        rest = rest[1..];
+    } else return false;
+    const t = std.mem.trim(u8, rest, " \t");
+    _ = std.fmt.parseInt(i64, t, 10) catch return false;
+    return true;
+}
+
+// lhs ≤ rhs normalized — spec owns the canonicalization; see
+// linNormalize there for the ordering/merge contract.
+fn normalizeRow(alloc: std.mem.Allocator, lhs: []const LinPart, rhs: []const LinPart, strict: bool, src: []const u8) LinRow {
+    return kspec.linNormalize(alloc, lhs, rhs, strict, src);
+}
+
+fn linRowEql(a: LinRow, b: LinRow) bool {
+    if (a.bound != b.bound or a.strict != b.strict or a.terms.len != b.terms.len) return false;
+    for (a.terms, b.terms) |ta, tb| {
+        if (ta.coef != tb.coef or !std.mem.eql(u8, ta.name, tb.name)) return false;
+    }
+    return true;
+}
+
+fn linAppend(alloc: std.mem.Allocator, f: *Field, row: LinRow) void {
+    for (f.linear.items) |existing| {
+        if (linRowEql(existing, row)) return;
+    }
+    f.linear.append(alloc, row) catch unreachable;
+}
+
+// A row's canonical spelling for markers and conflict witnesses —
+// `2*a - b <= 4` spells as `2*a <= b + 4`. The machinery is spec's
+// (`linSpell`) so a facet_decl row and a claims-pass witness spell the
+// same way.
+fn linSrc(alloc: std.mem.Allocator, terms: []const LinTerm, bound: i64, strict: bool) []const u8 {
+    return kspec.linSpell(alloc, terms, bound, strict);
+}
+
+// The relational atom: `a + b <= c`, or `<op> <linear>` with this
+// field as the implicit LHS. `>`/`>=` negate onto `<=`/`<`; `==`
+// emits both directions. One comparison per atom. Three verdicts:
+// `not_linear` falls through to the bound refusal, `ok` consumed the
+// atom, `refuse` is the loud answer.
+const LinVerdict = union(enum) { not_linear, ok, refuse: SiteResult };
+
+fn parseLinearAtom(
+    alloc: std.mem.Allocator,
+    rep: ?*koru_std.koru_compiler.ErrorReporter,
+    fl: ?*const ast.Flow,
+    entry_name: []const u8,
+    atom: []const u8,
+    f: *Field,
+    fname: []const u8,
+    strict: bool,
+) LinVerdict {
+    const ops = [_][]const u8{ "<=", ">=", "==", "<", ">" };
+    var pos: ?usize = null;
+    var op: []const u8 = "";
+    var i: usize = 0;
+    while (i < atom.len) : (i += 1) {
+        const c = atom[i];
+        if (c != '<' and c != '>' and c != '=') continue;
+        for (ops) |o| {
+            if (i + o.len <= atom.len and std.mem.eql(u8, atom[i .. i + o.len], o)) {
+                if (pos != null) {
+                    if (!strict) return .not_linear;
+                    return .{ .refuse = .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): '{s}' carries two comparisons — one comparison per relational atom", .{ entry_name, atom }) } };
+                }
+                pos = i;
+                op = o;
+                i += o.len - 1;
+                break;
+            }
+        }
+    }
+    const p = pos orelse return .not_linear;
+    const lhs_src = std.mem.trim(u8, atom[0..p], " \t");
+    const rhs_src = std.mem.trim(u8, atom[p + op.len ..], " \t");
+    const lhs = kspec.parseLinExpr(alloc, if (lhs_src.len == 0) fname else lhs_src) orelse
+        return .{ .refuse = .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): '{s}' is not a linear atom — refine understands `a + b <= c` over field names and integer coefficients", .{ entry_name, atom }) } };
+    const rhs = kspec.parseLinExpr(alloc, rhs_src) orelse
+        return .{ .refuse = .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): '{s}' is not a linear atom — refine understands `a + b <= c` over field names and integer coefficients", .{ entry_name, atom }) } };
+    const flipped = std.mem.eql(u8, op, ">") or std.mem.eql(u8, op, ">=");
+    const is_strict = std.mem.eql(u8, op, "<") or std.mem.eql(u8, op, ">");
+    const row = if (flipped)
+        normalizeRow(alloc, rhs, lhs, is_strict, atom)
+    else
+        normalizeRow(alloc, lhs, rhs, is_strict, atom);
+    linAppend(alloc, f, row);
+    if (std.mem.eql(u8, op, "==")) {
+        linAppend(alloc, f, normalizeRow(alloc, rhs, lhs, false, atom));
+    }
+    return .ok;
+}
+// malformed input (this block's own text); contributor text parses
+// leniently — a malformed sibling block is refused by its own
+// transform when it runs.
+fn parseInto(
+    alloc: std.mem.Allocator,
+    rep: ?*koru_std.koru_compiler.ErrorReporter,
+    fl: ?*const ast.Flow,
+    entry_name: []const u8,
+    text: []const u8,
+    fields: *std.ArrayList(Field),
+    strict: bool,
+) ?SiteResult {
+    // Field lines split on newlines and commas — but a comma inside
+    // parens is an argument separator (`clamp(0, 100)`), not a line
+    // break, so the scan tracks depth.
+    var pos: usize = 0;
+    while (pos < text.len) {
+        const start = pos;
+        var depth: usize = 0;
+        while (pos < text.len) : (pos += 1) {
+            const ch = text[pos];
+            if (ch == '(') depth += 1;
+            if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            }
+            if (depth == 0 and (ch == '\n' or ch == ',')) break;
+        }
+        const raw = text[start..pos];
+        if (pos < text.len) pos += 1;
+        const line = std.mem.trim(u8, raw, " \t\r,");
+        if (line.len == 0) continue;
+
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
+            if (!strict) continue;
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field line '{s}' has no ':' — each field must be `name: type [& constraint…]`", .{ entry_name, line }) };
+        };
+        const fname = std.mem.trim(u8, line[0..colon], " \t");
+        const rest = line[colon + 1 ..];
+
+        var segs = std.mem.splitScalar(u8, rest, '&');
+        const base = std.mem.trim(u8, segs.next().?, " \t");
+        if (fname.len == 0 or base.len == 0) {
+            if (!strict) continue;
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field line '{s}' is missing a name or a type", .{ entry_name, line }) };
+        }
+
+        var idx_opt: ?usize = null;
+        for (fields.items, 0..) |f, i| {
+            if (std.mem.eql(u8, f.name, fname)) {
+                idx_opt = i;
+                break;
+            }
+        }
+        const idx = idx_opt orelse blk: {
+            fields.append(alloc, .{ .name = fname, .base = base }) catch unreachable;
+            break :blk fields.items.len - 1;
+        };
+        const f = &fields.items[idx];
+        if (!std.mem.eql(u8, f.base, base)) {
+            if (!strict) continue;
+            return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' declared with base '{s}' but already met as '{s}' — a meet needs one base, not two", .{ entry_name, fname, base, f.base }) };
+        }
+
+        while (segs.next()) |seg| {
+            const atom = std.mem.trim(u8, seg, " \t");
+            if (atom.len == 0) continue;
+
+            // A disjunction atom: a set of alternatives, at most one marked
+            // as the fallback. It meets by intersection like every other term;
+            // the grammar and the canonicalization live in the `alts` part.
+            if (isAltsAtom(atom)) {
+                if (parseAltsAtom(alloc, rep, fl, entry_name, atom, f, strict)) |r| return r;
+                continue;
+            }
+
+            var op: Op = undefined;
+            var digits: []const u8 = undefined;
+            var op_str: []const u8 = undefined;
+            if (std.mem.startsWith(u8, atom, "clamp(") and std.mem.endsWith(u8, atom, ")")) {
+                // A normalizer term, not a bound: the boundary
+                // saturates the value into [lo, hi] — bounds on the
+                // same field judge the post-clamp result. Scalar
+                // legality is judged on the met field, not per-atom —
+                // the driver's legality pass resolves terminal bases.
+                const inner = std.mem.trim(u8, atom[6 .. atom.len - 1], " \t");
+                const comma = std.mem.indexOfScalar(u8, inner, ',') orelse {
+                    if (!strict) continue;
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): '{s}' needs two bounds — the spelling is `clamp(lo, hi)`", .{ entry_name, atom }) };
+                };
+                const lo_n = std.fmt.parseInt(i64, std.mem.trim(u8, inner[0..comma], " \t"), 10) catch {
+                    if (!strict) continue;
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[0..comma] }) };
+                };
+                const hi_n = std.fmt.parseInt(i64, std.mem.trim(u8, inner[comma + 1 ..], " \t"), 10) catch {
+                    if (!strict) continue;
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp bound '{s}' needs an integer literal", .{ entry_name, inner[comma + 1 ..] }) };
+                };
+                if (lo_n > hi_n) {
+                    if (!strict) continue;
+                    return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): clamp({d}, {d}) is empty — lo exceeds hi", .{ entry_name, lo_n, hi_n }) };
+                }
+                const ccanon = std.fmt.allocPrint(alloc, "clamp({d},{d})", .{ lo_n, hi_n }) catch unreachable;
+                if (f.clamp) |c| {
+                    // Clamps meet by intersection — [max(lo), min(hi)].
+                    const mlo = @max(c.lo, lo_n);
+                    const mhi = @min(c.hi, hi_n);
+                    if (mlo > mhi) f.clamp_conflict = .{ ccanon, c.src };
+                    f.clamp = .{ .lo = mlo, .hi = mhi, .src = ccanon };
+                } else {
+                    f.clamp = .{ .lo = lo_n, .hi = hi_n, .src = ccanon };
+                }
+                continue;
+            }
+            // A relational atom: `a + b <= c`, or `<= balance + margin`
+            // with this field as implicit LHS. Pure bounds
+            // (`<op><int literal>`) stay on the bound path — the
+            // operand being a literal, not the shape, is what
+            // separates them. `not_linear` falls through to the
+            // bound refusal below.
+            if (!pureBoundAtom(atom)) {
+                switch (parseLinearAtom(alloc, rep, fl, entry_name, atom, f, fname, strict)) {
+                    .refuse => |r| return r,
+                    .ok => continue,
+                    .not_linear => {},
+                }
+            }
+
+            if (std.mem.startsWith(u8, atom, ">=")) {
+                op = .ge; digits = atom[2..]; op_str = ">=";
+            } else if (std.mem.startsWith(u8, atom, "<=")) {
+                op = .le; digits = atom[2..]; op_str = "<=";
+            } else if (std.mem.startsWith(u8, atom, "==")) {
+                op = .eq; digits = atom[2..]; op_str = "==";
+            } else if (std.mem.startsWith(u8, atom, ">")) {
+                op = .gt; digits = atom[1..]; op_str = ">";
+            } else if (std.mem.startsWith(u8, atom, "<")) {
+                op = .lt; digits = atom[1..]; op_str = "<";
+            } else {
+                if (!strict) continue;
+                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): constraint atom '{s}' is not a bound — refine understands >N >=N <N <=N ==N over integer literals, or a relational `a + b <= c` over field names", .{ entry_name, atom }) };
+            }
+
+            const n = std.fmt.parseInt(i64, std.mem.trim(u8, digits, " \t"), 10) catch {
+                if (!strict) continue;
+                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): bound '{s}' needs an integer literal — '{s}' does not parse", .{ entry_name, atom, digits }) };
+            };
+            const canon = std.fmt.allocPrint(alloc, "{s}{d}", .{ op_str, n }) catch unreachable;
+
+            switch (op) {
+                .gt, .ge => {
+                    const excl = op == .gt;
+                    if (f.lo == null or n > f.lo.?.value or
+                        (n == f.lo.?.value and excl and !f.lo.?.exclusive))
+                    {
+                        f.lo = .{ .value = n, .exclusive = excl, .src = canon };
+                    }
+                },
+                .lt, .le => {
+                    const excl = op == .lt;
+                    if (f.hi == null or n < f.hi.?.value or
+                        (n == f.hi.?.value and excl and !f.hi.?.exclusive))
+                    {
+                        f.hi = .{ .value = n, .exclusive = excl, .src = canon };
+                    }
+                },
+                .eq => {
+                    if (f.eq) |e| {
+                        if (e.value != n) {
+                            if (strict) {
+                                return .{ .replacement = ast.refusal(alloc, rep.?, .KORU205, fl.?.location, fl.?.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' contradicts '{s}'", .{ entry_name, fname, canon, e.src }) };
+                            }
+                            // Contributor text parses leniently, but a
+                            // disagreement is not malformed text — it is an
+                            // empty meet. Record it so the refusal does not
+                            // depend on which block's transform fires first.
+                            f.eq_conflict = .{ canon, e.src };
+                        }
+                    } else {
+                        f.eq = .{ .value = n, .exclusive = false, .src = canon };
+                    }
+                },
+            }
+        }
+    }
+    return null;
+}
+
+// A landed facet's relational rows fold by union like the text blocks'
+// — the typed terms carry no source text, so the row's src is its
+// canonical spelling.
+fn linFoldLandedRows(alloc: std.mem.Allocator, f: *Field, rows: []const ast.FacetLinRow) void {
+    for (rows) |r| {
+        var terms = std.ArrayListUnmanaged(LinTerm){};
+        for (r.terms) |t| {
+            terms.append(alloc, .{ .coef = t.coef, .name = t.name }) catch unreachable;
+        }
+        linAppend(alloc, f, .{ .terms = terms.items, .bound = r.bound, .strict = r.strict, .src = linSrc(alloc, terms.items, r.bound, r.strict) });
+    }
+}
+// -- the linear rows' emptiness check -------------------------------------
+//
+// Fourier–Motzkin over the meet's rows — the engine is spec's
+// (`linFeasible`); this file owns only the Field→row mapping, because
+// `Field` is refine's while the row vocabulary is the contract's.
+
+// A bound is a one-term row and an equality is two; they join the same
+// feasibility judgment or a relational atom can't see the interval it
+// contradicts (`x >= 5 ∧ x <= y ∧ y <= 0` is empty only when the bounds
+// stand in the system too). A clamp's post-write range and a
+// disjunction's min–max hull approximate soundly: an empty hull proves
+// the meet empty, a surviving hull proves nothing — the refusal side
+// stays exact. i64-min bounds can't negate into a row; skipping one
+// weakens the check, never wrong-verdicts it.
+fn linCollect(alloc: std.mem.Allocator, fields: []const Field, out: *std.ArrayList(LinRow)) void {
+    const min_i64 = std.math.minInt(i64);
+    for (fields) |*f| {
+        const pos = alloc.dupe(LinTerm, &[1]LinTerm{.{ .coef = 1, .name = f.name }}) catch unreachable;
+        const neg = alloc.dupe(LinTerm, &[1]LinTerm{.{ .coef = -1, .name = f.name }}) catch unreachable;
+        if (f.lo) |b| {
+            if (b.value != min_i64) out.append(alloc, .{ .terms = neg, .bound = -b.value, .strict = b.exclusive, .src = b.src }) catch unreachable;
+        }
+        if (f.hi) |b| {
+            out.append(alloc, .{ .terms = pos, .bound = b.value, .strict = b.exclusive, .src = b.src }) catch unreachable;
+        }
+        if (f.eq) |b| {
+            out.append(alloc, .{ .terms = pos, .bound = b.value, .strict = false, .src = b.src }) catch unreachable;
+            if (b.value != min_i64) out.append(alloc, .{ .terms = neg, .bound = -b.value, .strict = false, .src = b.src }) catch unreachable;
+        }
+        if (f.clamp) |c| {
+            out.append(alloc, .{ .terms = pos, .bound = c.hi, .strict = false, .src = c.src }) catch unreachable;
+            if (c.lo != min_i64) out.append(alloc, .{ .terms = neg, .bound = -c.lo, .strict = false, .src = c.src }) catch unreachable;
+        }
+        if (f.alts) |set| {
+            if (set.len >= 2) {
+                var lo = set[0];
+                var hi = set[0];
+                for (set) |v| {
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+                const src = f.alts_src orelse "*";
+                out.append(alloc, .{ .terms = pos, .bound = hi, .strict = false, .src = src }) catch unreachable;
+                if (lo != min_i64) out.append(alloc, .{ .terms = neg, .bound = -lo, .strict = false, .src = src }) catch unreachable;
+            }
+        }
+        for (f.linear.items) |r| out.append(alloc, r) catch unreachable;
+    }
+}
+
+fn linCheck(alloc: std.mem.Allocator, fields: []const Field) LinFeas {
+    var orig = std.ArrayList(LinRow).initCapacity(alloc, 16) catch unreachable;
+    linCollect(alloc, fields, &orig);
+    return kspec.linFeasible(alloc, orig.items);
+}
+
+// -- the transform/explainer steps that judge rows -------------------------
+//
+// These run inside the driver's passes; they live here so the row
+// vocabulary and its checks share one file.
+
+// A relational row's variables are field names too: each must exist on
+// the declaration and resolve to an integer scalar — a row naming a
+// field nobody declared refines nothing.
+fn linRowsDeclared(
+    allocator: std.mem.Allocator,
+    program: *const ast.Program,
+    meet: []const Field,
+    pfields: []const ProtoField,
+    home: []const u8,
+    flow: *const ast.Flow,
+    reporter: *koru_std.koru_compiler.ErrorReporter,
+    type_name: []const u8,
+) ?SiteResult {
+    for (meet) |*f| {
+        for (f.linear.items) |r| {
+            for (r.terms) |t| {
+                var pf: ?ProtoField = null;
+                for (pfields) |p| {
+                    if (std.mem.eql(u8, p.name, t.name)) {
+                        pf = p;
+                        break;
+                    }
+                }
+                const p = pf orelse
+                    return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): relational atom '{s}' names no field '{s}' — the declaration has none to refine", .{ type_name, r.src, t.name }) };
+                const scalar = terminalScalar(allocator, program, home, p.base) orelse p.base;
+                if (!af.isIntScalar(scalar)) {
+                    return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): relational atom '{s}' names '{s}' of base '{s}' — linear rows refine integer scalars only", .{ type_name, r.src, t.name, p.base }) };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// The relational rows' emptiness is a meet-level judgment — one field's
+// interval can't see that `a <= b` and `b <= a - 1` together hold
+// nothing. The refusal names every contributing atom.
+fn linMeetRefusal(
+    allocator: std.mem.Allocator,
+    meet: []const Field,
+    type_name: []const u8,
+    flow: *const ast.Flow,
+    reporter: *koru_std.koru_compiler.ErrorReporter,
+) ?SiteResult {
+    return switch (linCheck(allocator, meet)) {
+        .infeasible => |srcs| blk: {
+            var joined = std.ArrayList(u8).initCapacity(allocator, 96) catch unreachable;
+            for (srcs, 0..) |s, i| {
+                if (i > 0) joined.appendSlice(allocator, "' and '") catch unreachable;
+                joined.appendSlice(allocator, s) catch unreachable;
+            }
+            break :blk .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): the relational meet is empty — '{s}' cannot all hold", .{ type_name, joined.items }) };
+        },
+        else => null,
+    };
+}
+
+// Relational rows join the marker text, deduped on src — `==` mints two
+// rows that spell one atom.
+fn linAppendSrcs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), f: *const Field) void {
+    var seen_src = std.ArrayList([]const u8).initCapacity(allocator, f.linear.items.len) catch unreachable;
+    for (f.linear.items) |r| {
+        var dup = false;
+        for (seen_src.items) |s| {
+            if (std.mem.eql(u8, s, r.src)) dup = true;
+        }
+        if (dup) continue;
+        seen_src.append(allocator, r.src) catch unreachable;
+        out.appendSlice(allocator, " & ") catch unreachable;
+        out.appendSlice(allocator, r.src) catch unreachable;
+    }
+}
+
+// The FacetLinRow mint: typed rows ride facet_decl so the landed facet
+// keeps the provenance the marker text spells.
+fn linMintRows(allocator: std.mem.Allocator, f: *const Field) ?[]ast.FacetLinRow {
+    if (f.linear.items.len == 0) return null;
+    const rows = allocator.alloc(ast.FacetLinRow, f.linear.items.len) catch unreachable;
+    for (f.linear.items, 0..) |r, ri| {
+        const terms = allocator.alloc(ast.FacetLinTerm, r.terms.len) catch unreachable;
+        for (r.terms, 0..) |t, ti| {
+            terms[ti] = .{ .name = allocator.dupe(u8, t.name) catch unreachable, .coef = t.coef };
+        }
+        rows[ri] = .{ .terms = terms, .bound = r.bound, .strict = r.strict };
+    }
+    return rows;
+}
+
+// The explainer's pass-3 mirror of linRowsDeclared: a row variable that
+// names no declared field (or a non-integer one) reports refused.
+fn linRowFieldStatus(alloc: std.mem.Allocator, prog: *const ast.Program, home: []const u8, f: *const Field, pfields: []const ProtoField) ?[]const u8 {
+    for (f.linear.items) |r| {
+        for (r.terms) |t| {
+            var rpf: ?ProtoField = null;
+            for (pfields) |rp| {
+                if (std.mem.eql(u8, rp.name, t.name)) rpf = rp;
+            }
+            const rp = rpf orelse
+                return std.fmt.allocPrint(alloc, "refused: relational atom '{s}' names no field '{s}' on the declaration", .{ linSrc(alloc, r.terms, r.bound, r.strict), t.name }) catch unreachable;
+            const rscalar = terminalScalar(alloc, prog, home, rp.base) orelse rp.base;
+            if (!af.isIntScalar(rscalar))
+                return std.fmt.allocPrint(alloc, "refused: relational atom '{s}' names '{s}' of base '{s}' — linear rows refine integer scalars only", .{ linSrc(alloc, r.terms, r.bound, r.strict), t.name, rp.base }) catch unreachable;
+        }
+    }
+    return null;
+}
+
+// Relational rows in a field's term spelling — appended after the
+// bounds/clamp/alts so the marker text reads like the source chain.
+fn linSpellRows(alloc: std.mem.Allocator, out: *std.ArrayList(u8), f: *const Field) void {
+    for (f.linear.items) |r| {
+        out.appendSlice(alloc, " & ") catch unreachable;
+        out.appendSlice(alloc, linSrc(alloc, r.terms, r.bound, r.strict)) catch unreachable;
+    }
+}
+
+// The explainer's meet-level emptiness verdict as report text — null
+// when the rows are feasible; the caller hangs the message on the facet
+// entry since emptiness is not a per-field status.
+fn linMeetStatusText(alloc: std.mem.Allocator, meet: []const Field) ?[]const u8 {
+    return switch (linCheck(alloc, meet)) {
+        .infeasible => |srcs| blk: {
+            var joined = std.ArrayList(u8).initCapacity(alloc, 96) catch unreachable;
+            for (srcs, 0..) |s, i| {
+                if (i > 0) joined.appendSlice(alloc, "' and '") catch unreachable;
+                joined.appendSlice(alloc, s) catch unreachable;
+            }
+            break :blk std.fmt.allocPrint(alloc, "refused: the relational meet is empty — '{s}' cannot all hold", .{joined.items}) catch unreachable;
+        },
+        .outside => "outside the decidable fragment (>3 vars or >64 rows) — feasibility unchecked",
+        .feasible => null,
+    };
+}

@@ -431,6 +431,19 @@ pub const AstSerializer = struct {
             if (field.alt_default) |d| {
                 try self.writef(", .alt_default = {d}", .{d});
             }
+            if (field.linear) |rows| {
+                try self.write(", .linear = &[_]ast.FacetLinRow{");
+                for (rows) |r| {
+                    try self.write(".{ .terms = &[_]ast.FacetLinTerm{");
+                    for (r.terms) |t| {
+                        try self.write(".{ .name = ");
+                        try self.writeString(t.name);
+                        try self.writef(", .coef = {d} }}, ", .{t.coef});
+                    }
+                    try self.writef("}}, .bound = {d}, .strict = {} }}, ", .{ r.bound, r.strict });
+                }
+                try self.write("}");
+            }
             try self.write(" }, ");
         }
         try self.write("}, .location = ");
@@ -1965,6 +1978,21 @@ pub const AstSerializer = struct {
             }
             if (field.alt_default) |d| {
                 try self.writef(", \"alt_default\": {d}", .{d});
+            }
+            if (field.linear) |rows| {
+                try self.write(", \"linear\": [");
+                for (rows, 0..) |r, ri| {
+                    if (ri > 0) try self.write(", ");
+                    try self.write("{ \"terms\": [");
+                    for (r.terms, 0..) |t, ti| {
+                        if (ti > 0) try self.write(", ");
+                        try self.write("{ \"name\": ");
+                        try self.writeString(t.name);
+                        try self.writef(", \"coef\": {d} }}", .{t.coef});
+                    }
+                    try self.writef("], \"bound\": {d}, \"strict\": {} }}", .{ r.bound, r.strict });
+                }
+                try self.write("]");
             }
             try self.write(" }");
         }

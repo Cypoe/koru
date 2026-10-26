@@ -1,6 +1,5 @@
 // Koru Standard Library: the fold part of refine — joined via
 // `~part fold` in refine.kz; members land in koru_refine.
-//
 // One fold, three readers: the transform (refine.body.kz) walks it to
 // mint the facet_decl, the explainer re-derives the report from it, and
 // consumers (std/list, std/store, decoders) call metFields at their own
@@ -116,6 +115,7 @@ fn walkRefine(alloc: std.mem.Allocator, rep: ?*koru_std.koru_compiler.ErrorRepor
                             }
                         }
                     }
+                    if (ff.linear) |rows| linFoldLandedRows(alloc, f, rows);
                 }
             },
             .module_decl => |module| {

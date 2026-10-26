@@ -1,12 +1,8 @@
 // Koru Standard Library: the refine transform body — joined via
 // `~part body` in refine.kz; members land in koru_refine. The two
 // `default` impl procs in refine.k dispatch here; `scope` is the facet
-// target the selected impl stamps (null = universal).
-
-// The transform body both `default` impls share — `scope` is the facet's
-// target: null for the universal facet (bare `std/refine(S)`), "fpga" for
-// `std/refine(S)|fpga`. The variant dispatch picked which impl ran; the
-// scope it stamps is what that selection means.
+// target the selected impl stamps (null = universal for the bare
+// `std/refine(S)`, "fpga" for `std/refine(S)|fpga`).
 fn refineDefault(
     expr: []const u8,
     source: ast.Source,
@@ -71,6 +67,8 @@ fn refineDefault(
         }
     }
 
+    if (linRowsDeclared(allocator, program, meet.items, pfields.items, want.home, flow, reporter, type_name)) |r| return r;
+
     // -- pass 4: fold every sibling refine declaration onto the meet ------
 
     const my_inv = blk: {
@@ -92,6 +90,8 @@ fn refineDefault(
             return .{ .replacement = ast.refusal(allocator, reporter, .KORU205, flow.location, flow.module, "std/refine({s}): field '{s}' refines to nothing — '{s}' and '{s}' cannot both hold", .{ type_name, f.name, pair[0], pair[1] }) };
         }
     }
+
+    if (linMeetRefusal(allocator, meet.items, type_name, flow, reporter)) |r| return r;
 
     // -- pass 6: canonical marker, dedup against an already-met facet -----
 
@@ -131,14 +131,14 @@ fn refineDefault(
             out.appendSlice(allocator, " & ") catch unreachable;
             out.appendSlice(allocator, c.src) catch unreachable;
         }
+        linAppendSrcs(allocator, &out, &f);
     }
     const body = out.toOwnedSlice(allocator) catch unreachable;
     std.debug.print("{s}\n", .{body});
 
     // If a sibling block already left this facet in the tree, this site
-    // dissolves to a tombstone comment — one canonical facet_decl per
-    // (home, name, scope). The comment is write-only debug text; nothing
-    // parses it.
+    // dissolves to a tombstone comment (write-only debug text) — one
+    // canonical facet_decl per (home, name, scope).
     if (facetExists(program.items, want.home, want.name, scope)) {
         const tombstone = if (scope) |s|
             std.fmt.allocPrint(allocator, "// refine {s}:{s}|{s}: met", .{ want.home, want.name, s }) catch unreachable
@@ -151,8 +151,7 @@ fn refineDefault(
         } } };
     }
 
-    // The canonical facet goes into the program tree as a typed
-    // FacetDecl — the declaration later transforms read.
+    // The canonical facet lands as a typed FacetDecl — later transforms read it.
     const ffields = allocator.alloc(ast.FacetField, meet.items.len) catch unreachable;
     for (meet.items, 0..) |f, i| {
         ffields[i] = .{
@@ -164,6 +163,7 @@ fn refineDefault(
             .clamp = if (f.clamp) |c| .{ .lo = c.lo, .hi = c.hi } else null,
             .alts = if (f.alts) |set| (allocator.dupe(i64, set) catch unreachable) else null,
             .alt_default = f.alt_default,
+            .linear = linMintRows(allocator, &f),
         };
     }
     return .{ .replacement = ast.Item{ .facet_decl = ast.FacetDecl{

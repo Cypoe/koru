@@ -592,6 +592,25 @@ pub const FacetClamp = struct {
     hi: i64,
 };
 
+/// One named variable's coefficient in a relational atom — `a + b <= c`
+/// folds to terms {a:1, b:1, c:-1} ≤ bound. Terms are canonical:
+/// sorted by name, like names combined, zero coefficients dropped.
+/// Constants are folded into the row's bound, so every term is named.
+pub const FacetLinTerm = struct {
+    name: []const u8,
+    coef: i64,
+};
+
+/// A relational atom — `Σ terms·vars ≤ bound` (`< bound` when strict).
+/// Unlike the per-field bounds it is a claim relating fields; it rides
+/// the FacetField whose `&`-chain declared it for provenance, but the
+/// meet's feasibility is judged over every field's rows together.
+pub const FacetLinRow = struct {
+    terms: []const FacetLinTerm,
+    bound: i64,
+    strict: bool, // `<` vs `<=`
+};
+
 pub const FacetField = struct {
     name: []const u8,
     type: []const u8, // base type, e.g. "i64"
@@ -608,10 +627,21 @@ pub const FacetField = struct {
     /// never part of the predicate — a boundary that JUDGES a value tests
     /// membership; only a boundary that SUPPLIES one reads the default.
     alt_default: ?i64 = null,
+    /// Relational atoms declared under this field's `&`-chain —
+    /// `& a + b <= c` / `& <= balance + margin` (implicit-self LHS).
+    /// Unioned at meet; feasibility is a property of the whole row set.
+    linear: ?[]const FacetLinRow = null,
 
     pub fn deinit(self: *FacetField, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.type);
+        if (self.linear) |rows| {
+            for (rows) |r| {
+                for (r.terms) |t| allocator.free(t.name);
+                allocator.free(r.terms);
+            }
+            allocator.free(rows);
+        }
     }
 };
 

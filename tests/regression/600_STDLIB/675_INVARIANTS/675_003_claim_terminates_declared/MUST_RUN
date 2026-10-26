@@ -1,0 +1,3 @@
+The claim is validated at comptime AND the folded residue still runs — the
+two channels pinned separately: census by expected_comptime.txt, runtime by
+expected.txt.

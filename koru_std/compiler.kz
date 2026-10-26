@@ -5,6 +5,7 @@
 ~import std/deps
 ~import std/optimizer
 ~import std/rules
+~import std/spec
 
 ~part flags
 ~part control
@@ -991,6 +992,7 @@ const Allocator = std.mem.Allocator;
   |> check-phantom-args
   |> pass-auto-discharge
   |> pass-witness-check
+  |> pass-claims-check
   |> check-flow
   |> check-phantom-semantic
   |> check-purity
@@ -1599,6 +1601,9 @@ const emitFlowWithMocks = struct {
 // Witness check - the trusted consumer pass after every solver — decl, mark
 // helpers, and impl live in compiler.witness.kz (joined via ~part witness).
 ~part witness
+
+// Claims check (decl + impl in compiler.claims.kz).
+~part claims
 
 // Semantic phantom type checking - validates type-state compatibility using
 // the default Koru semantic checker (module-qualified phantom states)

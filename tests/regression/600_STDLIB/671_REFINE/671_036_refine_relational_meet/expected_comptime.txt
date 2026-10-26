@@ -1,0 +1,1 @@
+refine input:Ledger: balance: i64 & >=0, margin: i64 & >=0 & <=100, spend: i64 & >=0 & spend <= balance + margin

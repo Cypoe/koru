@@ -1,0 +1,99 @@
+// Koru Standard Library: the `claims` part of spec.kz — law claims as
+// data. Joined via `~part claims` in spec.kz; members land in koru_spec.
+//
+// A law claim: `~std/spec:claim(atom: terminates, on: loop-step) { ...json... }`.
+// `atom` names the law in spec's registered vocabulary — the resolvable
+// identity, an arg like realize's `iface:` so an unregistered name is a
+// refusal the harvester can point at, not prose in a JSON field. `on`
+// names the subject (for `terminates`, the fold's step tor). The Source
+// block carries the atom's declared parameters — `rank` for `terminates`.
+// The site EXECUTES at comptime (the build:config pattern): this proc
+// registers the declaration into `claim_registry`, and the claims-check
+// analysis pass reads the registry — the site owns capture, the pass
+// owns refusal (it is the one holding the reporter).
+
+~[comptime|norun]pub tor claim { atom: Expression, on: Expression, source: Source, meta: InvocationMeta }
+
+~proc claim|zig {
+    const wrapped = std.fmt.allocPrint(std.heap.page_allocator, "{{{s}}}", .{source.text}) catch return;
+    const parsed = std.json.parseFromSlice(ClaimDecl, std.heap.page_allocator, wrapped, .{ .ignore_unknown_fields = true }) catch null;
+    registerClaim(.{
+        .atom = atom,
+        .on = on,
+        .rank = if (parsed) |d| d.value.rank else "",
+        .malformed = parsed == null,
+        .file = meta.location.file,
+        .line = meta.location.line,
+        .column = meta.location.column,
+    });
+}
+
+// ============================================================================
+// CLAIMS — law participation declared as data
+// ============================================================================
+//
+// A claim site is `~std/spec:claim(atom: <name>, on: <tor>) { ...json... }`.
+// The atom is vocabulary: its semantics live HERE, spec-side, so two
+// modules cannot mean different things by the same word — a claim asserts
+// the registered definition, it does not define it. An atom outside the
+// registry is a named refusal under the signal-vocabulary discipline,
+// never a silent skip. `on` names the subject — for `terminates`, the
+// step tor whose `#label` fold the claim measures.
+
+pub const ClaimAtom = struct {
+    name: []const u8,
+    /// JSON fields the atom's declaration must carry.
+    required: []const []const u8,
+    /// What the atom means — the registered definition.
+    doc: []const u8,
+};
+
+/// The registered claim vocabulary. `terminates`: the declared `rank` is
+/// a linear form over the step tor's input fields; at every `@label`
+/// back-edge the substituted rank strictly decreases AND is bounded
+/// below — a cycle with a rank that cannot fall forever.
+pub const claim_atoms = [_]ClaimAtom{
+    .{ .name = "terminates", .required = &.{"rank"}, .doc = "the declared rank is a linear form over the fold's fields that strictly decreases across every back-edge and is bounded below" },
+};
+
+pub fn claimAtom(name: []const u8) ?ClaimAtom {
+    for (claim_atoms) |a| {
+        if (std.mem.eql(u8, a.name, name)) return a;
+    }
+    return null;
+}
+
+/// The claim's Source block — the atom's declared parameters.
+pub const ClaimDecl = struct {
+    rank: []const u8 = "",
+};
+
+/// One executed claim site — what the claims-check pass validates.
+/// Registration dedupes on site identity (file+line+column): comptime_main
+/// runs the site twice (the Phase 2.3.5 prime and Phase 2.5), and the
+/// command-dispatch prime runs it again — one claim per spelling, never
+/// per execution.
+pub const ClaimSite = struct {
+    atom: []const u8,
+    on: []const u8,
+    /// The atom's declared parameters — `rank` for `terminates`; "" = absent.
+    rank: []const u8,
+    /// The Source block was not parseable as the declared JSON shape.
+    malformed: bool,
+    file: []const u8,
+    line: usize,
+    column: usize,
+};
+
+pub var claim_registry: [64]ClaimSite = undefined;
+pub var claim_registry_count: usize = 0;
+
+pub fn registerClaim(site: ClaimSite) void {
+    for (claim_registry[0..claim_registry_count]) |c| {
+        if (c.line == site.line and c.column == site.column and
+            std.mem.eql(u8, c.file, site.file)) return;
+    }
+    if (claim_registry_count >= claim_registry.len) return;
+    claim_registry[claim_registry_count] = site;
+    claim_registry_count += 1;
+}

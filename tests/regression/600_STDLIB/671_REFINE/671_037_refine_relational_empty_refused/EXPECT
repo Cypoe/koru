@@ -1,0 +1,4 @@
+CONTAINS the relational meet is empty
+CONTAINS 'spend <= balance'
+CONTAINS '>=5'
+CONTAINS '<=0'

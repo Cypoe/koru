@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:22 terminates on tick: unproven — at the 'live' back-edge, the rank may not strictly decrease

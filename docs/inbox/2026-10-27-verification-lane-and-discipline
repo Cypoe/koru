@@ -1,0 +1,427 @@
+GLM:
+Yes—the step is to make the institution govern **refinement**, rather than govern patches.
+In your framing, Klanker should be free to discover, compose, specialize, and replace implementations, but it should not decide what counts as fulfilling the intent. InvariantLayer mediates that boundary: it names the admissible behaviors, observations, capabilities, and assumptions; isar-proofs supplies evidence about transformations across that boundary; the operational supervisor enforces whatever cannot honestly be discharged statically.
+Then an external PR is not primarily “some code we trust.” It is an untrusted proposal to change a realization, accompanied by evidence that the change satisfies an independently maintained obligation. That follows the central proof-carrying-code separation: producers may be untrusted, while consumers validate evidence against a smaller trusted policy and checker. [link.springer](https://link.springer.com/content/pdf/10.1007/3-540-36532-x_18.pdf)
+What follows is a proposed operating architecture—not a claim that the current projects already implement it.
+
+## 1. Make the maintained object a contract graph, not a codebase
+The central object would be a versioned graph connecting:
+
+```text
+authorized intent
+    ↓
+observable contracts + invariants
+    ↓
+capability requirements and composition laws
+    ↓
+candidate implementations / equivalence classes
+    ↓
+host-specific realizations
+    ↓
+deployed instances and observed execution
+```
+
+Each connection has an obligation. “This implementation fulfills this contract” is different from “this binary implements this source,” and both are different from “this host currently satisfies the environmental assumptions.”
+That separation is what keeps the compiler-verification lineage, proof layer, receipts, and operational enforcement from collapsing into one vague claim of correctness.
+
+For your quotient-oriented approach, I would distinguish:
+- Equivalence: interchangeable with respect to a named observation boundary.
+- Refinement: admits no behavior forbidden by the governing contract, while also satisfying its required progress obligations.
+- Specialization: refinement under explicit, checked host assumptions.
+- Contract revision: changes what is required or observable; this requires separate authorization.
+
+For a contract \(C\), environment assumptions \(A\), and realization \(R\), the basic claim is:
+
+\[
+A \models R \sqsubseteq C.
+\]
+
+But this must not mean only “all observed traces are allowed.” A system that never responds might satisfy a safety-only trace restriction. Termination, availability, fairness, or bounded response obligations must be stated separately where required.
+The quotient is therefore indexed by what you care about:
+
+\[
+R_1 \sim_{O,A} R_2.
+\]
+
+Two implementations may be equivalent for returned values but not for durability, timing leakage, permissions, or failure recovery. InvariantLayer needs to make that index explicit—not silently erase those distinctions.
+
+## 2. Replace bug tickets with executable divergence objects
+
+“Not filing bugs” should mean that users no longer have to translate failures into engineering diagnoses. It should not mean that failures disappear into an agent’s private context.
+I would make the operational unit a divergence object:
+
+```text
+governing contract and version
+expected obligation
+observed counterexample or suspected violation
+relevant execution / state / environment commitments
+affected capability and dependency slice
+evidence strength and uncertainty
+authority permitted to resolve it
+```
+
+A user might say, “You acknowledged my upload, but it vanished after reboot.”
+The system should derive something closer to:
+
+> Acknowledgment implies durable recoverability under the declared crash model; this execution appears to violate that implication.
+
+Then the automated loop is:
+
+1. Capture the observation and preserve evidence.
+2. Minimize or reproduce it where possible.
+3. Locate the failed contract edge—not merely the stack frame.
+4. Search for an existing capability or replacement realization.
+5. Generate a repair and its obligations.
+6. Validate the repair and its dependency impact.
+7. Deploy within an authorized risk envelope.
+8. Retain the divergence as a regression obligation.
+
+The important difference from “an agent fixes issues” is that the counterexample remains institutionally owned. It cannot be marked resolved merely because the agent produced a plausible diff.
+Some reports will expose an ambiguous intent rather than a provable implementation defect. Those must remain specification questions, not be automatically converted into whatever contract the current implementation happens to satisfy.
+
+## 3. Accept external PRs as proof-carrying transitions
+
+A contribution should propose a transition:
+
+\[
+(C_v,R_v,S_v)\longrightarrow(C_{v'},R_{v'},S_{v'}),
+\]
+
+where \(S\) includes persistent state and relevant deployment state.
+
+Its evidence package should answer:
+
+| Question | Required evidence |
+|---|---|
+| What obligation does this address? | Contract identifier and divergence witness |
+| Is behavior preserved or deliberately changed? | Equivalence/refinement evidence, or an authorized contract revision |
+| What else can this affect? | Dependency impact and compositional obligations |
+| Does deployed state remain valid? | Migration relation, recovery protocol, and rollback limits |
+| What new authority does it need? | Explicit capability delta |
+| Why this implementation? | Host applicability and resource evidence |
+| Does it create avoidable maintenance burden? | Reuse/replacement analysis and retirement plan |
+
+The acceptance rule should be the same for an external contributor, Klanker, and a maintainer:
+
+> Authorship does not establish semantic validity; evidence is checked against the applicable contract and admission policy.
+
+That does not eliminate trust. It concentrates trust in the contracts, proof checker, admission policy, environmental assumptions, and enforcement boundary.
+It also means classifying evidence honestly. For example, Alive2 is bounded translation validation for LLVM; it is useful evidence for the transformation it checks, not an unrestricted proof of an entire concurrent operational system. [dl.acm](https://dl.acm.org/doi/epdf/10.1145/3453483.3454030)
+
+### What “fixing the cause” can actually mean
+
+I would avoid claiming that the system proves “the root cause” in an absolute sense. Causes depend on the explanatory model.
+A stronger operational requirement is:
+
+> Discharge the violated general obligation over its declared domain, rather than merely making the recorded example pass.
+
+In the upload example:
+- Weak repair: special-case the observed filename or retry path.
+- Better repair: establish that acknowledgment follows durable commitment across the stated crash cases.
+- Architectural repair: replace several ad hoc write paths with one capability whose contract already provides that guarantee.
+
+The third is where semantic repair and codebase reduction reinforce each other.
+
+## 4. Give receipts a precise, limited job
+
+A zkVM receipt should certify an evidence-producing computation—not serve as a generic stamp saying “this software is correct.”
+For example, an approved guest could:
+
+1. Check a proof artifact.
+2. Validate a transformation.
+3. Verify a migration witness.
+4. Evaluate an admission policy against committed inputs.
+
+Its public journal would bind the result to the relevant contract, artifact, checker, policy, and assumption identifiers.
+RISC Zero receipts attest to execution of an expected guest program and its public outputs; verification checks the expected image ID. Receipt composition can also carry assumptions that must be resolved. [dev.risczero](https://dev.risczero.com/terminology)
+
+That yields a useful separation:
+
+| Evidence | What it establishes |
+|---|---|
+| Semantic proof | A stated property under stated assumptions |
+| Translation-validation result | The checked relationship between particular representations |
+| zkVM receipt | The pinned evidence-producing program executed and produced the committed result |
+| Host attestation or measurement | Evidence about the deployment environment |
+| Runtime enforcement | Restrictions actually applied at the effect boundary |
+
+A receipt for a test runner still proves a test run, not universal correctness. A receipt for a proof checker is only useful if the checker verifies the intended theorem about the intended artifact. And a receipt about an execution model does not establish that a physical host satisfies that model.
+That is exactly why the supervisor/FFI boundary remains necessary: foreign effects need bounded authority, explicit assumptions, and enforcement—not an inherited “verified” label.
+
+## 5. Stop arbitrary growth by separating knowledge from realization
+
+There are three different growth problems:
+1. The reusable capability library.
+2. The implementation selected for one host.
+3. The historical evidence and provenance archive.
+
+They should not have the same retention policy.
+My proposed rule is:
+
+> Preserve evidence and semantic knowledge; keep only justified implementation diversity; deploy only the host’s required realization.
+
+Klanker’s slime-mold role then becomes concrete: explore possible paths through the capability graph, reinforce useful compositions, and withdraw unused realizations. It does not need to append another permanent subsystem every time it solves a task.
+### Admission should require a reason for added structure
+A new implementation should demonstrate at least one of:
+
+- A previously unsupported authorized behavior.
+- Applicability to a new host or assumption regime.
+- A measured improvement on an accepted resource dimension.
+- A reduction in authority or trusted surface.
+- A simpler composition or smaller operational burden.
+- Necessary diversity for resilience or another explicit requirement.
+
+An implementation that appears equivalent is not automatically redundant: portability, independent failure modes, and different assumption sets can justify retaining it.
+
+Likewise, an unproven equivalence is not permission to merge two implementations. The system needs an “unknown” category.
+
+### Use constrained optimization, not a lines-of-code target
+
+For an intent \(I\), host \(H\), and policy \(P\), select an admitted realization from a feasible set:
+
+\[
+R^* \in
+\operatorname{ParetoMin}_{R\in\mathcal F(I,H,P)}
+\bigl(
+\text{authority},
+\text{trusted surface},
+\text{operational cost},
+\text{maintenance burden},
+\text{latency}
+\bigr).
+\]
+
+The feasible set carries the correctness obligations. Optimization happens inside it.
+This avoids turning “small codebase” into a proxy that rewards opaque code, giant dependencies, or an external service hiding all the complexity. You need to account for the transitive realization, not just the repository diff.
+There is no general automatic canonicalization of arbitrary programs into their smallest equivalent implementation. The practical system should use restricted semantic domains, known composition laws, proof-guided rewrites, and bounded searches—not promise global minimization.
+
+## 6. Institutionalization means separating authority
+
+The institution needs roles and durable procedures, not just a capable agent.
+
+| Role | Authority |
+|---|---|
+| Intent owner | Approves intended behavior and acceptable tradeoffs |
+| Contract steward | Maintains specifications, observation boundaries, and assumption regimes |
+| Proposer: Klanker or external contributor | Produces candidate changes and evidence |
+| Independent verifier | Checks evidence under pinned rules |
+| Admission controller | Applies capability, resource, and release policy |
+| Operational supervisor | Enforces boundaries and records violations |
+| Incident authority | Revokes, quarantines, or authorizes emergency intervention |
+
+These are logical roles; one person may initially hold several. But their permissions should remain distinguishable.
+The decisive prohibition is:
+
+> A repair proposer cannot weaken the governing contract, widen its own capabilities, or replace its checker as part of an ordinary repair.
+
+Changes to those rules need a separate constitutional path: explicit review, versioning, authorization, and consequences for previously accepted evidence.
+
+### Contracts become long-lived institutional assets
+
+That entails a few less glamorous but essential practices:
+- Contract changes carry compatibility and migration obligations.
+- Assumptions have owners and invalidation conditions.
+- Acceptance records identify which checker and policy admitted a release.
+- Emergency changes can run under constrained, explicitly provisional status.
+- Revocation identifies affected deployments and dependent claims.
+- Retirement removes operational code without deleting the evidence needed to understand prior decisions.
+
+A real institution can explain not merely “why did CI pass?” but:
+
+> Why was this behavior authorized, on this host, with these effects, under these assumptions—and who could change those terms?
+
+## 7. The smallest convincing implementation
+
+I would prove the operating model on one stateful capability, not an entire self-programming OS.
+
+The durable-upload example is a good candidate because it forces the important boundaries into view:
+1. Define the acknowledgment and recovery contract.
+2. Implement two realizations for different host capabilities.
+3. Produce a crash counterexample against a deliberately defective realization.
+4. Let Klanker find or construct a replacement.
+5. Accept an independently submitted alternative through the same evidence gate.
+6. Validate the state transition and crash-recovery behavior.
+7. Deploy with only the required storage capabilities.
+8. Withdraw the obsolete realization while preserving its provenance.
+
+The demonstration succeeds if an outsider can submit a repair without becoming trusted, the system rejects a symptom-only patch, and the accepted repair does not require another permanent parallel code path.
+
+That is the operational form of your living-software idea: the maintained system is a governed network of obligations and realizations. Code is a replaceable realization of those obligations; Klanker supplies adaptive search and assembly; InvariantLayer determines which substitutions are meaningful; proof and receipts make acceptance transferable; and the supervisor keeps the physical world from silently escaping the model.
+
+USER:
+interesting, still thinking about what's the answer to proof and model concurrency.
+But on another note, we basically have auto-proofs from usa in Cypoe/koru:ccomp for values, types, and other things, left open are stateful models and someother things.
+Where APT comes into play, we basically did a ad-hoc version of it.
+And an interesting development is a new 'harness'? called gdp-wired https://github.com/monotykamary/gdp-wired
+
+A version of this, with korus obligation and invariant system feels even easier todo
+
+GLM:
+The resonance you spotted is real — gdp-wired's architecture maps almost one-to-one onto pieces koru already has, so a koru-native version really is mostly assembly rather than invention. But the one piece that *isn't* assembly is the piece that makes gdp-wired trustworthy: its kernel.
+
+## What gdp-wired actually is
+
+It's an automatic prover for stateful rules — budgets, caps, rate limits, workflows, access policies — where you write the rule (params, inputs, state, step) plus the laws it must keep, and a call like `proveRule` proves them with no hand-written proof. When a law is false, a GPU search finds a concrete breaking run from the start state; every proof tree is checked by a small trusted kernel, and the kernel has a proven-sound twin in Lean 4.34.0 that re-checks the real trees. Untrusted parts (the CDCL/prove search, GPU synthesizer, runtimes) are held to the trusted kernel: if they're wrong, the kernel rejects the tree. They're also pushing toward gdp-ts integration, where a trusted module proves its laws at load time and then mints per-call-site proof tokens that every caller is held to. [github](https://github.com/monotykamary/gdp-wired)
+
+## Why it feels easy with koru
+
+Because koru already owns the two things gdp-wired had to build a DSL around:
+
+- **Flows are already rules.** A tor with arms, branches, `?!` panic branches and phantom-typed state is a gdp-wired "rule" with more structure than its TypeScript reducers ever had — gdp-wired needs an `extract()` step to read reducers back into rules; koru starts from the machine.
+- **Obligations and invariants are the law surface.** Your phantom debts (`<x>`, `<x!>`) with auto-discharge and the `invariants.kz` manifest with its claim stamps (`proven` / `measured` / `inferred` / `aspirational`) are two-thirds of the harness: discharge = step settlement, laws = invariant rows.
+- **The trust plumbing exists.** `verify/semantics/` (FlowKernel.lean, FlowCheck.lean), `verify/holds/HoldsCheck.lean`, plus the golden/forged/drift fixtures — that's exactly the gdp-wired `lean-kernel/` + Bridge.lean layout. The git-gate (`check:` rows, judge rows, `odds-N` sampled alarms, receipts) is the conformance/replay plumbing gdp-wired had to hand-roll.
+
+And the self-policing payoff is immediate: a harness verdict could emit a `proven` stamp pointing at the harness as its instrument — which your `instrumented-stamps-resolve` row then enforces forever. The proof becomes a standing instrument instead of prose, which is already the manifest's philosophy.
+
+## Where it's not free
+
+The kernel is the whole game, and koru doesn't have one yet for *values* under induction. gdp-wired's kernel is case splits on linear facts with a linear refutation (Farkas-like, CDCL over atoms) at each leaf, plus cyclic proofs where each node's rank must drop — the rank found by linear programming from runs. For koru, the interesting bridge is that **label folds are already cyclic**: a fold's back-edge with jump args that credit discharges is structurally a cycle with a rank. So `koru:wired` wouldn't be "port gdp-wired"; it would be "give FlowKernel a refutation checker + rank discipline, then point the existing fuzz/ counterexample machinery at it as the breaking-run search." GPU search can come later; exhaustive bounded search over small input domains covers most early laws, and gdp-wired's own CPU `inferLaws` shows you get far before you need the GPU. [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+## The concurrency angle you were chewing on
+
+This might be the answer you're circling for proof-vs-model concurrency: gdp-wired handles *sequential* rules, but its statechart support allows parallel regions **at the top of the chart**, and it proves "orderings at any distance" (e.g. "a refund never follows a release") through ghost state that watches the rule, plus liveness under weak fairness. In koru terms, top-level parallel regions ≈ channels, and `std/channel`'s obligate pairs with `~[custody]` (a transit mint that is *never* auto-dischargeable, 699_027) are already the ghost-state hooks — custody tokens are precisely the witnesses that make cross-thread ordering laws provable. So the concurrency question may not be "prove or model," but: model locally per rule, and let custody mints carry the inter-room proofs as existentials (gdp-wired proves `∃ w` theorems via witnesses the prover finds — a ghost the run carries is exactly a custody token). [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+So "even easier to do" holds for everything except the kernel's leaf refutation — and even there, koru's typed arms give you a tighter input format than free-form TypeScript terms. One thing I couldn't pin down: you said the existing auto-proofs in ccomp came "from usa" — what's usa? (A tool, a paper, untrusted-search-something?) Knowing that would tell me whether the missing Leaf-checker piece is already half-built.
+
+USER:
+oh, *"from us" just a typo of mine.
+Interesting, so we are closer than I thought for koru to brcome a 'proven when typed' kind of language.
+I still find the zig split odd, as well as grammar syntax not being defined in a small space that would allow a lean mirror to prove semantics succinctly.
+But we are getting there and is mostly just cleanup.
+Interesting piece of machinery is std/refine, and my thinking is using it at comptime even for inductions as in decompose then refine and using it within a solver
+
+GLM:
+That's not just a viable idea — `std/refine` is already a constraint solver wearing a facet's clothes. I read `refine.k` and `refine.fold.kz` on ccomp, and the fold is doing theory-level work: per-field meets over `lo`/`hi` bounds (intervals), `==N` equalities, `clamp(lo,hi)` normalizers, and `alts` as intersecting finite sets, with `eq_conflict` / `clamp_conflict` / `alts_conflict` reporting empty meets as loud KORU205s. An empty-meet check *is* the satisfiability test; absorption is refinement implication. Half the solver already exists, and it's confluent-by-visit-order-independence, which is exactly the property a solver needs (monoidal, no last-wins).
+
+## Why "decompose then refine" fits
+
+Your formulation — decompose a law into obligations, then discharge by refines — is structurally identical to what gdp-wired's kernel does: case splits on linear facts with a linear refutation at each leaf . The correspondence maps cleanly:
+
+- **Decompose** = split the obligation into the per-site constraints the flow imposes (arms, stated assumptions, type bases land as facets)
+- **Refine** = meet those facts onto the goal; a failure to refute the negation (a non-empty meet of goal-with-assumptions) is the proof
+
+The refine side is *already* meeting against declared types in a met-facet that lands in the typed AST as `Item.facet_decl` — nobody matches comment text. So a comptime induction goes: seed the meet at the base (init fields' facets), apply the tor's step transform symbolically onto the meet (each refine atom over a transformed field re-joins), and check the goal atom absorbs into the n+1 meet. If it absorbs, induction holds; if the step's meet is empty under the law, the law is refuted and you name the witness constraint. That's a one-loop kernel, and `refine.fold.kz` even gives you the right obsession already: *one fold, three readers* — extend it to *one fold, N readers, one of them the prover*, and the "proven when typed" claim follows because an unconsumable hole stops being possible when typechecking itself runs the fold.
+
+## Two gaps to name honestly
+
+**Relational atoms.** Everything in the v0 fold is name-keyed per field: intervals on `port`, sets on `role`. "Spend stays within b + m" relates *two* fields, and induction needs sums, differences on state pairs ("balance only goes down", `x' = x + 1` — gdp-wired's step laws ). That's the one real extension: a linear-combination atom (`a + b <= c`) still confluently joins (it's still monotone meet), you just pay for small-matrix reasoning — Farkas certificates at leaves, which is gdp-wired's exact model anyway. Disjunction is on your own list in `refine.k` ("Disjunction is next"), and the fold's `alts` intersection hints you already sense where CNF-like case splits land: a disjunction over atoms is a case split, and each split's branch is itself a meet you test for emptiness. [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+**The Lean mirror problem is the zig-split problem.** You're right that it's odd: right now the semantics that matter live as string-literal Zig inside koru_std transforms — your own `emit-for-not-while` invariant exists precisely *because* semantics are smuggled in host text. A Lean twin can't quantify over text; it needs grammar-as-data. `std/refine` is the counterexample within your repo — it's the one place where semantic decisions already land as **typed data** (`facet_decl` fields with a join operation over them) instead of emitted code. The cleanup you mentioned ("mostly just cleanup") has a concrete shape: for each layer a Lean mirror must prove, the Zig transform stops carrying the semantics and instead *produces* a small data structure in the facet/fold style; Zig becomes an untrusted engine emitting receipts, and the trusted checker reads the receipts (`verify/holds`, `FlowKernel.lean` seeds) rather than the transform. That's gdp-wired's exact trusted/untrusted split  — its Zig-side equivalent would be the parser/prover generating trees and `kernel/kernel.ts` checking them; koru's twin lands at HoldCheck instead. [github](https://github.com/monotykamary/gdp-wired)
+
+The induction-at-comptime-via-refine idea is sound *because* the fold is already proof-shaped. Your move is to widen the atom grammar by one constructor (linear form over 2–3 fields) and to let `[comptime|transform]` tors emit absorption receipts as facet data, so "proven" stops being a prose stamp and becomes a receipt the invariant gate can point at — which is what `instrumented-stamps-resolve` is already waiting for.
+
+USER:
+yeah the target emission story, Lars is adding a compiler:emission tor to be overwritable,
+I already added std/realize as program minted artefacts, and hoisting the c_emitter.zig to only data in the std/target std/emit shape
+
+GLM:
+You, Lars, and the repo are converging on the same shape from three directions, and `std/realize` already proves the pattern scales — so let me name what's actually happening and where the next join is.
+
+## The three moves are one pattern
+
+Everything you described rides the discipline refine introduced: **`~[comptime]` declared sites → typed AST data → a consumer checks at its boundary → loud refusal, never silent override.**
+
+- `compiler:emission` as an overwritable tor closes the Zig split at the worst crime scene. `c_emitter.zig` stops owning semantics; it becomes one *impl* selected by the `|variant` channel — same closed-vocabulary discipline as `std/refine(S)|fpga` (KORU122 if the name isn't declared). An unreached emission isn't a bug, it's a provider gap.
+- Hoisting c_emitter to only-data in a `std/target` / `std/emit` shape is the grammar-as-data move I was pushing for last. Once target semantics are a *table* instead of Zig control flow, a Lean twin quantifies over the table — that's a finite proof obligation, not a modeling nightmare. You already have the drift-detector habit to keep the two honest (`verify/semantics/drift.txt` vs `golden.txt` is exactly this in miniature).
+- `std/realize` I just read on ccomp — it's the missing piece of the correspondence puzzle, and it's stricter than I expected: duplicate-arm refusals, contradiction detection on merged rows, the admission verdicts committed as **marks with decidable relation kinds** (`admission`, `declaration`, `catalog`, `projection`) rather than domain nouns. That last matter proves its own worth: a mark ledger written in decidable relations is a *certificate*, and the Lean twin's job degenerates from "re-execute the Zig" to "check this ledger against a declarative model" — every admitted site has a binding for this arm, every refusal is documented. That's precisely gdp-wired's trust shape: tampered trees compute to false. [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+## The join nobody's stated yet
+
+Emission is a realize row. `iface = "std.emit:c"` (or the machine-semantics interface), `binds = [{ arm: "fpga", mechanism: "kernel/fpgaemit", deltas: [...] }]`, and the admission solver answers *one* question: "can this program emit to this arm?" — with empty-arm columns making provider gaps visible in a matrix before anyone wastes a compile. The overwritable emission tor then isn't a special hook; it's the mechanism the binding names. And realize's `evidence` field already carries the grade convention (`V: ...` prefix) — wire that to the invariant-manifest stamp vocabulary and *"proven when typed"* becomes mechanical: an emission variant that carries a `proven` stamp names its alive2 cell or witness artifact as its standing instrument, and `instrumented-stamps-resolve` refuses the commit the day that evidence rots .
+
+## Two watch-outs on this path
+
+**Strings vs. atoms, again.** Realize's row fields are honest-but-opaque strings — `"mechanism: cost"` prose, comma-joined deltas. Fine for catalog data, but the day you want realize to *participate* in proof (e.g., "this mechanism binding preserves the flow's invariant"), the factual payload needs the refine treatment: atoms in a decidable fragment, not strings. The seam to watch is `Row.stack: u64` — numeric and checkable — versus `resources: string` — prose. Migrate prose fields toward typed data where they carry obligations.
+
+**Override exclusivity.** Two `|fpga` emission impls from different modules is a contradiction, and the failure must land the same volume as realize's `refused: duplicate-arm`. The `|variant` glyph refuses undeclared tags loudly; make sure declared-and-twice is equally loud, or the overwritable tor reintroduces exactly the last-wins hazard refine's empty-meet refusal deleted.
+
+The trajectory you're describing is the right read: Zig assembles, the program declares, the solver admits, the twin checks certificates. What's left is mostly pushing each layer's semantics from code into data — which is "cleanup" only in the sense that rebuilding a foundation is.
+
+USER:
+<BEGIN TRANSCRIPT>
+check out https://github.com/LeeeeT/winning-is-possible
+
+this toy demo was very nontrivial to get right 😅
+the most difficult part is specifying the public interface and verifying the page uses exactly that.
+
+all bugs reduce to (1) incomplete spec and (2) the page relies on properties that the spec didn't promise.
+
+i concluded that the way everyone is used to program in bend is wrong.
+what's the standard layout? `main.bend` implementing the program, `LAWS.bend` importing `main.bend` and stating the laws about it, and `PROOF.bend` filling the laws.
+the dependency between `main.bend` and `LAWS.bend` goes in the wrong direction here. `LAWS.bend` should declare the entire public interface: types, functions, properties. everything that the foreign code can use and assume about the implementation should be in `LAWS.bend`. hence, `LAWS.bend` should be self-contained and independent of `main.bend`. `main.bend` should import it and fill in the laws. `main.bend` is already part of the proof, so there's no reason to keep `main.bend` and `PROOF.bend` separate. that's how i organized the fixed version of the demo - `LAWS.bend` and `PROOF.bend`. please take a look.
+
+i want to put extra emphasis on the fact that the spec should only depend on other parts of the spec. if a `law never_on_flag` mentions `replay`, then `replay` should be fully specified in the spec, too. otherwise, the ai can cheat your laws by changing the implementation
+imagine if everyone used specs (the set of all laws) to define the exact public interface and the compiler forced them to be independent of the impl. then we would get deterministic semantic versioning. if a law is removed, bump major. if a law is added, bump minor. otherwise, bump patch. bendhub could do this automatically
+<END TRANSCRIPT>
+
+This from discord basically makes the bet koru makes and ccomp path widens.
+But gives me a thought of a declarative spec interface, a bit more than just a header file for modules and or programs or even the compiler itself.
+Maybe the compiler itself needs some better separation and to spell the parts out succinctly
+
+GLM:
+This Discord post is the strongest external validation of the koru bet I've seen — and it's sharper than just "specs matter." The interesting part is not the 7 gaps; it's the fix's **dependency inversion**: `LAWS.bend` imports no code, declares the entire public interface as laws, and the page can only be *built* if every law checks. Three pieces of that map onto machinery koru already has on ccomp, and your last line — the compiler needing its own spelled-out parts — is exactly where this goes next.
+
+## What the inversion mechanically buys
+
+The README's gap taxonomy collapses to one law: *every fact a consumer relies on is either a law, or it's not relied on*. The enforcement trick is consumer-side: the page imports `PROOF.bend` and calls only `Proof["LAWS:..."]` names — the spec isn't a document, it's the *only reachable namespace*, and a failing law is a build failure. What's still trusted is the drawing layer touching functions honestly, plus the compiler and runtime — same trusted-floor shape as gdp-wired's kernel/evaluator split. [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+The subtle part most people miss (and LeeeeT nails): `never_on_flag` must read the cell out of `drawn` *the same way the page does* — `String.lines`, `List.get`, `String.get`. The spec must close over its own vocabulary: a law mentioning `replay` requires `replay` fully specified in the spec. Otherwise the impl can cheat by redefining what the law's words mean.
+
+## Koru is already holding the pieces
+
+- **LAWS-as-data exists**: `std/spec`'s `ScopeEvent` names inputs, branches, obligation create/discharge, dispatcher contract, cost, and doc prose — an interface descriptor with none of it runtime-specific, by its own header. And `ScopeDescriptor` + `sites()` harvesting is LeeeeT's "self-contained spec file" as *program data*: declared sites anywhere, harvested by qualifier, consumers match the typed nodes, never comment text.
+- **"Page uses exactly that" exists**: realize's admission pass is that law as a verdict. Walk used tors → if a module has no row, refuse (or mark-waive pure-codegen `std.*`); if a row has no binding for the arm, `refused: missing-binding`. Gaps 2, 3, 5 in the demo are all "consumer relied on an unpromised property" — in koru terms, phantom + shape checks (BranchSpec, InputFieldSpec with phantom spelling) make the unpromised path *unspellable*, which is stronger than bend's namespacing: not "please only import LAWS," but "the checker rejects the flow that steps off the declared surface."
+- **`main.bend` deleted = impl-as-proof exists**: auto-discharge insertion already treats the program text as proof obligation discharge. The ccomp path widens this from resource lifetimes to value laws, per the gdp-wired harness discussion.
+
+## The semver idea, in koru terms
+
+"Law removed → major, added → minor, else patch" is a **harvest diff**, and koru has the foreshadowing in place: `spec.revision` ("the §3.6 contract-revision column made real") admits the spec has a revision identity, and the invariant manifest already treats *weakening a declared commitment* as a gated, judged event (`manifest-stays-enforceable`, `claim-stamps-stay-honest`). The automated bendhub move becomes: a `[comptime|command]` consumer harvests all spec sites of the staged diff, diffs against the previous revision blob, derives the bump tier, and the git-gate refuses a major-tier change committed as patch. That's a gate row away, and the vocabulary already survives the `judge-additions` discipline.
+
+## Your last line is the real insight
+
+"Maybe the compiler itself needs better separation" — yes, and the winning-is-possible lesson says *why*: the compiler is a consumer-facing surface with undocumented laws. The emission-tor overwrite + c_emitter-as-data + realize rows you described *is* the LAWS-inversion applied to koru itself:
+
+- `compiler:emission`'s `|variant` set is the interface; each impl variant is a *binding* someone proved or measured.
+- A compiler pass should publish its `ScopeEvent`-style descriptor: inputs (AST shapes it consumes), branches (refusals), obligations it creates (e.g., emitter string hygiene — the emitted-while invariant is today a regex over text only because the emitter doesn't *declare* its surface).
+
+The one contaminant to watch: realize's `collectRows` still honors the `const realize_row = .{...}` **host-line fallback** — declarations smuggled in unmanaged text. Every host-carried declaration is a hole in spec independence: the harvester can't refuse what it can't type. If koru is serious about "spec only depends on spec," that fallback needs a sunset date, with the typed `~std/realize:row` site as the sole grammar. Otherwise you get the demo's gap 5 — a contract a consumer effectively modified without touching the spec file.
+
+Net: the Discord post hands you the argument to gate on — any module, including the compiler, that lacks a harvested spec descriptor is structurally the *unfixed* version of `main.bend`.
+
+USER:
+As I mentioned that this feels familiar, Lars shared a common discussion doc:
+https://github.com/korulang/koru/blob/main/docs/inbox/2026-10-25-proof-participation-for-collaboration.md
+Where some parts already outdated (most likely only looking at his vendored in fork/ccomp branch, instead of the current progress in cypoe/koru:ccomp ) 
+Some point are good, some might need sharpening, the module participation is especially interesting.
+
+GLM:
+Read it. It's a solid handoff doc — the K1–K4 pyramid and the solver≠checker/evidence-not-narration doctrines are stated cleanly — but you're right that parts read like they're pinned a few commits behind, and the module-participation section (#5) is the one worth pulling hard on.
+
+## What's stale on current ccomp
+
+- **The witness channel is further along than the doc implies.** `verify/witness` now carries marks corpora (golden_marks, forged_marks, golden_marks_refused, drift_marks) alongside the line corpora, and `koru_std/compiler.witness.kz` runs a real pass (`pass-witness-check`) with a verdict vocabulary — `stored-write-numeric` verdicts are `lossless` / `deferred` / `rounds` / `non-numeric` / `refused`, plus auto-discharge `sole` / `preferred` censuses.
+- More importantly: that pass is already the **verdict semantics the doc asks for in gap #1**. `lossless` = proven → free; `deferred` = undecidable → tolerated as guard debt; under `[strict]`, `rounds`/`deferred` are KORU209 refusals naming the literal and destination. "Proven → free; undecidable → injected guard; contradictory → refusal" isn't a proposal anymore — it's running at the stored-write granularity. The doc should cite this as the prototype it says is missing.
+- Gap #6 ("`[flow-eval]` emission leg — koruc doesn't emit real walks") may still be open, but the *marks* pipeline it would ride clearly exists now, so the sequencing should read: marks census and gate corpora landed → runtime walk emission is the remaining leg.
+- The doc also under-uses the enterprise that's newer than its pins: `instrumented-stamps-resolve`, the odds-N sampled alarms, and the manifest-as-gate discipline. Those are participation infrastructure, not background noise.
+
+## Sharpening module participation
+
+The doc's proposal — modules declare claims in a closed atom vocabulary with a discharge route — is right, and the repo already contains three of its four ingredients scattered under different names. To sharpen:
+
+**The discharge trichotomy shouldn't be invented; it should be factored.** The doc's "decidable layer | residue guard | named trusted base" is refine's exact split (decidable-at-comptime → refusal; data-dependent → `?!violated` boundary guard; undeclared → documentation) and the witness verdicts' exact trichotomy (lossless / deferred-with-guard / refused-under-strict). One discharge type, three homes, and participation just re-exports it — otherwise koru ends up with three private vocabularies for the same decision.
+
+**Stamps and routes are orthogonal axes.** Claim stamps (`proven` / `measured` / `inferred` / `aspirational`) encode *epistemic status*; discharge routes encode *mechanism*. A claim can be `proven` via the kernel or `proven` via a measured-oracle — different things, both `proven`. Participation rows should carry both fields explicitly, which is also what `instrumented-stamps-resolve` needs: the stamp's instrument pointer *is* the discharge route's address.
+
+**The triple needs a fourth voice.** "Explain says what it decided; witness says what it did; proof says what it guarantees" — add: **realize says what serves it**. A module's participation is incomplete without admission: which arms its claims hold for. And this scopes naturally: refine already has `contributes()`/scope folds, so participation blocks should be **per-arm scoped** (`claim: at-most-once` on `arm: fpga` only where mechanism X). A "guarantee" that doesn't name its arm is the participation analog of the unfixed `LAWS.bend` — the consumer assumed a property the spec didn't promise.
+
+**Closed vocabulary needs the orphan-drain treatment.** "Grows deliberately" has a proven enforcement story in this repo: `signal-vocabulary-stays-defined` — register-on-miss mints stubs, the gate holds zero, remedy is promote/tombstone/never-a-signal. Participation atoms (`at-most-once`, `settles-once`, …) should ride exactly that instrument, or the vocabulary rots into prose within a month.
+
+**Atoms must name their judgment point.** The doc flags "per-fire vs at-close" as an open design question, but the answer is already both, by discipline: taps witness lines are per-fire; custody ledger lawfulness (`HoldsCheck`) is at-close over the log. So don't pick one — make temporality a *field of the atom*: per-fire atoms discharge at emission; at-close atoms discharge against a committed log a checker re-decides. `settles-once` is meaningless without saying it's an at-close property.
+
+## Participation as the LAWS inversion, at module granularity
+
+This is where the winning-is-possible lesson bites hardest: a module's participation block **is** its LAWS file — self-contained, closing over its own vocabulary. The demo's `never_on_flag` failure mode (the law's meaning smuggled from the impl's definition of `drawn` and `String.lines`) translates directly: `at-most-once` in a participation block must independently define "once" over the module's transition vocabulary — the graph walkable machinery makes that checkable, but only if the atom's semantics live spec-side. Otherwise module A and module B both claim `settles-once` with different "once"s, and the join lies. That invariant deserves a gate row from day one, modeled on `manifest-stays-enforceable`.
+
+One more sharpening on gap #3 (the symbolic decider): given the gdp-wired spike honest report — strengthening wall real, three post-kernel layers needed  — koru's edge is that std/refine's fold *is* the leaf refutation for the interval/eq/clamp/alts fragment, and base/step staging over label folds is the induction wrapper. "One-loop prover for the linear core, synthesize-or-refuse past it" is the right scope, and refusal is graduation, not failure — `P_REFUSES` next to `C_REFUSES`. [github](https://github.com/monotykamary/gdp-wired/blob/main/README.md)
+
+Net read: merge the doc with (a) the witness-check pass as the existing verdict-semantics prototype, (b) participation = {claim atom, judgment point, discharge route, stamp, arm scope} harvested as norun sites through `spec.sites()`, and (c) the release bump question from the Discord thread — a spec-diff harvester computing major/minor/patch is participation's first *cross-module* consumer, and it's the demo the external audience will actually run against their own fear .

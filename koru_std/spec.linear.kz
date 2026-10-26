@@ -1,0 +1,364 @@
+// Koru Standard Library: the `linear` part of spec.kz — the shared
+// integer-linear expression grammar and feasibility engine. Joined via
+// `~part linear` in spec.kz; members land in koru_spec. std/refine's
+// relational atoms and claim ranks are the same grammar; it lives HERE
+// (koru_spec is emitted with the compiler core; koru_refine is opt-in)
+// so every reader parses one spelling with one parser.
+
+// ============================================================================
+// LINEAR FORMS — the shared integer-linear expression grammar
+// ============================================================================
+//
+// `term (± term)*` where a term is `N` | `name` | `N*name` | `name*N` —
+// the decidable fragment contract vocabularies speak. std/refine's
+// relational atoms and claim ranks are the same grammar; it lives HERE
+// (koru_spec is emitted with the compiler core; koru_refine is opt-in)
+// so every reader — refine's fold, the claims pass, the later prover —
+// parses one spelling with one parser. Refuses (null) anything outside:
+// parens, `*` between two names, empty terms, non-identifier names.
+
+pub const LinPart = struct { coef: i64, name: ?[]const u8 };
+
+// A variable name inside a linear form — identifier characters plus `.`
+// for cell-field paths (the same shape print holes accept).
+fn isLinIdent(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '.')) return false;
+    }
+    return !std.ascii.isDigit(s[0]);
+}
+
+pub fn parseLinExpr(alloc: std.mem.Allocator, raw: []const u8) ?[]LinPart {
+    var s = std.ArrayList(u8).initCapacity(alloc, raw.len) catch unreachable;
+    for (raw) |c| {
+        if (c != ' ' and c != '\t') s.append(alloc, c) catch unreachable;
+    }
+    if (s.items.len == 0) return null;
+    var parts = std.ArrayListUnmanaged(LinPart){};
+    var i: usize = 0;
+    var sign: i64 = 1;
+    if (s.items[0] == '-') {
+        sign = -1;
+        i = 1;
+    } else if (s.items[0] == '+') i = 1;
+    while (i < s.items.len) {
+        var j = i;
+        while (j < s.items.len and s.items[j] != '+' and s.items[j] != '-') j += 1;
+        const t = s.items[i..j];
+        if (t.len == 0) return null;
+        var coef: i64 = 1;
+        var name: ?[]const u8 = null;
+        if (std.mem.indexOfScalar(u8, t, '*')) |st| {
+            const l = t[0..st];
+            const r = t[st + 1 ..];
+            if (r.len == 0 or std.mem.indexOfScalar(u8, r, '*') != null) return null;
+            if (std.fmt.parseInt(i64, l, 10)) |c| {
+                coef = c;
+                name = r;
+            } else |_| if (std.fmt.parseInt(i64, r, 10)) |c| {
+                coef = c;
+                name = l;
+            } else |_| return null;
+        } else {
+            if (std.fmt.parseInt(i64, t, 10)) |c| {
+                coef = c;
+            } else |_| {
+                name = t;
+            }
+        }
+        if (name) |n| {
+            if (!isLinIdent(n)) return null;
+            parts.append(alloc, .{ .coef = coef * sign, .name = n }) catch unreachable;
+        } else {
+            parts.append(alloc, .{ .coef = coef * sign, .name = null }) catch unreachable;
+        }
+        if (j >= s.items.len) break;
+        sign = if (s.items[j] == '-') -1 else 1;
+        i = j + 1;
+    }
+    return parts.items;
+}
+
+// ----------------------------------------------------------------------------
+// Linear rows — one comparison's canonical form and its feasibility judgment.
+//
+// A relational atom `lhs <= rhs` normalizes to `Σ coef·name <= bound`
+// (strict flag for `<`): terms sorted by name, combined, zeros dropped,
+// constants folded into the bound (`rhs.const - lhs.const`). Relational
+// atoms MEET by union — a per-field lattice cannot express a row relating
+// two fields — so feasibility is judged over a whole row set, never one
+// field's atoms.
+//
+// `linFeasible` is integer-exact Fourier–Motzkin: a row `Σ c·x ≤ k` with
+// c_v = −a (a>0) and one with c_v = +b combine by b·row_n + a·row_p — v
+// cancels without rationals. Real-complete (an infeasible verdict is
+// truly empty); integer gaps like `2x≤3 ∧ 2x≥3` may pass — the refusal
+// side stays sound, strictness is a later rung. Named-var and row-count
+// caps are the decidable fence: past them the answer is `outside`, never
+// a verdict.
+
+pub const LinTerm = struct { coef: i64, name: []const u8 };
+
+pub const LinRow = struct {
+    terms: []const LinTerm,
+    bound: i64,
+    strict: bool,
+    src: []const u8,
+};
+
+pub const LinFeas = union(enum) {
+    feasible,
+    infeasible: []const []const u8,
+    outside,
+};
+
+// `lhs <= rhs` → terms lhs−rhs, bound rhs.const − lhs.const.
+pub fn linNormalize(alloc: std.mem.Allocator, lhs: []const LinPart, rhs: []const LinPart, strict: bool, src: []const u8) LinRow {
+    var terms = std.ArrayListUnmanaged(LinTerm){};
+    var bound: i64 = 0;
+    for (lhs) |p| {
+        if (p.name) |n| {
+            terms.append(alloc, .{ .coef = p.coef, .name = n }) catch unreachable;
+        } else bound -= p.coef;
+    }
+    for (rhs) |p| {
+        if (p.name) |n| {
+            terms.append(alloc, .{ .coef = -p.coef, .name = n }) catch unreachable;
+        } else bound += p.coef;
+    }
+    std.mem.sort(LinTerm, terms.items, {}, struct {
+        fn lt(_: void, a: LinTerm, b: LinTerm) bool {
+            return std.mem.order(u8, a.name, b.name) == .lt;
+        }
+    }.lt);
+    var merged = std.ArrayListUnmanaged(LinTerm){};
+    for (terms.items) |t| {
+        if (merged.items.len > 0 and std.mem.eql(u8, merged.items[merged.items.len - 1].name, t.name)) {
+            merged.items[merged.items.len - 1].coef += t.coef;
+        } else {
+            merged.append(alloc, t) catch unreachable;
+        }
+    }
+    var out = std.ArrayListUnmanaged(LinTerm){};
+    for (merged.items) |t| {
+        if (t.coef != 0) out.append(alloc, t) catch unreachable;
+    }
+    return .{ .terms = out.items, .bound = bound, .strict = strict, .src = src };
+}
+
+// `parts <= 0` as a row — the shape a claim's entailment checks arrive in.
+pub fn linPartsRow(alloc: std.mem.Allocator, parts: []const LinPart, strict: bool, src: []const u8) LinRow {
+    return linNormalize(alloc, parts, &.{}, strict, src);
+}
+
+// A row's canonical spelling for markers and witnesses — `2*a - b <= 4`
+// spells as `2*a <= b + 4`: negative terms move right as positives.
+// Terms arrive sorted, so the spelling is canonical within each side.
+pub fn linSpell(alloc: std.mem.Allocator, terms: []const LinTerm, bound: i64, strict: bool) []const u8 {
+    var out = std.ArrayList(u8).initCapacity(alloc, terms.len * 10 + 16) catch unreachable;
+    var first = true;
+    for (terms) |t| {
+        if (t.coef <= 0) continue;
+        if (!first) out.appendSlice(alloc, " + ") catch unreachable;
+        if (t.coef != 1) out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}*", .{t.coef}) catch unreachable) catch unreachable;
+        out.appendSlice(alloc, t.name) catch unreachable;
+        first = false;
+    }
+    if (first) out.appendSlice(alloc, "0") catch unreachable;
+    out.appendSlice(alloc, if (strict) " < " else " <= ") catch unreachable;
+    first = true;
+    for (terms) |t| {
+        if (t.coef >= 0) continue;
+        if (!first) out.appendSlice(alloc, " + ") catch unreachable;
+        if (t.coef != -1) out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}*", .{-t.coef}) catch unreachable) catch unreachable;
+        out.appendSlice(alloc, t.name) catch unreachable;
+        first = false;
+    }
+    if (first or bound != 0) {
+        if (first) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}", .{bound}) catch unreachable) catch unreachable;
+        } else if (bound > 0) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " + {d}", .{bound}) catch unreachable) catch unreachable;
+        } else {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " - {d}", .{-bound}) catch unreachable) catch unreachable;
+        }
+    }
+    return out.toOwnedSlice(alloc) catch unreachable;
+}
+
+// Find the ONE comparison in a linear atom's text — `none` when there is
+// no comparison, `multi` when a second `<=`-family glyph appears (a
+// conjunction is two atoms, not one). Callers own the refusal mapping.
+pub const LinCmpSplit = union(enum) {
+    none,
+    one: struct { pos: usize, op: []const u8 },
+    multi,
+};
+
+pub fn splitLinCmp(atom: []const u8) LinCmpSplit {
+    const ops = [_][]const u8{ "<=", ">=", "==", "!=", "<", ">" };
+    var pos: ?usize = null;
+    var op: []const u8 = "";
+    var i: usize = 0;
+    while (i < atom.len) : (i += 1) {
+        const c = atom[i];
+        if (c != '<' and c != '>' and c != '=' and c != '!') continue;
+        var matched = false;
+        for (ops) |o| {
+            if (i + o.len <= atom.len and std.mem.eql(u8, atom[i .. i + o.len], o)) {
+                if (pos != null) return .multi;
+                pos = i;
+                op = o;
+                i += o.len - 1;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) return .multi; // a bare `=`/`!` is not a comparison glyph
+    }
+    if (pos) |p| return .{ .one = .{ .pos = p, .op = op } };
+    return .none;
+}
+
+// Substitution: `form` over names, replaced name-by-name by `subs` exprs
+// (themselves linear parts — `x ↦ x + 1` keeps everything linear). A name
+// with no substitution rides through unchanged — the caller decides
+// whether uncovered names are identity (unchanged field) or a fence exit.
+pub const LinSub = struct { name: []const u8, expr: []const LinPart };
+
+pub fn linSubstitute(alloc: std.mem.Allocator, form: []const LinPart, subs: []const LinSub) []LinPart {
+    var out = std.ArrayListUnmanaged(LinPart){};
+    for (form) |p| {
+        if (p.name) |n| {
+            var applied = false;
+            for (subs) |s| {
+                if (!std.mem.eql(u8, s.name, n)) continue;
+                for (s.expr) |e| {
+                    out.append(alloc, .{ .coef = p.coef * e.coef, .name = e.name }) catch unreachable;
+                }
+                applied = true;
+                break;
+            }
+            if (!applied) out.append(alloc, p) catch unreachable;
+        } else {
+            out.append(alloc, p) catch unreachable;
+        }
+    }
+    return out.items;
+}
+
+// Integer-exact Fourier–Motzkin over a row set — the leaf refutation
+// every reader shares. `infeasible` carries the srcs of the rows whose
+// combination produced the empty bound; `outside` is the fence verdict
+// (>3 named vars, >64 rows in, >256 derived) — never a wrong answer.
+//
+// The domains it judges are integer: a strict row `Σc·x < b` TIGHTENS
+// to `Σc·x <= b-1` at load — the boundary is what makes a strict bound
+// real (over reals `x < 3` admits `x = 2.5`; over the integer fields
+// refine and claims judge, it is exactly `x <= 2`). Without it the
+// engine is real-complete but integer-blind: `i < limit` would not
+// discharge `limit - i - 1 >= 0`, and the canonical `terminates` claim
+// could never go `proven`. The residual gap is mid-polyhedron: an
+// all-integral closed system may still hold real-only vertices
+// (`2x<=1 ∧ 2x>=1` ↔ x=0.5) — those answer `feasible`, which every
+// reader maps to `unproven`, never a wrong verdict.
+const LinWTerm = struct { coef: i128, name: []const u8 };
+const LinWork = struct {
+    terms: std.ArrayListUnmanaged(LinWTerm),
+    bound: i128,
+    strict: bool,
+    mask: u64,
+};
+
+pub fn linFeasible(alloc: std.mem.Allocator, orig: []const LinRow) LinFeas {
+    if (orig.len == 0) return .feasible;
+    if (orig.len > 64) return .outside;
+
+    var names = std.ArrayList([]const u8).initCapacity(alloc, 4) catch unreachable;
+    for (orig) |r| {
+        for (r.terms) |t| {
+            var seen = false;
+            for (names.items) |n| {
+                if (std.mem.eql(u8, n, t.name)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) names.append(alloc, t.name) catch unreachable;
+        }
+    }
+    if (names.items.len > 3) return .outside;
+
+    var w = std.ArrayList(LinWork).initCapacity(alloc, orig.len) catch unreachable;
+    for (orig, 0..) |r, i| {
+        var terms = std.ArrayListUnmanaged(LinWTerm){};
+        for (r.terms) |t| {
+            terms.append(alloc, .{ .coef = t.coef, .name = t.name }) catch unreachable;
+        }
+        w.append(alloc, .{ .terms = terms, .bound = r.bound - @intFromBool(r.strict), .strict = false, .mask = @as(u64, 1) << @intCast(i) }) catch unreachable;
+    }
+
+    for (names.items) |v| {
+        var next = std.ArrayList(LinWork).initCapacity(alloc, w.items.len) catch unreachable;
+        for (w.items) |r| {
+            var c: i128 = 0;
+            for (r.terms.items) |t| {
+                if (std.mem.eql(u8, t.name, v)) c = t.coef;
+            }
+            if (c == 0) next.append(alloc, r) catch unreachable;
+        }
+        for (w.items) |n| {
+            var nc: i128 = 0;
+            for (n.terms.items) |t| {
+                if (std.mem.eql(u8, t.name, v)) nc = t.coef;
+            }
+            if (nc >= 0) continue;
+            for (w.items) |p| {
+                var pc: i128 = 0;
+                for (p.terms.items) |t| {
+                    if (std.mem.eql(u8, t.name, v)) pc = t.coef;
+                }
+                if (pc <= 0) continue;
+                const a: i128 = -nc;
+                const b: i128 = pc;
+                var terms = std.ArrayListUnmanaged(LinWTerm){};
+                for (n.terms.items) |t| {
+                    if (std.mem.eql(u8, t.name, v)) continue;
+                    terms.append(alloc, .{ .coef = t.coef * b, .name = t.name }) catch unreachable;
+                }
+                for (p.terms.items) |t| {
+                    if (std.mem.eql(u8, t.name, v)) continue;
+                    var merged = false;
+                    for (terms.items) |*m| {
+                        if (std.mem.eql(u8, m.name, t.name)) {
+                            m.coef += t.coef * a;
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if (!merged) terms.append(alloc, .{ .coef = t.coef * a, .name = t.name }) catch unreachable;
+                }
+                var kept = std.ArrayListUnmanaged(LinWTerm){};
+                for (terms.items) |t| {
+                    if (t.coef != 0) kept.append(alloc, t) catch unreachable;
+                }
+                next.append(alloc, .{ .terms = kept, .bound = n.bound * b + p.bound * a, .strict = n.strict or p.strict, .mask = n.mask | p.mask }) catch unreachable;
+            }
+        }
+        if (next.items.len > 256) return .outside;
+        w = next;
+    }
+
+    for (w.items) |r| {
+        if (r.terms.items.len != 0) continue;
+        const dead = if (r.strict) r.bound <= 0 else r.bound < 0;
+        if (!dead) continue;
+        var srcs = std.ArrayList([]const u8).initCapacity(alloc, 4) catch unreachable;
+        for (orig, 0..) |o, i| {
+            if ((r.mask >> @intCast(i)) & 1 == 1) srcs.append(alloc, o.src) catch unreachable;
+        }
+        return .{ .infeasible = srcs.items };
+    }
+    return .feasible;
+}

@@ -1202,6 +1202,18 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
                     @memcpy(copy, a);
                     alts = copy;
                 }
+                var linear: ?[]const ast.FacetLinRow = null;
+                if (field.linear) |rows| {
+                    const rcopy = try allocator.alloc(ast.FacetLinRow, rows.len);
+                    for (rows, 0..) |r, ri| {
+                        const tcopy = try allocator.alloc(ast.FacetLinTerm, r.terms.len);
+                        for (r.terms, 0..) |t, ti| {
+                            tcopy[ti] = .{ .name = try allocator.dupe(u8, t.name), .coef = t.coef };
+                        }
+                        rcopy[ri] = .{ .terms = tcopy, .bound = r.bound, .strict = r.strict };
+                    }
+                    linear = rcopy;
+                }
                 fields[i] = .{
                     .name = try allocator.dupe(u8, field.name),
                     .type = try allocator.dupe(u8, field.type),
@@ -1211,6 +1223,7 @@ pub fn cloneItem(allocator: std.mem.Allocator, item: *const ast.Item) CloneError
                     .clamp = field.clamp,
                     .alts = alts,
                     .alt_default = field.alt_default,
+                    .linear = linear,
                 };
             }
             return .{ .facet_decl = ast.FacetDecl{

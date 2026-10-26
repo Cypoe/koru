@@ -29,9 +29,8 @@
 //   implementation selection — and the selected impl stamps `target` onto
 //   the facet it lands. The universal facet (bare `std/refine`) meets
 //   unscoped blocks only; a `|fpga` facet meets universal + fpga blocks.
-//   A tag with no declared impl is a loud KORU122 — the target vocabulary
-//   is closed by declaration, never a facet minted under a name nobody
-//   reads. Consumers read the universal facet by default; a target-aware
+//   A tag with no declared impl is a loud KORU122 — the vocabulary is
+//   closed by declaration. Consumers read the universal facet by default; a target-aware
 //   consumer asks for its scope (`facets.findFor`, `metFields(…, scope)`).
 //
 // ENFORCEMENT IS THE CONSUMER'S: refine emits data, never a check.
@@ -40,8 +39,9 @@
 //   enumerable documentation, not a hole.
 //
 // v0 ATOMS: `>N` `>=N` `<N` `<=N` `==N` over integer literals, plus the
-// `clamp(lo, hi)` normalizer — on integer scalar bases, raw (`i64`) or
-// named through a terminal (`Port`). Disjunction (`*a | b`) is next.
+// `clamp(lo, hi)` normalizer — on integer scalar bases (`i64`, `Port`).
+// Relational atoms (`a + b <= c`, implicit-LHS `<= balance + margin`)
+// meet by union; the fold judges joint feasibility. `*a | b` is next.
 //
 // NOTE: `.k` files carry no host lines, so host types are spelled through
 // `std/compiler:` aliases (Program, Item, Source, Allocator); the

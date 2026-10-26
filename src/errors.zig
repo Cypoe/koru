@@ -179,6 +179,7 @@ pub const ErrorCode = enum(u16) {
     KORU209, // `dir:` relocates the emitted artifact while the program declares build:requires — generated build_output.zig stages output_emitted.zig in cwd. Printed by the host-build-zig tor in koru_std/compiler.materialize.kz.
     KORU210, // A std/build:app declaration is malformed — the Source block did not parse as `name: "…", id: "…"` plus optional `version: "…"`, `icon: "…"`, or carried a key the collector does not know. An identity is whole or refused; never defaulted. Emitted by src/compiler_requires.zig at requirement collection.
     KORU212, // A witness-check refusal — pass-witness-check (koru_std/compiler.witness.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict. (Numbered 212 — the merge gave 209-210 to materialize checks upstream, and main's src/main.zig already names 211 for unresolvable qualified calls.)
+    KORU213, // A claims-check refusal — pass-claims-check (koru_std/compiler.claims.kz) rejected a ~std/spec:claim site: unregistered atom, `on:` subject missing or ambiguous, a required field absent, or `rank` not a linear form over the subject's input fields. One code for the claims family; the message names the atom and the subject.
 };
 
 pub const SourceLocation = struct {
