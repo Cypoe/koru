@@ -1,0 +1,293 @@
+// Koru Standard Library: the `fold` part of tree.kz.
+// Joined via `~part fold` in tree.kz; merged into the tree module.
+//
+// `std/tree:fold(t) | node n -> <expr> | null -> <expr>` — the catamorphism:
+// a pure, value-returning recursive collapse of an owned tree. Inside
+// `| node n`, a payload field reads as payload and an EDGE field reads as the
+// already-folded child — the field's registry kind flips its meaning in fold
+// position, the same law that makes `node`'s field grammar decide payload
+// vs edge. `| null` is the empty case, required always (a `?` edge reaches
+// it on every leaf; a `?*Node` root reaches it on an absent tree).
+//
+// The transform resolves `t`'s node kind by provenance (dispose's
+// resolveNodeTypeOf — param signature or in-flow producer), rewrites the
+// site's node-arm expression at text level (`n.<payload>` → `n.<f>` on the
+// unwrapped pointer, `n.<edge>` → the recursive fold call), synthesizes
+// `__koru_tree_fold_<Node>_<h> { t: ?*Node<*> } -> T` as an event + |zig
+// proc (`if (t) |n| return <arm>; else return <base>;`), and replaces the
+// site flow with a plain call — the arms are CONSUMED by the rewrite, the
+// `: c` bind and the chain tail survive untouched.
+//
+// fold is the value-side lane verb for the invariant hoist: `build |> fold
+// |> dispose` in a `for ! each` body reads as one invariant prefix — fold
+// reads a hoisted name, returns a value, stays clean by lane contract (the
+// frontend pass classifies it before transforms expand, same door
+// `dispose` walks through as a consume).
+//
+// v1 cuts (loud refusals): single-kind folds only — every edge must reach
+// the same node kind (heterogeneous folds need per-kind arms, undecided);
+// arms are single `-> expr` terminals, not step chains; the node binding
+// may only read declared fields (a bare `n` in the expression refuses).
+
+~[comptime|transform]pub tor fold {
+    expr: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc fold|zig {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow) &item.flow else @panic("std/tree:fold: expected a flow site");
+
+    // `fold(t, as: T)` — the root binding rides the expr arg (dispose's
+    // convention); `as:` names the result type — the synthesized tor needs
+    // a concrete `-> T` and .k has no return-type inference to lean on.
+    var handle: []const u8 = "";
+    var result_type: ?[]const u8 = null;
+    for (invocation.args) |arg| {
+        if (std.mem.eql(u8, arg.name, "expr")) handle = stripQuotesLocal(std.mem.trim(u8, arg.value, " \t"));
+        if (std.mem.eql(u8, arg.name, "as")) result_type = stripQuotesLocal(std.mem.trim(u8, arg.value, " \t"));
+    }
+    const rett = result_type orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold takes the result type — fold(t, as: i64): there is no inference to recover T from the arm expressions", .{});
+    };
+    if (handle.len == 0) {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold takes the root binding and two arms — fold(t) | node n -> <expr> | null -> <expr>", .{});
+    }
+    const home = TerminalRef_scopeOfFlow(program, flow);
+
+    const node_name = resolveNodeTypeOf(allocator, program, flow, handle, home) orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): can't resolve which node kind '{s}' is — bind it from a std/tree:mint, a tor returning *X<owned!>, or declare the parameter `*X<...>` for a node-registered X", .{ handle, handle });
+    };
+    const decl = findNodeDecl(program, allocator, node_name, home) orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): no std/tree:node({s}) declares that kind in this scope", .{ handle, node_name });
+    };
+
+    // The arms ride the site wrapper's continuations: `| node n -> expr`
+    // arrives as {branch:"node", binding:"n", node:{expression}} and
+    // `| null -> expr` likewise. Unnamed continuations are the chain tail —
+    // they survive the rewrite untouched.
+    var node_bind: ?[]const u8 = null;
+    var node_expr: ?[]const u8 = null;
+    var null_expr: ?[]const u8 = null;
+    var tail = std.ArrayList(ast.Continuation).initCapacity(allocator, 4) catch unreachable;
+    for (flow.body.continuations) |c| {
+        const bname = std.mem.trim(u8, c.branch, " \t");
+        if (bname.len == 0) {
+            tail.append(allocator, c) catch unreachable;
+            continue;
+        }
+        const expr_text: ?[]const u8 = if (c.node) |n| switch (n) {
+            .expression => |e| e,
+            else => null,
+        } else null;
+        if (expr_text == null) {
+            return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): the '{s}' arm must be a single produce — `| {s} <bind> -> <expr>`; step chains inside a fold arm are a v1 cut (spell the work as a tor and call it)", .{ handle, bname, bname });
+        }
+        if (std.mem.eql(u8, bname, "node")) {
+            if (node_expr != null) {
+                return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): two `| node` arms — the fold takes exactly one node arm and one `| null` base", .{handle});
+            }
+            node_bind = c.binding;
+            node_expr = expr_text;
+        } else if (std.mem.eql(u8, bname, "null")) {
+            if (null_expr != null) {
+                return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): two `| null` arms — the fold takes exactly one node arm and one `| null` base", .{handle});
+            }
+            null_expr = expr_text;
+        } else {
+            return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): the '{s}' arm is not one a fold answers — `| node <name> -> <expr>` and `| null -> <expr>` are the whole vocabulary", .{ handle, bname });
+        }
+    }
+    const nbind = node_bind orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): the node arm must name its binding — `| node <name> -> <expr>`", .{handle});
+    };
+    const nexpr = node_expr orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): missing `| node <name> -> <expr>` — the fold is a catamorphism: what does one node contribute?", .{handle});
+    };
+    const zexpr = null_expr orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): missing `| null -> <expr>` — every `?` edge and every `?*Node` root reaches the empty case; spell it", .{handle});
+    };
+
+    // v1: single-kind fold — every edge must reach this same node kind.
+    for (decl.fields) |f| {
+        if (f.kind == .edge and !std.mem.eql(u8, f.edge_type, decl.name)) {
+            return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold({s}): edge '{s}: {s}' reaches a different node kind — v1 folds are single-kind (heterogeneous folds need per-kind arms, which the surface hasn't decided)", .{ handle, f.name, f.edge_type });
+        }
+    }
+
+    // Rewrite the node arm's expression at text level against the unwrapped
+    // pointer `n` inside `if (t) |n|`: `<bind>.<field>` → `n.<field>` for
+    // payload, → `foldcall(n.<field>)` for edges.
+    const hash = fnvFold(node_name, nexpr, zexpr);
+    const synth_name = std.fmt.allocPrint(allocator, "__koru_tree_fold_{s}_{x}", .{ node_name, hash }) catch unreachable;
+    const fn_name = std.fmt.allocPrint(allocator, "__koru_tree_foldfn_{s}", .{synth_name}) catch unreachable;
+    const rewritten = rewriteFoldExpr(allocator, reporter, flow, nbind, nexpr, decl, fn_name) orelse return .{};
+
+    // Synthesize the fold tor + |zig impl + the module-scope recursive fn
+    // once per (kind, arms) pair.
+    var appended = std.ArrayList(ast.Item).initCapacity(allocator, 4) catch unreachable;
+    if (!hasSynthTor(program, synth_name)) {
+        const trio = synthFold(allocator, flow, node_name, synth_name, rewritten, zexpr, rett);
+        for (trio) |it| appended.append(allocator, it) catch unreachable;
+    }
+
+    // Replace the whole site flow with a plain call — the arms are consumed,
+    // the chain tail rides on untouched (preordertail's splice doctrine).
+    // The invocation keeps its own fields (`: c` return_binding included).
+    const call_arg = allocator.alloc(ast.Arg, 1) catch unreachable;
+    call_arg[0] = .{ .name = allocator.dupe(u8, "t") catch unreachable, .value = allocator.dupe(u8, handle) catch unreachable, .had_explicit_label = true };
+    const segs = allocator.alloc([]const u8, 1) catch unreachable;
+    segs[0] = synth_name;
+    var call_inv = invocation.*;
+    call_inv.path = ast.DottedPath{
+        .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+        .segments = segs,
+    };
+    call_inv.args = call_arg;
+    const repl = ast.Flow{
+        .body = ast.rootSite(call_inv, tail.items, flow.location),
+        .pre_label = null,
+        .impl_of = flow.impl_of,
+        .super_shape = null,
+        .inline_body = null,
+        .preamble_code = null,
+        .is_pure = false,
+        .is_transitively_pure = false,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    };
+    return .{ .replacement = ast.Item{ .flow = repl }, .appended = appended.items };
+}
+
+/// FNV-1a over (node_name, node_expr, null_expr) — a stable site key so two
+/// spellings of the same fold share one synthesized tor.
+fn fnvFold(node_name: []const u8, a: []const u8, b: []const u8) u32 {
+    var h: u32 = 2166136261;
+    for (node_name) |c| h = (h ^ c) *% 16777619;
+    for (a) |c| h = (h ^ c) *% 16777619;
+    for (b) |c| h = (h ^ c) *% 16777619;
+    return h;
+}
+
+/// Rewrite `bind.<field>` occurrences in the node arm's expression text for
+//  the unwrapped `*Node` the |zig body binds as `n`: payload → `n.<field>`;
+/// edge → `foldcall(n.<field>)`. A leftover bare `bind` (anything that isn't
+/// `bind.<declared field>`) refuses — the arm reads fields, not the node.
+fn rewriteFoldExpr(
+    allocator: std.mem.Allocator,
+    reporter: anytype,
+    flow: *const astz.Flow,
+    bind: []const u8,
+    expr: []const u8,
+    decl: TreeDecl,
+    fold_call: []const u8,
+) ?[]const u8 {
+    var out = std.ArrayList(u8).initCapacity(allocator, expr.len + 64) catch unreachable;
+    var i: usize = 0;
+    while (i < expr.len) {
+        if (i + bind.len <= expr.len and std.mem.eql(u8, expr[i .. i + bind.len], bind) and
+            (i == 0 or !isIdentChar(expr[i - 1])) and
+            (i + bind.len >= expr.len or !isIdentChar(expr[i + bind.len])))
+        {
+            const after = i + bind.len;
+            if (after < expr.len and expr[after] == '.') {
+                var matched = false;
+                for (decl.fields) |f| {
+                    if (after + 1 + f.name.len <= expr.len and
+                        std.mem.eql(u8, expr[after + 1 .. after + 1 + f.name.len], f.name) and
+                        (after + 1 + f.name.len >= expr.len or !isIdentChar(expr[after + 1 + f.name.len])))
+                    {
+                        switch (f.kind) {
+                            .payload => out.appendSlice(allocator, std.fmt.allocPrint(allocator, "n.{s}", .{f.name}) catch unreachable) catch unreachable,
+                            .edge => out.appendSlice(allocator, std.fmt.allocPrint(allocator, "{s}(n.{s})", .{ fold_call, f.name }) catch unreachable) catch unreachable,
+                        }
+                        i = after + 1 + f.name.len;
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    _ = astz.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold: `{s}.` names no field of {s} — the node arm reads declared fields only", .{ bind, decl.name });
+                    return null;
+                }
+            } else {
+                _ = astz.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:fold: bare `{s}` in the node arm — the fold arm reads the node's fields (`{s}.<field>`), it can't hold the node itself", .{ bind, bind });
+                return null;
+            }
+        } else {
+            out.append(allocator, expr[i]) catch unreachable;
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice(allocator) catch unreachable;
+}
+
+fn isIdentChar(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '-';
+}
+
+/// `__koru_tree_fold_<Node>_<h> { t: ?*Node<*> } -> T` — event + |zig proc.
+/// `t` borrows (`<*>` — the fold reads, it never consumes); the proc is the
+/// catamorphism verbatim: `if (t) |n| return <arm>; else return <base>;`.
+/// `n` is the unwrapped `*Node` — payload fields read directly, edge fields
+/// recurse into the same synthesized name (single-kind v1).
+fn synthFold(
+    allocator: std.mem.Allocator,
+    flow: *const astz.Flow,
+    node_name: []const u8,
+    synth_name: []const u8,
+    node_expr: []const u8,
+    null_expr: []const u8,
+    result_type: []const u8,
+) [3]astz.Item {
+    const path = astz.DottedPath{
+        .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+        .segments = blk: {
+            const segs = allocator.alloc([]const u8, 1) catch unreachable;
+            segs[0] = allocator.dupe(u8, synth_name) catch unreachable;
+            break :blk segs;
+        },
+    };
+    const in = allocator.alloc(astz.Field, 1) catch unreachable;
+    in[0] = .{
+        .name = allocator.dupe(u8, "t") catch unreachable,
+        .type = std.fmt.allocPrint(allocator, "?*{s}", .{node_name}) catch unreachable,
+        .phantom = allocator.dupe(u8, "*") catch unreachable,
+    };
+    const ed = astz.Item{ .event_decl = astz.EventDecl{
+        .path = path,
+        .input = astz.Shape{ .fields = in },
+        .branches = &.{},
+        .return_type = allocator.dupe(u8, result_type) catch unreachable,
+        .return_phantom = null,
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &.{},
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } };
+    const pd = astz.Item{ .proc_decl = astz.ProcDecl{
+        .path = path,
+        .body = astz.Source{
+            .text = std.fmt.allocPrint(allocator, "return __koru_tree_foldfn_{s}(t);", .{synth_name}) catch unreachable,
+            .location = flow.location,
+            .scope = .{ .bindings = &.{} },
+            .phantom_type = null,
+        },
+        .annotations = &.{},
+        .target = allocator.dupe(u8, "zig") catch unreachable,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } };
+    const fn_item = astz.Item{ .inline_code = astz.InlineCode{
+        .code = std.fmt.allocPrint(allocator, "fn __koru_tree_foldfn_{s}(__koru_t: ?*{s}) {s} {{\n    if (__koru_t) |n| {{\n        return {s};\n    }}\n    return {s};\n}}\n", .{ synth_name, node_name, result_type, node_expr, null_expr }) catch unreachable,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } };
+    return .{ ed, pd, fn_item };
+}

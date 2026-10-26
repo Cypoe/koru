@@ -63,3 +63,4 @@ const errsz = @import("errors");
 ~part node
 ~part mint
 ~part dispose
+~part fold
