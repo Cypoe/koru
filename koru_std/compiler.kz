@@ -559,6 +559,7 @@ const Allocator = std.mem.Allocator;
     emit_walk_module.addImport("codegen_utils", codegen_utils_module);
     emit_walk_module.addImport("parser", parser_module);
     emit_walk_module.addImport("compiler_env", compiler_env_module);
+    emit_walk_module.addImport("file_types", file_types_module);
     c_emitter_module.addImport("emit_walk", emit_walk_module);
     const emit_audit_module = b.createModule(.{
         .root_source_file = .{ .cwd_relative = REL_TO_ROOT ++ "/src/emit_audit.zig" },

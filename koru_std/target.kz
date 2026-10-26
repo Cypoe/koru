@@ -102,7 +102,7 @@ pub const Catalog = struct {
 // which point the flip rung makes the catalog the sole source.
 
 ~std/target:target(c) { "facet": ".kc", "artifact": "output_emitted.c", "toolchain": "ccomp -fstruct-passing" }
-~std/target:target(zig) { "artifact": "output_emitted.zig", "toolchain": "zig build" }
+~std/target:target(zig) { "facet": ".kz", "artifact": "output_emitted.zig", "toolchain": "zig build" }
 ~std/target:target(js) { "facet": ".kjs", "artifact": "output_emitted.js", "toolchain": "node" }
 ~std/target:target(cs) { "facet": ".kcs", "artifact": "output_emitted.cs", "toolchain": "dotnet build" }
 

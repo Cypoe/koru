@@ -68,7 +68,13 @@ the dual-answer phasing. Each `emit-*` chain now returns the row's
 param that falls back to the catalog row before the literal — a direct
 override call without `name:` still names the file the row declares.
 The lang-name string select remains, but it now *indexes* declared
-rows rather than standing beside them.
+rows rather than standing beside them. The remaining identity fields
+went live the same pass: `write-artifact` takes an optional `target`
+and prints the row's `toolchain` as the next-step hint (retiring
+koruc's stale literal, which had silently lost `-fstruct-passing`),
+and `auditTargetArm` checks each row's `facet` against the canonical
+ext→lang map in `file_types` — a row claiming an extension the
+frontend does not route, or omitting one it does, is drift.
 
 Two parts rather than one because the differences are real: catalog rows
 are data that changes per target and per added arm; the walker is

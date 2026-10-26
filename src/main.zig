@@ -9738,15 +9738,14 @@ pub fn main() !void {
         // Backend is in zig-out/bin/main - no cleanup needed
         // Users can clean with: rm -rf zig-out
 
-        // JS-target spike: the backend already wrote output_emitted.js and
-        // skipped Stage D — there is no native executable. Report the real
-        // artifact and do NOT try to exec a binary that was never built.
+        // JS/C-target spike: the backend already wrote the artifact and
+        // announced it (write-artifact prints with the catalog's toolchain
+        // hint) — there is no native executable, so do NOT try to exec a
+        // binary that was never built.
         const is_js_target = std.mem.eql(u8, compiler_config.lang, "js");
         const is_c_target = std.mem.eql(u8, compiler_config.lang, "c");
-        if (is_js_target) {
-            try printStdout(allocator, "✓ Generated output_emitted.js (run with: node output_emitted.js)\n", .{});
-        } else if (is_c_target) {
-            try printStdout(allocator, "✓ Generated output_emitted.c (compile with: ccomp output_emitted.c)\n", .{});
+        if (is_js_target or is_c_target) {
+            // announcement already streamed from the backend above
         } else if (deep_check) {
             try printStdout(allocator, "✓ Deep check passed (emission written; native build skipped)\n", .{});
         } else if (detected_comptime_command) |cmd| {

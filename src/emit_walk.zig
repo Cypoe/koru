@@ -9,6 +9,7 @@ const ast = @import("ast");
 const codegen_utils = @import("codegen_utils");
 const parser = @import("parser");
 const compiler_env = @import("compiler_env");
+const file_types = @import("file_types");
 
 const CatalogTypes = std.StringHashMap([]const u8);
 
@@ -866,9 +867,34 @@ pub fn targetDeclared(allocator: std.mem.Allocator, target: []const u8) ?bool {
 /// Route-time audit for one arm: an emission arm answers a catalog claim.
 /// Absent catalog is advisory (silent); a missing row on a loaded catalog
 /// is drift — logged while the arm still wins, matching the dual-answer
-/// phasing before the catalog becomes sole source.
+/// phasing before the catalog becomes sole source. When the row exists its
+/// `facet` is checked against the canonical ext→lang map in file_types —
+/// the extension a host file routes through and the row's claim must agree.
 pub fn auditTargetArm(allocator: std.mem.Allocator, lang: []const u8) void {
-    if (targetDeclared(allocator, lang)) |declared| {
-        if (!declared) codegen_utils.driftLog("std/target drift: --lang={s} routed without a target({s}) row (arm wins)", .{ lang, lang });
+    const fields = targetFields(allocator, lang) orelse return;
+    if (fields.count() == 0) {
+        codegen_utils.driftLog("std/target drift: --lang={s} routed without a target({s}) row (arm wins)", .{ lang, lang });
+        return;
+    }
+    const declared = fields.get("facet");
+    var canonical: ?[]const u8 = null;
+    var probe_buf: [16]u8 = undefined;
+    for (file_types.koru_extensions) |ext| {
+        const probe = std.fmt.bufPrint(&probe_buf, "x{s}", .{ext}) catch continue;
+        if (file_types.hostLangOfFile(probe)) |l| {
+            if (std.mem.eql(u8, l, lang)) {
+                canonical = ext;
+                break;
+            }
+        }
+    }
+    if (canonical) |c| {
+        if (declared == null) {
+            codegen_utils.driftLog("std/target drift: target({s}) row lacks facet — {s} routes to this arm", .{ lang, c });
+        } else if (!std.mem.eql(u8, c, declared.?)) {
+            codegen_utils.driftLog("std/target drift: target({s}) facet `{s}` but {s} routes to this arm", .{ lang, declared.?, c });
+        }
+    } else if (declared) |f| {
+        codegen_utils.driftLog("std/target drift: target({s}) facet `{s}` names no known extension", .{ lang, f });
     }
 }

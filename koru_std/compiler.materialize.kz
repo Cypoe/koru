@@ -23,7 +23,7 @@
 ~pub tor emit-js-artifact { ctx: CompilerContext, dir: ?string } -> { ctx: CompilerContext, code: string }
 
 ~emit-js-artifact = emit-js(ctx): e
-|> write-artifact(e.ctx, e.code, name: e.artifact, dir): w -> w
+|> write-artifact(e.ctx, e.code, name: e.artifact, dir, target: "js"): w -> w
 
 ~pub tor emit-cs-artifact { ctx: CompilerContext, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
 
@@ -34,10 +34,11 @@
 // The C lane's artifact chain — std/emit:emit-c walks; ccomp is the regression-invoked oracle, not koruc.
 ~pub tor emit-c-artifact { ctx: CompilerContext, dir: ?string } -> { ctx: CompilerContext, code: string }
 
-~emit-c-artifact = std/emit:emit-c(ctx): e |> write-artifact(e.ctx, e.code, name: e.artifact, dir): w -> w
+~emit-c-artifact = std/emit:emit-c(ctx): e |> write-artifact(e.ctx, e.code, name: e.artifact, dir, target: "c"): w -> w
 
 // Write the emitted code to its artifact file — `dir` relocates it under a directory (created if absent); unset means cwd.
-~pub tor write-artifact { ctx: CompilerContext, code: string, name: string, dir: ?string } -> { ctx: CompilerContext, code: string }
+// `target` names the arm's catalog row; when set the announcement carries the row's toolchain as the next-step hint.
+~pub tor write-artifact { ctx: CompilerContext, code: string, name: string, dir: ?string, target: ?string } -> { ctx: CompilerContext, code: string }
 
 ~proc write-artifact|zig {
     const allocator = ctx.allocator;
@@ -62,6 +63,10 @@
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "✓ Generated {s} ({d} bytes)\n", .{ path, code.len }) catch return .{ .ctx = ctx, .code = code };
     stdout.writeAll(msg) catch {};
+    if (target) |t| if (@import("emit_walk").targetField(allocator, t, "toolchain")) |tc| {
+        const hint = std.fmt.bufPrint(&buf, "  → {s} {s}\n", .{ tc, path }) catch return .{ .ctx = ctx, .code = code };
+        stdout.writeAll(hint) catch {};
+    };
     return .{ .ctx = ctx, .code = code };
 }
 
@@ -91,7 +96,6 @@
     }
     return .{ .ctx = ctx, .code = code };
 }
-
 
 // ------------------------------------------------------------
 // Target routing
