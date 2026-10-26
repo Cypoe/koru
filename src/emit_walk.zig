@@ -7,6 +7,8 @@
 const std = @import("std");
 const ast = @import("ast");
 const codegen_utils = @import("codegen_utils");
+const parser = @import("parser");
+const compiler_env = @import("compiler_env");
 
 const CatalogTypes = std.StringHashMap([]const u8);
 
@@ -665,4 +667,198 @@ pub fn shadow(program: *const ast.Program, cat: *const Catalog) void {
             stats.construct_queries,
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// std/target catalog — the declared rows, harvested at emit time
+// ---------------------------------------------------------------------------
+
+/// Harvest `~std/target:<verb>(<target>)` site rows out of
+/// `koru_std/target.kz`. Collect the raw `source` texts of every
+/// `std/target:<verb>(<target>)` flow, in declared order — the shared
+/// walk for the flat-row harvester and the ordered prelude loader.
+/// Null = catalog file absent/unparseable: dual-answer is advisory, a
+/// missing catalog never breaks emission.
+pub fn loadTargetSources(
+    allocator: std.mem.Allocator,
+    verb: []const u8,
+    target: []const u8,
+) ?[][]const u8 {
+    const home = compiler_env.CompilerEnv.koru_home;
+    if (home.len == 0) {
+        std.debug.print("std/target catalog: koru_home empty\n", .{});
+        return null;
+    }
+    const path = std.fs.path.join(allocator, &.{ home, "koru_std", "target.kz" }) catch return null;
+    const file = std.fs.cwd().openFile(path, .{}) catch |e| {
+        std.debug.print("std/target catalog: open {s}: {s}\n", .{ path, @errorName(e) });
+        return null;
+    };
+    defer file.close();
+    const source = file.readToEndAlloc(allocator, 1 << 20) catch return null;
+    var p = parser.Parser.init(allocator, source, path, &.{}, null) catch |e| {
+        std.debug.print("std/target catalog: parser init: {s}\n", .{@errorName(e)});
+        return null;
+    };
+    const result = p.parse() catch |e| {
+        std.debug.print("std/target catalog: parse {s}: {s}\n", .{ path, @errorName(e) });
+        return null;
+    };
+    var sources: std.ArrayList([]const u8) = .empty;
+    for (result.source_file.items) |*item| {
+        if (item.* != .flow) continue;
+        const inv = item.flow.inv();
+        const mq = inv.path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq, "std.target") and !std.mem.eql(u8, mq, "std/target")) continue;
+        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], verb)) continue;
+        // The site-arg target name — positional `(c)` serializes with
+        // name == value; only rows for this arm feed the answer.
+        var is_target = false;
+        var source_text: ?[]const u8 = null;
+        for (inv.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "source")) {
+                source_text = arg.value;
+            } else if (std.mem.eql(u8, std.mem.trim(u8, arg.value, " \t\n\""), target)) {
+                is_target = true;
+            }
+        }
+        if (!is_target) continue;
+        const src = source_text orelse continue;
+        sources.append(allocator, src) catch continue;
+    }
+    return sources.toOwnedSlice(allocator) catch null;
+}
+
+/// Rows are JSON-shaped objects (`{ "i64": "long long", ... }`);
+/// non-string values are skipped.
+pub fn loadTargetRows(
+    allocator: std.mem.Allocator,
+    verb: []const u8,
+    target: []const u8,
+) ?std.StringHashMap([]const u8) {
+    const sources = loadTargetSources(allocator, verb, target) orelse return null;
+    var table = std.StringHashMap([]const u8).init(allocator);
+    for (sources) |src| {
+        const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return table;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch |e| {
+            // A malformed row block must not silently void the family —
+            // a `construct` trailing comma sat dead this way until the
+            // shadow's harvest count exposed it.
+            std.debug.print("std/target catalog: `{s}` row block failed to parse: {s}\n", .{ verb, @errorName(e) });
+            continue;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        var it = parsed.value.object.iterator();
+        while (it.next()) |e| {
+            const key = allocator.dupe(u8, e.key_ptr.*) catch continue;
+            switch (e.value_ptr.*) {
+                .string => |s| {
+                    const val = allocator.dupe(u8, s) catch continue;
+                    table.put(key, val) catch {};
+                },
+                // List rows (prelude's includes/helpers): each element
+                // registers itself as `element -> <list key>` — a
+                // membership lookup, which is all the coverage checks ask.
+                .array => |arr| {
+                    for (arr.items) |elem| {
+                        if (elem != .string) continue;
+                        const elem_key = allocator.dupe(u8, elem.string) catch continue;
+                        const key_val = allocator.dupe(u8, key) catch continue;
+                        table.put(elem_key, key_val) catch {};
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    std.debug.print("std/target catalog: `{s}` rows harvested: {d}\n", .{ verb, table.count() });
+    return table;
+}
+
+/// One prelude def row — `text` null marks a minted family (declared
+/// coverage, no fixed text: the `__koru_*_<store>` helpers the take/query
+/// sweeps mint per store name). Rows whose value is `"minted"` declare
+/// that shape; anything else is verbatim def text, emitted in declared
+/// order (the JSON object walk is insertion-ordered).
+pub const PreludeDef = struct { name: []const u8, text: ?[]const u8 };
+pub const PreludeRows = struct {
+    includes: [][]const u8,
+    defs: []PreludeDef,
+};
+
+/// The prelude family, ordered and text-carrying: `includes` names render
+/// as `#include <x>` lines, `defs` render verbatim in row order. This is
+/// the catalog-as-sole-source shape — the preamble's text lives in the
+/// rows; the emitter only sequences them.
+pub fn loadPreludeRows(allocator: std.mem.Allocator, target: []const u8) ?PreludeRows {
+    const sources = loadTargetSources(allocator, "prelude", target) orelse return null;
+    var includes: std.ArrayList([]const u8) = .empty;
+    var defs: std.ArrayList(PreludeDef) = .empty;
+    for (sources) |src| {
+        const wrapped = std.fmt.allocPrint(allocator, "{{{s}}}", .{src}) catch return null;
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, wrapped, .{}) catch |e| {
+            std.debug.print("std/target catalog: `prelude` row block failed to parse: {s}\n", .{@errorName(e)});
+            continue;
+        };
+        defer parsed.deinit();
+        if (parsed.value != .object) continue;
+        var it = parsed.value.object.iterator();
+        while (it.next()) |e| {
+            const key = e.key_ptr.*;
+            switch (e.value_ptr.*) {
+                .array => |arr| {
+                    if (!std.mem.eql(u8, key, "includes")) continue;
+                    for (arr.items) |elem| {
+                        if (elem != .string) continue;
+                        includes.append(allocator, allocator.dupe(u8, elem.string) catch continue) catch {};
+                    }
+                },
+                .object => |obj| {
+                    if (!std.mem.eql(u8, key, "defs")) continue;
+                    var dit = obj.iterator();
+                    while (dit.next()) |de| {
+                        if (de.value_ptr.* != .string) continue;
+                        const name = allocator.dupe(u8, de.key_ptr.*) catch continue;
+                        const val = de.value_ptr.string;
+                        defs.append(allocator, .{
+                            .name = name,
+                            .text = if (std.mem.eql(u8, val, "minted")) null else allocator.dupe(u8, val) catch null,
+                        }) catch {};
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    std.debug.print("std/target catalog: `prelude` rows harvested: {d} includes, {d} defs\n", .{ includes.items.len, defs.items.len });
+    return .{
+        .includes = includes.toOwnedSlice(allocator) catch return null,
+        .defs = defs.toOwnedSlice(allocator) catch return null,
+    };
+}
+
+/// The `target` row's declared fields for one arm — null = catalog
+/// absent (advisory). A field→value map: "facet", "artifact",
+/// "toolchain".
+pub fn targetFields(
+    allocator: std.mem.Allocator,
+    target: []const u8,
+) ?std.StringHashMap([]const u8) {
+    return loadTargetRows(allocator, "target", target);
+}
+
+/// One field of a target's identity row — null = catalog absent or the
+/// row does not name the field.
+pub fn targetField(allocator: std.mem.Allocator, target: []const u8, field: []const u8) ?[]const u8 {
+    const t = targetFields(allocator, target) orelse return null;
+    return t.get(field);
+}
+
+/// Tri-state claim check for routing: null = catalog unreadable
+/// (advisory — the check is skipped), false = catalog loaded but carries
+/// no `target(<target>)` row, true = declared.
+pub fn targetDeclared(allocator: std.mem.Allocator, target: []const u8) ?bool {
+    const t = targetFields(allocator, target) orelse return null;
+    return t.count() > 0;
 }
