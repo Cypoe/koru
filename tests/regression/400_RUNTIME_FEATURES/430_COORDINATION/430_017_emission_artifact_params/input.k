@@ -25,6 +25,7 @@ std/compiler:emission = std/compiler:inject-ccp(ctx): c1
     | no |> std/compiler:host-build-zig(w.ctx, w.code, output: "output", dir: "stage"): v -> v
 | js |> std/compiler:emit-js-artifact(ctx: c2): e -> e
 | cs |> std/compiler:emit-cs-artifact(ctx: c2): e -> e
+| c |> std/compiler:emit-c-artifact(ctx: c2): e -> e
 | other |> std/compiler:emit-zig-artifact(ctx: c2): e -> e
 
 std/io:print.ln("param emission")
