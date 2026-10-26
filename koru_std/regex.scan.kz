@@ -135,19 +135,11 @@
             const slice_expr = std.fmt.allocPrint(allocator, "__koru_m[__koru_tags[{d}]..__koru_tags[{d}]]", .{ 2 * k, 2 * k + 1 }) catch unreachable;
             var type_text: ?[]const u8 = null;
             for (c.destructure) |f| {
-                if (std.mem.eql(u8, f.name, g)) type_text = f.type_text;
+                // The spec rides `:` — `{ k: string, n: i64 }` — read by
+                // the tor, never a rename (regex.norm/SpecH).
+                if (std.mem.eql(u8, f.name, g)) type_text = $mod.SpecH.specOf(f);
             }
-            var is_int = false;
-            if (type_text) |t0| {
-                const t = std.mem.trim(u8, t0, " \t");
-                is_int = std.mem.eql(u8, t, "isize") or std.mem.eql(u8, t, "usize");
-                if (!is_int and t.len >= 2 and (t[0] == 'i' or t[0] == 'u')) {
-                    is_int = true;
-                    for (t[1..]) |ch| {
-                        if (ch < '0' or ch > '9') is_int = false;
-                    }
-                }
-            }
+            const is_int = if (type_text) |t| $mod.SpecH.specIsInt(t) else false;
             if (is_int) {
                 const t = std.mem.trim(u8, type_text.?, " \t");
                 const field = std.fmt.allocPrint(allocator, ".{s} = @import(\"std\").fmt.parseInt({s}, {s}, 10) catch @panic(\"regex scan: group '{s}' does not fit {s}\")", .{ g, t, slice_expr, g, t }) catch unreachable;
@@ -202,7 +194,10 @@
     };
 
     var new_flow = flow.*;
-    new_flow.body = ast.rootSite(new_inv, flow.body.continuations, flow.location);
+    // The `:` spec was consumed as conversion — emitted bindings read the
+    // payload by capture name, never `dst.<spec>` (regex.norm/SpecH).
+    const norm_conts = $mod.SpecH.normSpecPaths(allocator, flow.body.continuations);
+    new_flow.body = ast.rootSite(new_inv, norm_conts, flow.location);
     new_flow.inline_body = dispatch.toOwnedSlice(allocator) catch unreachable;
 
     const appended = allocator.alloc(ast.Item, 1) catch unreachable;
@@ -336,19 +331,11 @@
             const slice_expr = std.fmt.allocPrint(allocator, "__koru_m.subarray(__koru_tags[{d}], __koru_tags[{d}]).toString(\"utf8\")", .{ 2 * k, 2 * k + 1 }) catch unreachable;
             var type_text: ?[]const u8 = null;
             for (c.destructure) |f| {
-                if (std.mem.eql(u8, f.name, g)) type_text = f.type_text;
+                // The spec rides `:` — `{ k: string, n: i64 }` — read by
+                // the tor, never a rename (regex.norm/SpecH).
+                if (std.mem.eql(u8, f.name, g)) type_text = $mod.SpecH.specOf(f);
             }
-            var is_int = false;
-            if (type_text) |t0| {
-                const t = std.mem.trim(u8, t0, " \t");
-                is_int = std.mem.eql(u8, t, "isize") or std.mem.eql(u8, t, "usize");
-                if (!is_int and t.len >= 2 and (t[0] == 'i' or t[0] == 'u')) {
-                    is_int = true;
-                    for (t[1..]) |ch| {
-                        if (ch < '0' or ch > '9') is_int = false;
-                    }
-                }
-            }
+            const is_int = if (type_text) |t| $mod.SpecH.specIsInt(t) else false;
             if (is_int) {
                 needs_int_fn = true;
                 const t = std.mem.trim(u8, type_text.?, " \t");
@@ -409,7 +396,10 @@
     };
 
     var new_flow = flow.*;
-    new_flow.body = ast.rootSite(new_inv, flow.body.continuations, flow.location);
+    // The `:` spec was consumed as conversion — emitted bindings read the
+    // payload by capture name, never `dst.<spec>` (regex.norm/SpecH).
+    const norm_conts = $mod.SpecH.normSpecPaths(allocator, flow.body.continuations);
+    new_flow.body = ast.rootSite(new_inv, norm_conts, flow.location);
     new_flow.inline_body = dispatch.toOwnedSlice(allocator) catch unreachable;
 
     const appended = allocator.alloc(ast.Item, 1) catch unreachable;

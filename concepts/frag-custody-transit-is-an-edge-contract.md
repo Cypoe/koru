@@ -75,6 +75,21 @@ substrate are computed per edge as before — but "the value" is now
 edge (rings, lists, `| some v` recv) refuse composite kinds loudly
 (320_176, 698_019, 699_033). Pins 699_031–034.
 
+**Evolved 2026-10-23 — the mint is seeded by observed sends, so foreign
+producers are invisible to the ledger.** `custodyOf` reads the sent
+*value's* static state at each send site; a channel whose only producers
+are host threads writing the ring raw mints nothing — the `!`-arm binding
+arrives as a plain record and `settle(m: Mail<!posted>)` refuses
+"never acquired." One Koru custodial send anywhere in the program — even
+a warmup mail that runs once — seeds the kind's transit state and every
+subsequent dequeue mints the debt, including mail that arrived
+ledger-free. This is the region-colouring wall restated: enforcement
+propagates only where Koru text reaches, and the honest reading is that
+the custody boundary sits at the Koru *send*, not the vessel — foreign
+callers carry bytes, same as an HTTP client in celld's world. First
+measured use: 015_fleet_mail's pipelined arm — 8 host producers, ~4,700
+settled turns/s, drain enforced by KORU030 rather than by convention.
+
 ## Constraints that keep this honest
 
 - Channel kind vocabularies accept proto *registry names* only — pointer

@@ -199,17 +199,35 @@ fn stripPhantom(type_str: []const u8) []const u8 {
     return type_str;
 }
 
+/// Escape one name character into a Zig-identifier-safe sequence. `*` keeps
+/// the established `_star_` spelling; the rest cover the bracket tails a
+/// spellable declaration name may carry (`gemv.kernel[*]` — the
+/// parameter-marker — `close[!]`, `name[T:u32]`, `name[T:u32;N=5]`).
+fn mangledNameEscape(c: u8) ?[]const u8 {
+    return switch (c) {
+        '*' => "_star_",
+        '[' => "_lb_",
+        ']' => "_rb_",
+        ':' => "_colon_",
+        '!' => "_bang_",
+        ';' => "_semi_",
+        ',' => "_comma_",
+        '=' => "_eq_",
+        else => null,
+    };
+}
+
 /// Write a path segment with special chars mangled to valid Zig identifiers
 /// e.g., "log" -> "log", "*" -> "_star_", "foo.bar" -> "foo_bar"
 fn writeMangledSegment(code_emitter: *emitter.CodeEmitter, segment: []const u8) !void {
     var start: usize = 0;
     for (segment, 0..) |c, i| {
-        if (c == '*') {
-            // Write everything before the *
+        if (mangledNameEscape(c)) |esc| {
+            // Write everything before the escaped char
             if (i > start) {
                 try code_emitter.write(segment[start..i]);
             }
-            try code_emitter.write("_star_");
+            try code_emitter.write(esc);
             start = i + 1;
         } else if (c == '.') {
             // Replace dots with underscores for valid Zig identifiers
@@ -2279,6 +2297,7 @@ pub const VisitorEmitter = struct {
         var value_ctx = emitter.EmissionContext{
             .allocator = self.allocator,
             .main_module_name = self.main_module_name,
+            .impl_event_decl = event,
         };
         if (bc.is_bare_return) {
             // `-> T` bare return: `return <value>;`, no tag.
@@ -3410,6 +3429,22 @@ pub const VisitorEmitter = struct {
                                 try self.code_emitter.writeIndent();
                                 try self.code_emitter.write("_ = &__koru_event_input;\n");
 
+                                // Threaded-dirty procs take their lock on entry — the
+                                // local-static struct var gives a shared mutex with
+                                // function-scope naming (per-handler granularity for
+                                // the spike; lockset/module resolution is the next tier).
+                                // Recursive dirty procs are exempt: re-entering the
+                                // same non-recursive mutex mid-flight deadlocks (the
+                                // checker flags them is_threaded_recursive).
+                                if (proc.is_threaded_dirty and !proc.is_threaded_recursive) {
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("const __koru_lockscope = struct { var m: @import(\"std\").Thread.Mutex = .{}; };\n");
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("__koru_lockscope.m.lock();\n");
+                                    try self.code_emitter.writeIndent();
+                                    try self.code_emitter.write("defer __koru_lockscope.m.unlock();\n");
+                                }
+
                                 // `[template]` procs are rendered per-invocation and inlined
                                 // at call sites (Stage C `template_processor`); this decl-site
                                 // handler is never called, and its body is template text
@@ -3928,7 +3963,7 @@ pub const VisitorEmitter = struct {
                                                 break :blk arg.name;
                                             } else arg.name;
 
-                                            try self.code_emitter.write(param_name);
+                                            try emitter.writeBranchName(self.code_emitter, param_name);
                                             try self.code_emitter.write(" = ");
 
                                             // A Source param must emit the

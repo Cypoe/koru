@@ -254,7 +254,7 @@ pub const Catalog = struct {
         "__koru_materialize_*": "minted",
         "__koru_row_of_*": "minted",
         "__koru_handle_of_*": "minted",
-        "__koru_resolve_*": "minted"
+        "__koru_resolve_*": "minted", "__koru_at_*": "minted"
     }
 }
 

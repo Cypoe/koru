@@ -165,10 +165,9 @@ const codegen_utils_proto = @import("codegen_utils");
             .malformed => |m| return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "{s}", .{m}) },
             .none => {},
         }
-        const known = TerminalRef.isScalarWord(p.ftype);
-        if (!known and !TerminalRef.isDeclared(program, allocator, p.ftype, p.home)) {
+        if (!TerminalRef.isScalarWord(p.ftype) and !TerminalRef.isDeclared(program, allocator, p.ftype, p.home)) {
             if (!TerminalRef.isDeclaredCompound(program, allocator, p.ftype, p.home)) {
-                return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "std/proto({s}): field '{s}' names unknown terminal '{s}' — a field must use a scalar material, a terminal or compound of its own home, or a qualified name from another home", .{ name, p.name, p.ftype }) };
+                return .{ .replacement = ast.refusal(allocator, reporter, .KORU173, flow.location, flow.module, "{s}", .{fieldTypeDiagnosis(allocator, program, name, p)}) };
             }
             has_compound = true;
         }
@@ -225,8 +224,7 @@ const codegen_utils_proto = @import("codegen_utils");
 
     return .{ .replacement = inline_code_item };
 }
-// `mintTerminal` — the scalar-terminal minter — lives in
-// proto.terminal.kz (the `terminal` part).
+// `mintTerminal` — the scalar-terminal minter — lives in proto.terminal.kz.
 
 ~[comptime|transform]pub tor i8 {
     expr: Expression,
@@ -348,6 +346,7 @@ const codegen_utils_proto = @import("codegen_utils");
     return mintTerminal(allocator, item, expr, "string");
 }
 ~part resolve
+~part nodeaware
 ~part fields
 ~part ownedleaf
 ~part markers

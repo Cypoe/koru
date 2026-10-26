@@ -1,0 +1,15 @@
+name: signal-definition
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when a commit gives an orphaned auto-registered signal its
+  definition — the worldmodel mints a `<name>.signal` stub the moment
+  a commit message declares a signal name with no file, and this
+  signal marks the commit that refines the stub into a real note.
+
+  Witnessed 2026-10-23: the KORU127 registry drain declared
+  `Signal: registry-drift` before a definition existed; the gate
+  minted the orphan, and the follow-up commit wrote the note.
+route: surface

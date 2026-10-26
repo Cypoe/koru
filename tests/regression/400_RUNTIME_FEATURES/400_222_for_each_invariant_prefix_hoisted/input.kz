@@ -1,0 +1,56 @@
+~import std/io
+
+// Pins: a `for ! each` body whose leading steps never read the item gets its
+// invariant prefix hoisted out of the loop (hoistInvariantLoopPrefix in
+// src/ast_transform.zig). The oracle is the host-side mint counter: unhoisted,
+// `make(13)` runs 1200 times and mints 16383*1200 = 19659600 nodes; hoisted,
+// it runs once and mints 16383. `free-tree` (a <!owned> discharge) must land
+// on the for's `| done` path — if it stayed in the body the program would
+// refuse with KORU032 or leak-check fail.
+
+const std = @import("std");
+
+const Node = struct { left: ?*Node, right: ?*Node };
+
+var total_mints: u64 = 0;
+
+fn freeNode(t: ?*Node) void {
+    if (t) |n| {
+        freeNode(n.left);
+        freeNode(n.right);
+        std.heap.c_allocator.destroy(n);
+    }
+}
+
+~tor mint-node { left: ?*Node<!owned>, right: ?*Node<!owned> } -> *Node<owned!>
+~proc mint-node|zig {
+    total_mints += 1;
+    const n = std.heap.c_allocator.create(Node) catch unreachable;
+    n.* = .{ .left = left, .right = right };
+    return n;
+}
+
+~tor free-tree { t: ?*Node<!owned> }
+~proc free-tree|zig {
+    freeNode(t);
+}
+
+~tor mints { } -> i64
+~proc mints|zig {
+    return @intCast(total_mints);
+}
+
+~pub tor make { d: i64 } -> *Node<owned!>
+~make = if(d > 0)
+    | then |> make(d: d - 1): l |> make(d: d - 1): r |> mint-node(left: l, right: r): n -> n
+    | else |> mint-node(left: null, right: null): n -> n
+
+~pub tor check { t: ?*Node<*> } -> i64
+~check = if(t != null)
+    | then |> check(t: t.?.left): l |> check(t: t.?.right): r -> 1 + l + r
+    | else -> 0
+
+~capture { acc: 0[i64] }
+! as g |> for(0..1200)
+    ! each _ |> make(d: 13): t |> check(t): c |> free-tree(t): _ |> captured { acc: g.acc + c }
+| captured res |> mints(): m |> std/io:print.ln("{{ res.acc:d }} mints={{ m:d }}")

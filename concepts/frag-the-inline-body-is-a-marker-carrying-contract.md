@@ -42,7 +42,7 @@ Two honest debts this leaves:
   commit fixes, one level up — the end-state is one resolver over a write
   interface, or a documented freeze point both call.
 - **The resolver family is now pinned at three marker kinds.**
-  350_026_router_if_template_arm covers `__koru_continue_N`;
+  350_030_router_if_template_arm covers `__koru_continue_N`;
   350_027_router_for_template_arm covers the arg-carrying effect splice
   (`__koru_inline_scoped_N(__koru_item)` for `! each`, plus `done`'s
   continue); 350_028_router_cond_template_arm covers `__koru_continue_bare_N`

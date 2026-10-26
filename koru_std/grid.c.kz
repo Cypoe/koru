@@ -1,0 +1,303 @@
+// Koru Standard Library: the `c` part of grid.kz — the C lane's renderers.
+// Joined via `~part c` in grid.kz; merged into the grid module at load.
+//
+// Lifted out of `for`/`read`/`walk`/`pool` at the wall-driven split: each C
+// arm was interleaved inside a transform fn a pinned host file could not
+// grow, and the renderers are self-contained text builders — the part
+// boundary is the host boundary, so the whole lane reads in one place.
+// `pool_weld` rides along: the pool transforms' path/home helpers are the
+// same kind of self-contained namespace, and pool.kz was the file the pin
+// could not carry.
+
+const ast_pool = @import("ast");
+
+const pool_weld = struct {
+    const ast = @import("ast");
+    // The module a flow's items live under — module_decl descent, because a
+    // transform inside an imported module must mint its units under the
+    // module's logical name, not the entry file's (115_045).
+    fn home(its: []const ast.Item, want: []const u8, enclosing: ?[]const u8) ?[]const u8 {
+        for (its) |pi| {
+            switch (pi) {
+                .flow => |f| {
+                    if (std.mem.eql(u8, f.module, want)) return enclosing;
+                },
+                .module_decl => |m| {
+                    if (home(m.items, want, m.logical_name)) |hit| return hit;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+    fn path(alloc: std.mem.Allocator, module: []const u8, name: []const u8) ast.DottedPath {
+        const segs = alloc.alloc([]const u8, 1) catch unreachable;
+        segs[0] = alloc.dupe(u8, name) catch unreachable;
+        return ast.DottedPath{ .module_qualifier = alloc.dupe(u8, module) catch unreachable, .segments = segs };
+    }
+    // The program's items with module_decl layers flattened — a pool
+    // declared inside an imported module is a decl all the same, and the
+    // column scans below must see it.
+    fn flatItems(alloc: std.mem.Allocator, its: []const ast.Item) []const ast.Item {
+        var flat = std.ArrayList(ast.Item).initCapacity(alloc, 64) catch unreachable;
+        var work = std.ArrayList(ast.Item).initCapacity(alloc, 16) catch unreachable;
+        work.appendSlice(alloc, its) catch unreachable;
+        while (work.pop()) |wi| if (wi == .module_decl) work.appendSlice(alloc, wi.module_decl.items) catch unreachable else flat.append(alloc, wi) catch unreachable;
+        return flat.items;
+    }
+};
+
+const GridC = struct {
+
+    // A `walk` cursor: label, borrowed column, stride text, resolved
+    // element type and home namespace.
+    const Cursor = struct { name: []const u8, grid: []const u8, field: []const u8, stride: []const u8, ty: []const u8, ns: []const u8 };
+
+    // A pool column: name, element type, declared default text.
+    const Col = struct { name: []const u8, ty: []const u8, dflt: []const u8 };
+
+    // The C identifier mangle for an element type — `[]i64` → `i64`,
+    // `[4]f32` → `4_f32` — the emitted slice cell's tag.
+    fn sliceTag(alloc: std.mem.Allocator, ct: []const u8) []const u8 {
+        var out = std.ArrayList(u8).initCapacity(alloc, ct.len + 1) catch unreachable;
+        var pending = false;
+        for (ct) |ch| {
+            if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_') {
+                if (pending and out.items.len > 0) out.append(alloc, '_') catch unreachable;
+                pending = false;
+                out.append(alloc, ch) catch unreachable;
+            } else pending = out.items.len > 0;
+        }
+        return out.toOwnedSlice(alloc) catch unreachable;
+    }
+
+    // The emitter's module mangle for a minted event handler — module
+    // qualifier char-for-char (non-alnum → `_`) + '_' + the name, the same
+    // convention sweep's driver uses.
+    fn fnName(alloc: std.mem.Allocator, home: []const u8, nm: []const u8) []const u8 {
+        var cn = std.ArrayList(u8).initCapacity(alloc, 64) catch unreachable;
+        for (home) |ch| cn.append(alloc, if (std.ascii.isAlphanumeric(ch) or ch == '_') ch else '_') catch unreachable;
+        cn.append(alloc, '_') catch unreachable;
+        cn.appendSlice(alloc, nm) catch unreachable;
+        return cn.toOwnedSlice(alloc) catch unreachable;
+    }
+
+    // `for`'s driver loop — the bounds proof once at the door, then the
+    // counted loop the vectorizer sees.
+    fn forLoop(alloc: std.mem.Allocator, lon: []const u8, hin: []const u8, grid_name: []const u8, cur: []const u8, guard_line: []const u8, c_body_fn: []const u8) []const u8 {
+        return std.fmt.allocPrint(alloc, "if ({s} < 0 || {s} > __koru_grid_{s}_size || {s} > {s}) __koru_unreachable(\"std/grid:for: range outruns grid '{s}'\");\nfor (long long {s} = {s}; {s} < {s}; {s}++) {{\n{s}    {s}((struct {s}_in){{ .{s} = {s} }});\n}}\nreturn;", .{ lon, hin, grid_name, lon, hin, grid_name, cur, lon, cur, hin, cur, guard_line, c_body_fn, c_body_fn, cur, cur }) catch unreachable;
+    }
+
+    // `walk`'s driver body. A cursor is the fat slice cell
+    // `__koru_slice_<tag>` the event-input ABI already declares — `{ptr,
+    // len}` over the grid's flat column, advanced by `stride` each trip.
+    // Returns the cursor whose type has no C spelling (caller refuses).
+    fn walkDriver(alloc: std.mem.Allocator, drv: *std.ArrayList(u8), cursors: []const Cursor, home_ns: []const u8, line: usize, call_input: []const u8, has_tail: bool) ?Cursor {
+        for (cursors) |c| {
+            const ct = codegen_utils_grid.cTypeOf(c.ty) orelse return c;
+            drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "struct __koru_slice_{s} {s} = {{ .ptr = __koru_grid_{s}.{s}, .len = __koru_grid_{s}_size }};\n", .{ sliceTag(alloc, ct), c.name, c.grid, c.field, c.grid }) catch unreachable) catch unreachable;
+        }
+        for (cursors, 0..) |c, ci| {
+            if (ci == 0) drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "long long __koru_walktrips = (long long)({s}.len / ({s}));\n", .{ c.name, c.stride }) catch unreachable) catch unreachable else
+                drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "{{ long long __koru_wt = (long long)({s}.len / ({s})); if (__koru_wt < __koru_walktrips) __koru_walktrips = __koru_wt; }}\n", .{ c.name, c.stride }) catch unreachable) catch unreachable;
+        }
+        const c_body = fnName(alloc, home_ns, std.fmt.allocPrint(alloc, "__grid_walkbody_L{d}", .{line}) catch unreachable);
+        drv.appendSlice(alloc, "for (long long __koru_w = 0; __koru_w < __koru_walktrips; __koru_w++) {\n    ") catch unreachable;
+        drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}((struct {s}_in){{ {s} }});\n", .{ c_body, c_body, call_input }) catch unreachable) catch unreachable;
+        for (cursors) |c| {
+            drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "    {s}.ptr += ({s}); {s}.len -= ({s});\n", .{ c.name, c.stride, c.name, c.stride }) catch unreachable) catch unreachable;
+        }
+        drv.appendSlice(alloc, "}\n") catch unreachable;
+        if (has_tail) {
+            const c_tail = fnName(alloc, home_ns, std.fmt.allocPrint(alloc, "__grid_walktail_L{d}", .{line}) catch unreachable);
+            drv.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}((struct {s}_in){{ {s} }});\n", .{ c_tail, c_tail, call_input }) catch unreachable) catch unreachable;
+        }
+        drv.appendSlice(alloc, "return;") catch unreachable;
+        return null;
+    }
+
+    // `pool`'s declaration text — flat names, pointer columns. The type
+    // object's members become free helpers exactly as `new` spells them:
+    // `__koru_at_<p>` carries the bounds floor verbatim, `__koru_size`
+    // becomes a `long long` var the alloc driver sets, and each column is
+    // a heap pointer `pool-alloc` fills in. `always_inline` on the bounds
+    // floor: the pool's units are minted glue any optimizer inlines, and
+    // alive2's per-function check cannot close a caller whose
+    // alloc→write→free chain crosses call boundaries over the malloc'd
+    // global — inlined, the same region verifies (measured on the minimal
+    // repro; concepts/frag-a-per-function-verifier-fails-at-call-composition.md).
+    fn poolDecl(alloc: std.mem.Allocator, pool_name: []const u8, fields: []const Col, unchecked: bool) struct { text: []const u8, bad: ?Col } {
+        var cg = std.ArrayList(u8).initCapacity(alloc, 512) catch unreachable;
+        cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static long long __koru_grid_{s}_size = 0;\n", .{pool_name}) catch unreachable) catch unreachable;
+        if (unchecked) {
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static __attribute__((always_inline)) long long __koru_at_{s}(long long i) {{ return i; }}\n", .{pool_name}) catch unreachable) catch unreachable;
+        } else {
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static __attribute__((always_inline)) long long __koru_at_{s}(long long i) {{ if (i < 0 || i >= __koru_grid_{s}_size) {{ __koru_unreachable(\"std/grid:pool: index out of range for pool '{s}' - the extent arrives at pool-alloc, so this outruns what was allocated\"); }} return i; }}\n", .{ pool_name, pool_name, pool_name }) catch unreachable) catch unreachable;
+        }
+        cg.appendSlice(alloc, "static struct { ") catch unreachable;
+        for (fields, 0..) |f, fi| {
+            const ct = codegen_utils_grid.cTypeOf(f.ty) orelse return .{ .text = "", .bad = f };
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}{s} *{s};", .{ if (fi > 0) " " else "", ct, f.name }) catch unreachable) catch unreachable;
+        }
+        cg.appendSlice(alloc, std.fmt.allocPrint(alloc, " }} __koru_grid_{s} = {{0}};", .{pool_name}) catch unreachable) catch unreachable;
+        return .{ .text = cg.toOwnedSlice(alloc) catch unreachable, .bad = null };
+    }
+
+    // `pool-alloc`'s body text — malloc per column, extent store last, a
+    // negative extent a loud trap before a single allocation.
+    fn poolAlloc(alloc: std.mem.Allocator, pool_name: []const u8, nn: []const u8, cols: []const Col) struct { text: []const u8, bad: ?Col } {
+        var b = std.ArrayList(u8).initCapacity(alloc, 256) catch unreachable;
+        b.appendSlice(alloc, std.fmt.allocPrint(alloc, "long long __koru_pn = ({s});\nif (__koru_pn < 0) {{ __koru_unreachable(\"std/grid:pool-alloc({s}): a pool's extent cannot be negative\"); }}\n", .{ nn, pool_name }) catch unreachable) catch unreachable;
+        for (cols) |c| {
+            const ct = codegen_utils_grid.cTypeOf(c.ty) orelse return .{ .text = "", .bad = c };
+            b.appendSlice(alloc, std.fmt.allocPrint(alloc, "__koru_grid_{s}.{s} = malloc(sizeof({s}) * (size_t)__koru_pn);\nif (__koru_grid_{s}.{s} == 0) {{ __koru_unreachable(\"std/grid:pool-alloc({s}): allocation failed\"); }}\n", .{ pool_name, c.name, ct, pool_name, c.name, pool_name }) catch unreachable) catch unreachable;
+            if (!std.mem.eql(u8, std.mem.trim(u8, c.dflt, " \t"), "0")) {
+                b.appendSlice(alloc, std.fmt.allocPrint(alloc, "for (long long __koru_pi = 0; __koru_pi < __koru_pn; __koru_pi++) __koru_grid_{s}.{s}[__koru_pi] = {s};\n", .{ pool_name, c.name, c.dflt }) catch unreachable) catch unreachable;
+            }
+        }
+        b.appendSlice(alloc, std.fmt.allocPrint(alloc, "__koru_grid_{s}_size = __koru_pn;\nreturn;", .{pool_name}) catch unreachable) catch unreachable;
+        return .{ .text = b.toOwnedSlice(alloc) catch unreachable, .bad = null };
+    }
+
+    // A grid read in arbitrary text, fully parsed — `g[i].f` OR the
+    // `__koru_idx(g, i).f` form: `|c` templates freeze `c_lower(expr)`
+    // BEFORE any grid transform runs, so a `cells[i].f` baked into an
+    // `if`/`for` inline_body arrives already re-spelled as
+    // `__koru_idx(cells, i).f`; without the marker arm the emitter's slice
+    // pass unwraps it to `(cells)[i]` — an undeclared identifier in C (the
+    // store's ixrefs took the same fix, 690_250). The `grid,` pin inside
+    // the call keeps a real array's `__koru_idx(arr, i)` untouched.
+    //
+    // `end` is where the read stops — the field's last char, the cursor's
+    // next `i`. A TOP-LEVEL comma in the subscript is the 2-D form
+    // `g[x, y]`; a comma inside a nested subscript belongs to that
+    // subscript, so depth matters.
+    const Read = struct { gname: []const u8, idx_raw: []const u8, comma: ?usize, fname: []const u8, end: usize };
+    // `new`'s C declaration — flat names, C spellings. The type object's
+    // callable members become free functions: `__koru_at_<g>` /
+    // `__koru_at2_<g>` carry the bounds floor verbatim (same messages,
+    // `__koru_unreachable` where Zig has @panic), `__koru_wide` drops
+    // because every Koru integer is already `long long`, `__koru_size`
+    // is the const the sweep's loop bound names. A column type outside
+    // codegen_utils.cTypeOf's first fragment is `bad` — refused by the
+    // caller rather than emitted as a type that does not exist.
+    fn newDecl(alloc: std.mem.Allocator, grid_name: []const u8, size: usize, cols2d: usize, rows2d: usize, two_dim: bool, row_layout: bool, unchecked: bool, fields: anytype) struct { text: []const u8, bad: ?struct { name: []const u8, ty: []const u8 } } {
+        var cg = std.ArrayList(u8).initCapacity(alloc, 512) catch unreachable;
+        cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static const long long __koru_grid_{s}_size = {d};\n", .{ grid_name, size }) catch unreachable) catch unreachable;
+        if (unchecked) {
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static long long __koru_at_{s}(long long i) {{ return i; }}\n", .{grid_name}) catch unreachable) catch unreachable;
+        } else {
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static long long __koru_at_{s}(long long i) {{ if (i < 0 || i >= {d}) {{ __koru_unreachable(\"std/grid: index out of range for grid '{s}' (size {d}) - a grid is addressed by position, and wrapping is the program's to write as `% {d}`\"); }} return i; }}\n", .{ grid_name, size, grid_name, size, size }) catch unreachable) catch unreachable;
+        }
+        if (two_dim) {
+            if (unchecked) {
+                cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static long long __koru_at2_{s}(long long x, long long y) {{ return y * {d} + x; }}\n", .{ grid_name, cols2d }) catch unreachable) catch unreachable;
+            } else {
+                cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "static long long __koru_at2_{s}(long long x, long long y) {{ if (x < 0 || x >= {d}) {{ __koru_unreachable(\"std/grid: x out of range for grid '{s}' (cols {d})\"); }} if (y < 0 || y >= {d}) {{ __koru_unreachable(\"std/grid: y out of range for grid '{s}' (rows {d})\"); }} return y * {d} + x; }}\n", .{ grid_name, cols2d, grid_name, cols2d, rows2d, grid_name, rows2d, cols2d }) catch unreachable) catch unreachable;
+            }
+        }
+        if (row_layout) {
+            cg.appendSlice(alloc, "static struct { struct { ") catch unreachable;
+            for (fields, 0..) |f, fi| {
+                const ct = codegen_utils_grid.cTypeOf(f.ty) orelse return .{ .text = "", .bad = .{ .name = f.name, .ty = f.ty } };
+                cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}{s} {s};", .{ if (fi > 0) " " else "", ct, f.name }) catch unreachable) catch unreachable;
+            }
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, " }} __koru_row[{d}]; }} __koru_grid_{s} = {{{{0}}}};", .{ size, grid_name }) catch unreachable) catch unreachable;
+        } else {
+            cg.appendSlice(alloc, "static struct { ") catch unreachable;
+            for (fields, 0..) |f, fi| {
+                const ct = codegen_utils_grid.cTypeOf(f.ty) orelse return .{ .text = "", .bad = .{ .name = f.name, .ty = f.ty } };
+                cg.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}{s} {s}[{d}];", .{ if (fi > 0) " " else "", ct, f.name, size }) catch unreachable) catch unreachable;
+            }
+            cg.appendSlice(alloc, std.fmt.allocPrint(alloc, " }} __koru_grid_{s} = {{{{0}}}};", .{grid_name}) catch unreachable) catch unreachable;
+        }
+        return .{ .text = cg.toOwnedSlice(alloc) catch unreachable, .bad = null };
+    }
+
+    fn readMatch(text: []const u8, i: usize, e: usize, refs: []const grid_read.GridRef) ?Read {
+        var gname: []const u8 = "";
+        var idx_start: usize = 0;
+        var open: u8 = 0;
+        var close: u8 = 0;
+        if (e > i and e < text.len and text[e] == '[' and grid_read.find(refs, text[i..e]) != null) {
+            gname = text[i..e];
+            idx_start = e + 1;
+            open = '[';
+            close = ']';
+        } else if (std.mem.startsWith(u8, text[i..], "__koru_idx(")) {
+            const body_start = i + "__koru_idx(".len;
+            var mdepth: usize = 1;
+            var mk = body_start;
+            var mcomma: ?usize = null;
+            while (mk < text.len and mdepth > 0) : (mk += 1) {
+                if (text[mk] == '(') mdepth += 1;
+                if (text[mk] == ',' and mdepth == 1 and mcomma == null) mcomma = mk;
+                if (text[mk] == ')') {
+                    mdepth -= 1;
+                    if (mdepth == 0) break;
+                }
+            }
+            if (mcomma) |mc| {
+                if (mdepth == 0 and mk < text.len) {
+                    const g = std.mem.trim(u8, text[body_start..mc], " ");
+                    if (grid_read.find(refs, g) != null) {
+                        gname = g;
+                        idx_start = mc + 1;
+                        open = '(';
+                        close = ')';
+                    }
+                }
+            }
+        }
+        if (gname.len == 0) return null;
+        // Depth-aware scan so a nested subscript in the index survives:
+        // `cells[other[k].h].count`.
+        var depth: usize = 1;
+        var j = idx_start;
+        while (j < text.len) {
+            if (text[j] == open) depth += 1;
+            if (text[j] == close) {
+                depth -= 1;
+                if (depth == 0) break;
+            }
+            j += 1;
+        }
+        if (!(j < text.len and j + 1 < text.len and text[j + 1] == '.')) return null;
+        const idx_raw = text[idx_start..j];
+        var fe = j + 2;
+        while (fe < text.len and @import("ast").isKebabIdentChar(text[fe])) fe += 1;
+        var comma: ?usize = null;
+        var d2: usize = 0;
+        var k: usize = 0;
+        while (k < idx_raw.len) : (k += 1) {
+            if (idx_raw[k] == '[' or idx_raw[k] == '(') d2 += 1;
+            if (idx_raw[k] == ']' or idx_raw[k] == ')') d2 -= 1;
+            if (idx_raw[k] == ',' and d2 == 0) {
+                comma = k;
+                break;
+            }
+        }
+        return Read{ .gname = gname, .idx_raw = idx_raw, .comma = comma, .fname = text[j + 2 .. fe], .end = fe };
+    }
+
+    // The C spelling of a grid read — flat names and the `__koru_at`/
+    // `__koru_at2` floor helpers minted beside the storage. `&` has no
+    // meaning against a static array, and `__KoruGridT_<g>` is a Zig
+    // namespace a C struct cannot carry; `ns` is "" on this lane.
+    fn readPiece(alloc: std.mem.Allocator, gref: grid_read.GridRef, idx_raw: []const u8, comma: ?usize, fname: []const u8, refs: []const grid_read.GridRef, trusted: ?grid_read.TrustedIndex) []const u8 {
+        const gname = gref.name;
+        if (comma) |cm| {
+            const xs = grid_read.lowerTrusted(alloc, std.mem.trim(u8, idx_raw[0..cm], " "), refs, trusted);
+            const ys = grid_read.lowerTrusted(alloc, std.mem.trim(u8, idx_raw[cm + 1 ..], " "), refs, trusted);
+            return if (gref.row)
+                std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.__koru_row[__koru_at2_{s}({s}, {s})].{s}", .{ gref.ns, gname, gname, xs, ys, fname }) catch unreachable
+            else
+                std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.{s}[__koru_at2_{s}({s}, {s})]", .{ gref.ns, gname, fname, gname, xs, ys }) catch unreachable;
+        }
+        const idx = grid_read.lowerTrusted(alloc, idx_raw, refs, trusted);
+        return if (gref.row)
+            std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.__koru_row[__koru_at_{s}({s})].{s}", .{ gref.ns, gname, gname, idx, fname }) catch unreachable
+        else
+            std.fmt.allocPrint(alloc, "{s}__koru_grid_{s}.{s}[__koru_at_{s}({s})]", .{ gref.ns, gname, fname, gname, idx }) catch unreachable;
+    }
+};

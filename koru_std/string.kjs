@@ -65,10 +65,10 @@
 // digits, nothing else. `Number()` is not (it takes "", " 42", "0x2a", "1e3"),
 // so the shape is pinned by the regex before the conversion runs.
 ~proc parse-int|js {
-    if (!/^[+-]?[0-9]+$/.test(s.data)) {
+    if (!/^[+-]?[0-9]+$/.test(s)) {
         return { tag: "err", err: "not an integer" };
     }
-    return { tag: "ok", ok: Number(s.data) };
+    return { tag: "ok", ok: Number(s) };
 }
 
 ~proc from-int|js {

@@ -62,7 +62,7 @@ run-it = std/bridge:run(br, source)
 //    self-call resolves to the NEW body — runaway — refused at the cap.
 // 3. The bridge survives: an ordinary dispatch still runs after.
 [with]std/bridge:create(id: "rec-cap", scope: "rec"): br
-|> run-it(br, source: "tor drain {}\ndrain = next() | more m |> drain()")
+|> run-it(br, source: "tor drain {}\ndrain = next()\n| more m |> drain()")
 |> run-it(br, source: "drain()")
 |> run-it(br, source: "tor loop {}\nloop = emit(text: \"once\")")
 |> run-it(br, source: "loop()")

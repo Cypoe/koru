@@ -2,7 +2,7 @@
     __koru_stdout_write($"Outer: {x}\n");
 
     if (x < 3) {
-        return new Output { tag = "next-outer", next_outer = (x, max_inner) };
+        return new Output { tag = "next-outer", next_outer = new next_outer_payload { x = x, max_inner = max_inner } };
     } else {
         return new Output { tag = "done-outer", done_outer = new { } };
     }
@@ -11,9 +11,9 @@
     __koru_stdout_write($"  Inner: {x}, {y}\n");
 
     if (y < max_inner) {
-        return new Output { tag = "next-inner", next_inner = (x, y + 1, max_inner) };
+        return new Output { tag = "next-inner", next_inner = new next_inner_payload { x = x, y = y + 1, max_inner = max_inner } };
     } else {
-        return new Output { tag = "done-inner", done_inner = (x + 1, max_inner) };
+        return new Output { tag = "done-inner", done_inner = new done_inner_payload { x = x + 1, max_inner = max_inner } };
     }
 }
 ~proc start|cs {

@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_076_optional_effect_branch_decl/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_076_optional_effect_branch_decl/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_076_optional_effect_branch_decl/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_076_optional_effect_branch_decl/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -129,7 +129,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_076_optional_effect_branch_decl/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         }
     ]

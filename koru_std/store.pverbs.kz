@@ -318,7 +318,7 @@ if (step_arm) |*sa| {
             for (px) |*p| p.* = "";
             break :blk_spx px;
         } };
-        h.storeRefsContH(allocator, program, &body_clone, sscope, pstore_identity, &[_][]const u8{});
+        HomeScan.storeRefsContH(allocator, program, &body_clone, sscope, pstore_identity, &[_][]const u8{});
         const snode = body_clone.node.?;
         if (snode == .inline_code) {
             // A nested store-read site spliced its loop here before
@@ -327,7 +327,7 @@ if (step_arm) |*sa| {
                 .path = h.mkPathH(allocator, flow.module, stepbody_name),
                 .body = ast.Source{ .text = snode.inline_code, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
-                .target = allocator.dupe(u8, if (storeHostTarget() == .js) "js" else "zig") catch unreachable,
+                .target = allocator.dupe(u8, switch (storeHostTarget()) { .js => "js", .cs => "cs", .c => "c", .zig => "zig" }) catch unreachable,
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
@@ -392,14 +392,14 @@ if (step_arm) |*sa| {
             for (px) |*p| p.* = "";
             break :blk_dpx px;
         } };
-        h.storeRefsContH(allocator, program, &dclone, dscope, pstore_identity, &[_][]const u8{});
+        HomeScan.storeRefsContH(allocator, program, &dclone, dscope, pstore_identity, &[_][]const u8{});
         const dnode = dclone.node.?;
         if (dnode == .inline_code) {
             appended_items.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
                 .path = h.mkPathH(allocator, flow.module, dischargeone_name),
                 .body = ast.Source{ .text = dnode.inline_code, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
                 .annotations = &[_][]const u8{},
-                .target = allocator.dupe(u8, if (storeHostTarget() == .js) "js" else "zig") catch unreachable,
+                .target = allocator.dupe(u8, switch (storeHostTarget()) { .js => "js", .cs => "cs", .c => "c", .zig => "zig" }) catch unreachable,
                 .location = flow.location,
                 .module = allocator.dupe(u8, flow.module) catch unreachable,
             } }) catch unreachable;
@@ -629,7 +629,7 @@ if (wait_arm) |*wa| {
         for (px) |*p| p.* = "";
         break :blk_wpx px;
     } };
-    h.storeRefsContH(allocator, program, &wbody_clone, wscope, pstore_identity, &[_][]const u8{});
+    HomeScan.storeRefsContH(allocator, program, &wbody_clone, wscope, pstore_identity, &[_][]const u8{});
     const wnode = wbody_clone.node.?;
     if (wnode == .inline_code) {
         // A host-proc interest body returns the record itself.
@@ -637,7 +637,7 @@ if (wait_arm) |*wa| {
             .path = h.mkPathH(allocator, w_home, waitone_name),
             .body = ast.Source{ .text = wnode.inline_code, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
             .annotations = &[_][]const u8{},
-            .target = allocator.dupe(u8, if (storeHostTarget() == .js) "js" else "zig") catch unreachable,
+            .target = allocator.dupe(u8, switch (storeHostTarget()) { .js => "js", .cs => "cs", .c => "c", .zig => "zig" }) catch unreachable,
             .location = flow.location,
             .module = allocator.dupe(u8, w_home) catch unreachable,
         } }) catch unreachable;

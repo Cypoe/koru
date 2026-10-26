@@ -190,7 +190,7 @@ pub const ImageManifest = struct {
     zig_version = blk: {
         const res = std.process.Child.run(.{
             .allocator = allocator,
-            .argv = &[_][]const u8{ "zig", "version" },
+            .argv = &[_][]const u8{ @import("emitter_helpers").zigExe(), "version" },
         }) catch break :blk "unknown";
         defer allocator.free(res.stdout);
         defer allocator.free(res.stderr);

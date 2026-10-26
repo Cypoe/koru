@@ -1,0 +1,19 @@
+// Declare app bundle identity — Usage:
+//   std/build:app { name: "Tray Spike", id: "org.koru.trayspike",
+//                   version: "0.1", icon: "icon.icns" }
+// The compiler embeds an Info.plist into __TEXT,__info_plist (macho):
+// the binary answers a real CFBundleIdentifier/CFBundleName — the gate
+// notifications and AppKit's real-app checks key on. `icon` is an .icns
+// path relative to the entry file — `koruc bundle` puts it in
+// Contents/Resources as CFBundleIconFile. A Source capture like
+// requires — name + id required, version + icon optional; malformed
+// blocks are parse errors, never defaulted identity.
+~[comptime|norun]pub tor app {
+    source: Source
+}
+| ?added
+| ?parse-error string
+
+~proc app|zig {
+    return .{ .added = .{} };
+}

@@ -508,6 +508,25 @@ fn indexOfTopLevelHeadArrow(s: []const u8) ?usize {
     return indexOfTopLevelOp(s, "=-", '>');
 }
 
+/// First `{` at paren depth 0 outside a string — the produce-stage
+/// delimiter in `when c { f }`: the braces are stage syntax, never part of
+/// the guard expression.
+fn indexOfTopLevelBrace(s: []const u8) ?usize {
+    var paren_depth: i32 = 0;
+    var in_string = false;
+    for (s, 0..) |c, i| {
+        if (c == '"' and (i == 0 or s[i - 1] != '\\')) {
+            in_string = !in_string;
+            continue;
+        }
+        if (in_string) continue;
+        if (c == '(') paren_depth += 1;
+        if (c == ')') paren_depth -= 1;
+        if (c == '{' and paren_depth == 0) return i;
+    }
+    return null;
+}
+
 /// Return `s` with a trailing `// ...` line comment removed (the `//` must be
 /// outside a string literal). Used so body-glyph detection never trips on a
 /// `->`/`|>`/`=>` that lives inside a trailing comment.
@@ -920,7 +939,6 @@ pub const Parser = struct {
     module_name: []const u8, // Canonical module path (e.g., "input", "lib/fs")
 
     // Global inline flow counter - must match emitter's global numbering
-    inline_flow_counter: u32,
     // Monotonic counter for the synthetic temp a bind-position destructure
     // (`~f(): { x } |>`) binds the return to before emitting per-field consts.
     destructure_ret_counter: u32 = 0,
@@ -997,12 +1015,16 @@ pub const Parser = struct {
         return self.getLineLocation(self.current, 0);
     }
 
-    /// Get source location for a specific line and indent (column)
+    /// Get source location for a specific line and indent. `indent` is the
+    /// line's leading-space COUNT (0-based offset of the first non-space
+    /// char); `column` is 1-based, so the stored value is `indent + 1` — the
+    /// column of that first char. Callers with no column at all pass 0,
+    /// which lands the caret on column 1.
     fn getLineLocation(self: *Parser, line_idx: usize, indent: usize) errors.SourceLocation {
         return .{
             .file = self.reporter.file_name,
             .line = if (line_idx < self.lines.len) line_idx + 1 else self.lines.len,
-            .column = indent,
+            .column = indent + 1,
         };
     }
 
@@ -1021,7 +1043,7 @@ pub const Parser = struct {
         return .{
             .file = self.reporter.file_name,
             .line = line,
-            .column = lexer.getIndent(self.lines[start_line_index]),
+            .column = lexer.getIndent(self.lines[start_line_index]) + 1,
         };
     }
 
@@ -1094,20 +1116,13 @@ pub const Parser = struct {
         return result;
     }
 
-    /// Extract the scope type `[...]` and the path for a file-source closure at
-    /// `marker` whose text is `trimmed`. Returns the invocation text before the
-    /// closure and the phantom type (null for the bare `@"path"` form).
-    fn splitFileSource(self: *Parser, trimmed: []const u8, marker_idx: usize, typed: bool) anyerror!struct { invocation_str: []const u8, phantom_type: ?[]const u8 } {
-        var invocation_str = lexer.trim(trimmed[0..marker_idx]);
-        var phantom_type: ?[]const u8 = null;
-        if (typed) {
-            const angle_start = std.mem.lastIndexOf(u8, trimmed[0 .. marker_idx + 1], "<") orelse {
-                return self.fail(.PARSE001, self.current, 0, "File source syntax requires scope type: ~tor <type>\"path\"", .{});
-            };
-            phantom_type = try self.allocator.dupe(u8, trimmed[angle_start + 1 .. marker_idx]);
-            invocation_str = lexer.trim(trimmed[0..angle_start]);
-        }
-        return .{ .invocation_str = invocation_str, .phantom_type = phantom_type };
+    /// Split the invocation text off the front of a `@"path"` file-source
+    /// closure. The typed `<type>"path"` echo was removed (2026-10-24) — the
+    /// kind tag is declared once on the parameter (`source: Source[kind]`),
+    /// never repeated at the call site.
+    fn splitFileSource(self: *Parser, trimmed: []const u8, marker_idx: usize) []const u8 {
+        _ = self;
+        return lexer.trim(trimmed[0..marker_idx]);
     }
 
     /// Extract a `: bind` from the tail after a file-source closing quote.
@@ -1176,7 +1191,6 @@ pub const Parser = struct {
             .is_compiler_library = false, // Default to false, caller can set if needed
             .is_k = is_k,
             .module_name = module_name,
-            .inline_flow_counter = 0, // Global counter across all procs
             .fail_fast = false, // Default to lenient mode (continue past errors)
             .registry_transferred = false,
             .compiler_flags = compiler_flags, // Flags for conditional imports
@@ -1436,7 +1450,9 @@ pub const Parser = struct {
                                 std.mem.indexOf(u8, next_trimmed, ":") != null or
                                 std.mem.startsWith(u8, next_trimmed, "pub ") or
                                 std.mem.startsWith(u8, next_trimmed, "tor ") or
-                                std.mem.startsWith(u8, next_trimmed, "proc ");
+                                std.mem.startsWith(u8, next_trimmed, "proc ") or
+                                std.mem.startsWith(u8, next_trimmed, "part ") or
+                                std.mem.startsWith(u8, next_trimmed, "~part ");
                             break :blk looks_like_construct;
                         } else false;
 
@@ -1447,10 +1463,7 @@ pub const Parser = struct {
                             for (result.annotations) |ann| {
                                 try module_annotations.append(self.allocator, try self.allocator.dupe(u8, ann));
                             }
-                            for (result.annotations) |ann| {
-                                self.allocator.free(ann);
-                            }
-                            self.allocator.free(result.annotations);
+                            self.freeParsedAnnotations(result.annotations);
 
                             // For inline syntax, advance to next line; for vertical, parseAnnotationBlock already did
                             if (!used_vertical_syntax) {
@@ -1476,11 +1489,8 @@ pub const Parser = struct {
                         // bullets and pipes tokenize identically).
                         if (std.mem.startsWith(u8, construct_content, "import ")) {
                             self.clearProse(); // imports do not carry prose yet
-                            const keep = try self.gateImportEntries(result.annotations, construct_content, next_line_idx);
-                            for (result.annotations) |ann| {
-                                self.allocator.free(ann);
-                            }
-                            self.allocator.free(result.annotations);
+                            const keep = try self.gateEntries(result.annotations, construct_content, next_line_idx, "import");
+                            self.freeParsedAnnotations(result.annotations);
                             if (keep) {
                                 // Re-enter the main loop on a plain ~import line.
                                 const normalized_line = try std.fmt.allocPrint(self.allocator, "~{s}", .{construct_content});
@@ -1489,6 +1499,23 @@ pub const Parser = struct {
                             } else {
                                 self.current = next_line_idx + 1;
                             }
+                            continue;
+                        }
+
+                        // Conditional part, annotation-block form: the block's
+                        // entries gate the sibling join itself (same vocabulary
+                        // as the inline `~[entries]part` gate). Excluded means
+                        // the tag was never declared — no KORU201 for a file
+                        // that was never expected.
+                        if (std.mem.startsWith(u8, construct_content, "part ")) {
+                            self.clearProse();
+                            const keep = try self.gateEntries(result.annotations, construct_content, next_line_idx, "part");
+                            self.freeParsedAnnotations(result.annotations);
+                            if (keep) {
+                                self.current = next_line_idx;
+                                try self.parsePartDecl(lexer.trim(construct_content["part ".len..]));
+                            }
+                            self.current = next_line_idx + 1;
                             continue;
                         }
 
@@ -1515,10 +1542,7 @@ pub const Parser = struct {
                         const item = self.parseKoruConstruct() catch |err| {
                             self.lines[next_line_idx] = saved_line;
                             // Clean up annotations
-                            for (result.annotations) |ann| {
-                                self.allocator.free(ann);
-                            }
-                            self.allocator.free(result.annotations);
+                            self.freeParsedAnnotations(result.annotations);
                             if (self.fail_fast) {
                                 return err;
                             }
@@ -1534,10 +1558,7 @@ pub const Parser = struct {
                         };
 
                         // Clean up annotations
-                        for (result.annotations) |ann| {
-                            self.allocator.free(ann);
-                        }
-                        self.allocator.free(result.annotations);
+                        self.freeParsedAnnotations(result.annotations);
 
                         // Restore the original line
                         self.lines[next_line_idx] = saved_line;
@@ -1564,11 +1585,8 @@ pub const Parser = struct {
                         if (std.mem.startsWith(u8, result.remaining, "import ")) {
                             const line_with_bracket = self.current - 1;
                             self.clearProse(); // imports do not carry prose yet
-                            const keep = try self.gateImportEntries(result.annotations, result.remaining, line_with_bracket);
-                            for (result.annotations) |ann| {
-                                self.allocator.free(ann);
-                            }
-                            self.allocator.free(result.annotations);
+                            const keep = try self.gateEntries(result.annotations, result.remaining, line_with_bracket, "import");
+                            self.freeParsedAnnotations(result.annotations);
                             if (keep) {
                                 // Re-enter the main loop on a plain import line —
                                 // `.k` re-synthesizes the `~` itself, and its
@@ -1576,6 +1594,21 @@ pub const Parser = struct {
                                 const normalized_line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ if (self.is_k) "" else "~", result.remaining });
                                 self.lines[line_with_bracket] = normalized_line;
                                 self.current = line_with_bracket;
+                            }
+                            continue;
+                        }
+
+                        // Conditional part, vertical close-bracket form —
+                        // `]part macos`: the block's entries gate the join.
+                        if (std.mem.startsWith(u8, result.remaining, "part ")) {
+                            const line_with_bracket = self.current - 1;
+                            self.clearProse();
+                            const keep = try self.gateEntries(result.annotations, result.remaining, line_with_bracket, "part");
+                            self.freeParsedAnnotations(result.annotations);
+                            if (keep) {
+                                self.current = line_with_bracket;
+                                try self.parsePartDecl(lexer.trim(result.remaining["part ".len..]));
+                                self.current = line_with_bracket + 1;
                             }
                             continue;
                         }
@@ -1591,10 +1624,7 @@ pub const Parser = struct {
                         try ann_str.append(self.allocator, ']');
 
                         // Now safe to free the parsed annotations — they're in ann_str
-                        for (result.annotations) |ann| {
-                            self.allocator.free(ann);
-                        }
-                        self.allocator.free(result.annotations);
+                        self.freeParsedAnnotations(result.annotations);
 
                         // Strip leading ~ from remaining if present (for events/procs); flow
                         // calls won't have one. Then synthesize ~[ann1|ann2|...]construct.
@@ -1639,10 +1669,7 @@ pub const Parser = struct {
                         // parsing which sees the original ~[a|b|c]construct text. Free the
                         // duplicate annotations parsed by parseAnnotationBlock — the normal path
                         // will re-parse them from the source line.
-                        for (result.annotations) |ann| {
-                            self.allocator.free(ann);
-                        }
-                        self.allocator.free(result.annotations);
+                        self.freeParsedAnnotations(result.annotations);
                     }
                 }
 
@@ -1656,13 +1683,9 @@ pub const Parser = struct {
                 if (std.mem.startsWith(u8, after_tilde, "[")) {
                     if (annotation_parser.findBlockClose(after_tilde[1..])) |close_idx| {
                         const after_close = lexer.trim(after_tilde[1 + close_idx + 1 ..]);
+                        const ann_str = after_tilde[1 .. 1 + close_idx];
                         if (std.mem.startsWith(u8, after_close, "import ")) {
-                            const ann_str = after_tilde[1 .. 1 + close_idx];
-                            try self.rejectInvalidAnnotationSeparator(ann_str, self.current);
-                            const entries = try annotation_parser.splitEntries(self.allocator, ann_str);
-                            defer self.allocator.free(entries);
-
-                            const keep = try self.gateImportEntries(entries, after_close, self.current);
+                            const keep = try self.gateTextEntries(ann_str, after_close, "import");
                             if (!keep) {
                                 self.current += 1;
                                 continue;
@@ -1671,6 +1694,17 @@ pub const Parser = struct {
                             // Kept — normalize "~[entries]import ..." to "~import ..."
                             const normalized_line = try std.fmt.allocPrint(self.allocator, "~{s}", .{after_close});
                             self.lines[self.current] = normalized_line;
+                        } else if (std.mem.startsWith(u8, after_close, "part ")) {
+                            // Conditional part: `~[entries]part <tag>` gates the
+                            // sibling-file join itself — the same entry vocabulary
+                            // as the import gate. Excluded means the tag was never
+                            // declared, so an absent part file is no KORU201.
+                            const keep = try self.gateTextEntries(ann_str, after_close, "part");
+                            if (keep) {
+                                try self.parsePartDecl(lexer.trim(after_close["part ".len..]));
+                            }
+                            self.current += 1;
+                            continue;
                         }
                     }
                 }
@@ -1774,10 +1808,44 @@ pub const Parser = struct {
                     const u = self.reporter.userLine(pm + 1);
                     break :blk if (u == 0) null else u;
                 } else null;
+                // A stray `|>` sitting under an armed construct is almost
+                // always a mis-indented continuation: chains resume at the
+                // ARM column (`| then`, `| else`, `| done`), not the
+                // `|> if` column — same column-scoping rule `| done`
+                // follows. Walk up for the nearest arm marker before the
+                // enclosing region ends and name the column + line, or the
+                // generic chain text sends the author guessing.
+                const arm_hint: ?struct { col: usize, line: usize } = blk: {
+                    if (!(trimmed.len >= 2 and trimmed[0] == '|' and trimmed[1] == '>')) break :blk null;
+                    if (saw_blank) break :blk null;
+                    const stray_indent = lexer.getIndent(line);
+                    var q = first_idx;
+                    while (q > 0) {
+                        q -= 1;
+                        const ql = self.lines[q];
+                        const qt = lexer.trim(ql);
+                        if (qt.len == 0 or lexer.isCommentLine(ql)) continue;
+                        const qi = lexer.getIndent(ql);
+                        if (qi < stray_indent) break;
+                        // The first `|`-arm marker above owns this region; if
+                        // the stray sits at a different column, that column is
+                        // where the continuation belongs.
+                        if (qt[0] == '|' and (qt.len == 1 or qt[1] != '>')) {
+                            if (qi != stray_indent) {
+                                const qu = self.reporter.userLine(q + 1);
+                                if (qu != 0) break :blk .{ .col = qi + 1, .line = qu };
+                            }
+                            break;
+                        }
+                    }
+                    break :blk null;
+                };
                 const hint = if (prev_user == null)
                     try std.fmt.allocPrint(self.allocator, "{s} — there is no construct above to continue", .{glyph_hint})
                 else if (saw_blank)
                     try std.fmt.allocPrint(self.allocator, "blank lines end a chain — the construct at line {d} cannot be continued across one. Remove the blank line, or start a new flow here. ({s})", .{ prev_user.?, glyph_hint })
+                else if (arm_hint) |ah|
+                    try std.fmt.allocPrint(self.allocator, "the construct at line {d} ended before this line — {s}. If this `|>` continues the armed construct above, re-indent it to the arm column ({d}, where `| then` / `| else` / `| done` sit — e.g. line {d}), not the `|>` column.", .{ prev_user.?, glyph_hint, ah.col, ah.line })
                 else
                     try std.fmt.allocPrint(self.allocator, "the construct at line {d} ended before this line — {s}. Only comments may sit between a step and its continuation.", .{ prev_user.?, glyph_hint });
                 if (strays > 1) {
@@ -1997,7 +2065,7 @@ pub const Parser = struct {
             const line_base = @intFromPtr(line.ptr);
             const content_base = @intFromPtr(content.ptr);
             if (content_base >= line_base and content_base + content.len <= line_base + line.len) {
-                column = (content_base - line_base) + bad;
+                column = (content_base - line_base) + bad + 1; // 0-based offset → 1-based column
             }
         }
 
@@ -2164,12 +2232,7 @@ pub const Parser = struct {
 
         // Supports both inline tor[a|b] and vertical tor[\n-a\n-b\n].
         const result = try self.parseAnnotationBlock(trimmed_after, self.current - 1);
-        defer {
-            for (result.annotations) |ann| {
-                self.allocator.free(ann);
-            }
-            self.allocator.free(result.annotations);
-        }
+        defer self.freeParsedAnnotations(result.annotations);
         // Trailing vertical block (`tor foo[\n- tag\n prose\n]`): the prose
         // belongs to the declaration being built a few lines below.
         self.stashProse(result.prose);
@@ -2225,15 +2288,32 @@ pub const Parser = struct {
         return null;
     }
 
+    /// The textual-entry half of the gate: split `[entries]` off the
+    /// tilde-line and run them through `gateEntries` for the named
+    /// construct. Owns the separator check and the entry slice's free.
+    fn gateTextEntries(self: *Parser, ann_str: []const u8, construct_text: []const u8, kind: []const u8) !bool {
+        try self.rejectInvalidAnnotationSeparator(ann_str, self.current);
+        const entries = try annotation_parser.splitEntries(self.allocator, ann_str);
+        defer self.allocator.free(entries);
+        return self.gateEntries(entries, construct_text, self.current, kind);
+    }
+
+    /// Free a parsed annotation-block result — the entries and the slice.
+    fn freeParsedAnnotations(self: *Parser, annotations: []const []const u8) void {
+        for (annotations) |ann| self.allocator.free(ann);
+        self.allocator.free(annotations);
+    }
+
     /// The import gate — the first consumer of the annotation-entry
     /// vocabulary, and the one that IS the core language: it runs at parse
     /// time and decides what the AST contains. Its contract is therefore the
     /// strictest: every entry MUST evaluate (loud KORU150 otherwise — the
     /// same annotation that is legally inert on an event is an error on an
     /// import, because an inert entry here is silent gating). ANY truthy
-    /// entry keeps the import; an excluded import gets a loud resolution
-    /// report with each entry's verdict and provenance.
-    fn gateImportEntries(self: *Parser, entries: []const []const u8, import_text: []const u8, report_line: usize) !bool {
+    /// entry keeps the declaration; an excluded one gets a loud resolution
+    /// report with each entry's verdict and provenance. `kind` names the
+    /// gated construct ("import", "part") in diagnostics and reports.
+    fn gateEntries(self: *Parser, entries: []const []const u8, construct_text: []const u8, report_line: usize, kind: []const u8) !bool {
         const provider = comptime_eval.Provider{
             .flags = self.compiler_flags,
             .env_map = self.gateEnvMap(),
@@ -2250,8 +2330,8 @@ pub const Parser = struct {
                     .KORU150,
                     report_line + 1,
                     1,
-                    "conditional import: the gate cannot evaluate entry `{s}` ({s}). Entries deciding AST membership must evaluate — the vocabulary is bare flag atoms, comparisons, and/or/not, and flag()/cflag()/env()/command()",
-                    .{ entry, diag },
+                    "conditional {s}: the gate cannot evaluate entry `{s}` ({s}). Entries deciding AST membership must evaluate — the vocabulary is bare flag atoms, comparisons, and/or/not, and flag()/cflag()/env()/command()",
+                    .{ kind, entry, diag },
                 );
             };
             if (res.truthy) any_true = true;
@@ -2260,7 +2340,7 @@ pub const Parser = struct {
             w.print("\n", .{}) catch return error.OutOfMemory;
         }
         if (!any_true and self.report_gates) {
-            std.debug.print("[import gate] {s}:{d}: `{s}` excluded — no entry true\n{s}", .{ self.module_name, report_line + 1, import_text, report.items });
+            std.debug.print("[{s} gate] {s}:{d}: `{s}` excluded — no entry true\n{s}", .{ kind, self.module_name, report_line + 1, construct_text, report.items });
         }
         return any_true;
     }
@@ -2459,10 +2539,7 @@ pub const Parser = struct {
             // Parse annotation block (supports both inline ~[a|b] and vertical ~[\n-a\n-b\n])
             const result = try self.parseAnnotationBlock(after_tilde, self.current);
             defer {
-                for (result.annotations) |ann| {
-                    self.allocator.free(ann);
-                }
-                self.allocator.free(result.annotations);
+                self.freeParsedAnnotations(result.annotations);
             }
             self.stashProse(result.prose);
 
@@ -2862,10 +2939,7 @@ pub const Parser = struct {
         if (std.mem.startsWith(u8, after_tilde, "[")) {
             const result = try self.parseAnnotationBlock(after_tilde, self.current - 1);
             defer {
-                for (result.annotations) |ann| {
-                    self.allocator.free(ann);
-                }
-                self.allocator.free(result.annotations);
+                self.freeParsedAnnotations(result.annotations);
             }
             // We don't need the annotations, just skip past them — but this
             // re-scan is the only place the prose survives when the block was
@@ -3530,10 +3604,7 @@ pub const Parser = struct {
         if (std.mem.startsWith(u8, after_tilde, "[")) {
             const result = try self.parseAnnotationBlock(after_tilde, self.current - 1);
             defer {
-                for (result.annotations) |ann| {
-                    self.allocator.free(ann);
-                }
-                self.allocator.free(result.annotations);
+                self.freeParsedAnnotations(result.annotations);
             }
             // We don't need the annotations, just skip past them — but this
             // re-scan is the only place the prose survives when the block was
@@ -3637,7 +3708,7 @@ pub const Parser = struct {
             raw_body_owned = false;
             break :blk FlowExtractionResult{ .flows = &.{}, .modified_body = raw_body };
         } else blk: {
-            const result = try self.extractInlineFlows(raw_body, path, body_start_line);
+            const result = try self.extractInlineFlows(raw_body, body_start_line);
             self.allocator.free(raw_body);
             raw_body_owned = false;
             break :blk result;
@@ -3651,10 +3722,12 @@ pub const Parser = struct {
 
         // Check for ~[pure] annotation
         var is_pure = false;
+        var is_threaded = false;
         for (annotations) |ann| {
             if (std.mem.eql(u8, ann, "pure")) {
                 is_pure = true;
-                break;
+            } else if (std.mem.eql(u8, ann, "threaded")) {
+                is_threaded = true;
             }
         }
 
@@ -3671,6 +3744,7 @@ pub const Parser = struct {
             .prose = self.takePendingProse(),
             .target = target,
             .is_pure = is_pure,
+            .is_threaded = is_threaded,
             // is_transitively_pure defaults to false, will be set by purity checker
             .location = self.getLineLocation(decl_line_index, lexer.getIndent(line)),
             .module = try self.allocator.dupe(u8, self.module_name),
@@ -3757,7 +3831,7 @@ pub const Parser = struct {
             raw_body_owned = false;
             break :blk FlowExtractionResult{ .flows = &.{}, .modified_body = raw_body };
         } else blk: {
-            const result = try self.extractInlineFlows(raw_body, path, body_start_line);
+            const result = try self.extractInlineFlows(raw_body, body_start_line);
             self.allocator.free(raw_body);
             raw_body_owned = false;
             break :blk result;
@@ -3799,7 +3873,7 @@ pub const Parser = struct {
         flows: []ast.Flow,
     };
 
-    fn extractInlineFlows(self: *Parser, body: []const u8, proc_path: ast.DottedPath, body_start_line: usize) !FlowExtractionResult {
+    fn extractInlineFlows(self: *Parser, body: []const u8, body_start_line: usize) !FlowExtractionResult {
         var extracted_flows = try std.ArrayList(ast.Flow).initCapacity(self.allocator, 0);
         errdefer {
             for (extracted_flows.items) |*flow| {
@@ -3822,7 +3896,6 @@ pub const Parser = struct {
 
         // Process line by line
         var i: usize = 0;
-        // Note: Using self.inline_flow_counter (global) instead of local counter
         // This ensures numbering matches the emitter's global numbering
 
         while (i < body_lines.items.len) {
@@ -3881,227 +3954,7 @@ pub const Parser = struct {
                 return error.ParseError;
             }
 
-            if (false) {
-                // Found an inline flow!
-
-                // Collect all lines belonging to this flow
-                var flow_lines = try std.ArrayList([]const u8).initCapacity(self.allocator, 8);
-                defer flow_lines.deinit(self.allocator);
-
-                // Add the first line (the ~ line)
-                try flow_lines.append(self.allocator, line);
-                i += 1;
-
-                // Collect continuation lines (including nested ones)
-                var brace_depth: i32 = 0;
-
-                // Check if the first line has unmatched braces (skip braces in strings/comments)
-                brace_depth += lexer.countBraceDepthChange(trimmed);
-
-                while (i < body_lines.items.len) {
-                    const next_line = body_lines.items[i];
-                    const next_trimmed = lexer.trim(next_line);
-                    const next_indent = lexer.getIndent(next_line);
-
-                    // A line belongs to the flow if:
-                    // 1. It starts with | and has indent > the flow's indent (continuation)
-                    // 2. It's part of a multi-line constructor (brace_depth > 0)
-                    // 3. It's an empty line or comment within the flow structure
-                    if (next_trimmed.len == 0 or lexer.startsWith(next_trimmed, "//")) {
-                        // Could be part of the flow - check if we should continue
-                        // Look ahead to see if there are more flow lines
-                        var j = i + 1;
-                        var found_more_flow = false;
-                        while (j < body_lines.items.len) {
-                            const peek_line = body_lines.items[j];
-                            const peek_trimmed = lexer.trim(peek_line);
-                            const peek_indent = lexer.getIndent(peek_line);
-
-                            if (peek_trimmed.len > 0 and !lexer.startsWith(peek_trimmed, "//")) {
-                                if (lexer.startsWith(peek_trimmed, "|") and peek_indent >= current_indent) {
-                                    found_more_flow = true;
-                                }
-                                break;
-                            }
-                            j += 1;
-                        }
-
-                        if (found_more_flow) {
-                            try flow_lines.append(self.allocator, next_line);
-
-                            // Update brace depth for empty/comment lines (skip braces in strings/comments)
-                            brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                            i += 1;
-                        } else {
-                            break;
-                        }
-                    } else if (lexer.startsWith(next_trimmed, "|") and next_indent >= current_indent) {
-                        // This is a continuation at same or greater indent
-                        try flow_lines.append(self.allocator, next_line);
-
-                        // Update brace depth for continuation lines (skip braces in strings/comments)
-                        brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                        i += 1;
-                    } else if (brace_depth > 0) {
-                        // We're inside a multi-line constructor
-                        // Check if this line is part of the constructor (field or closing brace)
-                        const is_valid_constructor_line = blk: {
-                            // Check if it's a closing brace
-                            if (std.mem.eql(u8, next_trimmed, "}")) {
-                                break :blk true;
-                            }
-                            // For lines with greater indent, check if it looks like a field
-                            if (next_indent > current_indent) {
-                                // Check if it looks like a field definition (name: value)
-                                if (std.mem.indexOf(u8, next_trimmed, ":") != null) {
-                                    // Make sure it's not a Zig statement like const x: Type
-                                    if (!lexer.startsWith(next_trimmed, "const ") and
-                                        !lexer.startsWith(next_trimmed, "var ") and
-                                        !lexer.startsWith(next_trimmed, "fn ") and
-                                        !lexer.startsWith(next_trimmed, "if ") and
-                                        !lexer.startsWith(next_trimmed, "while ") and
-                                        !lexer.startsWith(next_trimmed, "for "))
-                                    {
-                                        break :blk true;
-                                    }
-                                }
-                            }
-                            break :blk false;
-                        };
-
-                        if (is_valid_constructor_line) {
-                            try flow_lines.append(self.allocator, next_line);
-
-                            // Update brace depth (skip braces in strings/comments)
-                            brace_depth += lexer.countBraceDepthChange(next_trimmed);
-
-                            i += 1;
-                        } else {
-                            // Not a valid constructor line, stop collecting
-                            break;
-                        }
-                    } else {
-                        // Not a continuation, end of flow
-                        break;
-                    }
-                }
-
-                // Parse the collected flow
-                var parsed_flow = try self.parseCollectedFlow(flow_lines.items, current_indent);
-
-                // Use UnionCollector to analyze branches and build SuperShape
-                const union_collector = @import("union_collector");
-                var collector = union_collector.UnionCollector.init(self.allocator);
-                var collection_result = try collector.collectFromFlow(&parsed_flow);
-                defer collection_result.deinit(self.allocator);
-
-                // Transfer ownership of super_shape to the flow
-                if (collection_result.transferSuperShape()) |super_shape| {
-                    parsed_flow.super_shape = super_shape;
-                }
-
-                // Check for conflicts and report them
-                if (collection_result.has_conflicts) {
-                    for (collection_result.conflicts) |_| {
-                        // TODO: Report as semantic error - branch has conflicting shapes
-                        // For now, we'll continue but the code generator will need to handle this
-                    }
-                }
-
-                try extracted_flows.append(self.allocator, parsed_flow);
-
-                // Generate a unique name for this flow (global counter)
-                self.inline_flow_counter += 1;
-                const flow_name = try std.fmt.allocPrint(self.allocator, "__inline_flow_{d}", .{self.inline_flow_counter});
-                defer self.allocator.free(flow_name);
-
-                // Generate replacement based on the pattern
-                const replacement = blk: {
-                    // Create indentation string
-                    const indent_str = try self.allocator.alloc(u8, current_indent);
-                    defer self.allocator.free(indent_str);
-                    @memset(indent_str, ' ');
-
-                    // INLINE FLOW FIX: Pass ALL proc parameters, not just first invocation's args
-                    // Look up the proc's event to get its full input shape
-                    const proc_path_str = try self.pathToString(proc_path);
-                    defer self.allocator.free(proc_path_str);
-
-                    const args_str = if (self.registry.getEventType(proc_path_str)) |event_type| blk2: {
-                        // Event found! Use its input shape to generate ALL parameter passing
-                        if (event_type.input_shape) |input_shape| {
-                            var args_buf = try std.ArrayList(u8).initCapacity(self.allocator, 128);
-                            defer args_buf.deinit(self.allocator);
-
-                            // Generate .{ .field1 = field1, .field2 = field2, ... }
-                            try args_buf.appendSlice(self.allocator, ".{ ");
-                            for (input_shape.fields, 0..) |field, idx| {
-                                if (idx > 0) {
-                                    try args_buf.appendSlice(self.allocator, ", ");
-                                }
-                                try args_buf.appendSlice(self.allocator, ".");
-                                try args_buf.appendSlice(self.allocator, field.name);
-                                try args_buf.appendSlice(self.allocator, " = ");
-                                try args_buf.appendSlice(self.allocator, field.name);
-                            }
-                            try args_buf.appendSlice(self.allocator, " }");
-
-                            break :blk2 try args_buf.toOwnedSlice(self.allocator);
-                        } else {
-                            // No input shape (event has no parameters)
-                            break :blk2 try self.allocator.dupe(u8, ".{}");
-                        }
-                    } else try self.allocator.dupe(u8, ".{}");
-                    defer self.allocator.free(args_str);
-
-                    if (lexer.startsWith(trimmed, "return ~")) {
-                        // Terminal flow: return ~... -> return __inline_flow_N(args)
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}return {s}({s});", .{ indent_str, flow_name, args_str });
-                    } else if (lexer.startsWith(trimmed, "const ")) {
-                        // Assignment flow: const x = ~... -> const x = __inline_flow_N(args)
-                        const eq_idx = std.mem.indexOf(u8, trimmed, " = ~") orelse unreachable;
-                        const var_decl = trimmed[0 .. eq_idx + 3]; // "const x = "
-                        break :blk try std.fmt.allocPrint(self.allocator, "{s}{s}{s}({s});", .{ indent_str, var_decl, flow_name, args_str });
-                    } else {
-                        // Direct flow: ~...
-                        // Check if this is the last non-empty statement in the proc body
-                        // If yes, it should implicitly return; otherwise assign to result_N
-                        const is_terminal = blk2: {
-                            // Look ahead from current position (i) to see if there are more statements
-                            var j = i;
-                            while (j < body_lines.items.len) : (j += 1) {
-                                const remaining_line = body_lines.items[j];
-                                const remaining_trimmed = lexer.trim(remaining_line);
-
-                                // Skip empty lines and comments
-                                if (remaining_trimmed.len == 0 or lexer.startsWith(remaining_trimmed, "//")) {
-                                    continue;
-                                }
-
-                                // Found a non-empty, non-comment line after this flow
-                                break :blk2 false;
-                            }
-                            // No more statements found - this is terminal!
-                            break :blk2 true;
-                        };
-
-                        if (is_terminal) {
-                            // Terminal flow with implicit return
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s}return {s}({s});", .{ indent_str, flow_name, args_str });
-                        } else {
-                            // Non-terminal flow: assign to result variable
-                            break :blk try std.fmt.allocPrint(self.allocator, "{s}const result_{d} = {s}({s});", .{ indent_str, self.inline_flow_counter, flow_name, args_str });
-                        }
-                    }
-                };
-                defer self.allocator.free(replacement);
-
-                try modified_body.appendSlice(self.allocator, replacement);
-                try modified_body.append(self.allocator, '\n');
-            } else {
-                // Not a flow, keep line as-is
+{                // Not a flow, keep line as-is
                 try modified_body.appendSlice(self.allocator, line);
                 try modified_body.append(self.allocator, '\n');
                 i += 1;
@@ -4117,69 +3970,6 @@ pub const Parser = struct {
             .modified_body = try modified_body.toOwnedSlice(self.allocator),
             .flows = try extracted_flows.toOwnedSlice(self.allocator),
         };
-    }
-
-    fn parseCollectedFlow(self: *Parser, flow_lines: [][]const u8, base_indent: usize) anyerror!ast.Flow {
-        // Adjust indentation - make it relative to base_indent
-        var adjusted_lines = try std.ArrayList([]const u8).initCapacity(self.allocator, flow_lines.len);
-        defer adjusted_lines.deinit(self.allocator);
-
-        for (flow_lines, 0..) |line, idx| {
-            const line_indent = lexer.getIndent(line);
-            const relative_indent = if (line_indent >= base_indent) line_indent - base_indent else 0;
-
-            // Get the trimmed line
-            var trimmed = lexer.trim(line);
-
-            // For the first line, strip any prefix (return, const x = )
-            if (idx == 0) {
-                if (lexer.startsWith(trimmed, "return ~")) {
-                    trimmed = trimmed[7..]; // Skip "return "
-                } else if (lexer.startsWith(trimmed, "const ")) {
-                    if (std.mem.indexOf(u8, trimmed, " = ~")) |eq_idx| {
-                        trimmed = trimmed[eq_idx + 3 ..]; // Skip "const x = "
-                    }
-                }
-            }
-
-            // Create new line with adjusted indentation
-            const spaces = try self.allocator.alloc(u8, relative_indent);
-            defer self.allocator.free(spaces);
-            @memset(spaces, ' ');
-
-            const adjusted_line = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ spaces, trimmed });
-            try adjusted_lines.append(self.allocator, adjusted_line);
-        }
-
-        // Create a temporary parser with these lines
-        var context_stack = try std.ArrayList(Context).initCapacity(self.allocator, 8);
-        defer context_stack.deinit(self.allocator);
-        try context_stack.append(self.allocator, .in_proc); // We're in a proc context
-
-        var temp_parser = Parser{
-            .allocator = self.allocator,
-            .lines = adjusted_lines.items,
-            .current = 0,
-            .reporter = self.reporter,
-            .context_stack = context_stack,
-            .registry = self.registry,
-            .is_compiler_library = self.is_compiler_library,
-            .module_name = self.module_name,
-            .inline_flow_counter = self.inline_flow_counter, // Inherit parent's counter
-            .fail_fast = self.fail_fast, // Inherit parent's fail_fast mode
-            .compiler_flags = self.compiler_flags, // Inherit parent's compiler flags
-            .resolver = self.resolver, // Inherit parent's resolver
-        };
-
-        // Parse the flow (no annotations in embedded context)
-        const flow = try temp_parser.parseFlow(&[_][]const u8{});
-
-        // Clean up adjusted lines
-        for (adjusted_lines.items) |line| {
-            self.allocator.free(line);
-        }
-
-        return flow;
     }
 
     fn pathToString(self: *Parser, path: ast.DottedPath) ![]const u8 {
@@ -4487,17 +4277,27 @@ pub const Parser = struct {
         var source_field_name: []const u8 = undefined;
         var found_source = false;
         var alternate_source_name: ?[]const u8 = null;
+        var declared_tag: ?[]const u8 = null;
 
         const input_shape = event_type.input_shape orelse return original;
         for (input_shape.fields) |field| {
-            if (std.mem.eql(u8, field.name, "source") and field.is_source) {
+            if (!field.is_source) continue;
+            // The kind tag is declared once, on the parameter:
+            // `source: Source[text]` → type_annotations; the legacy
+            // `Source<HTML>` phantom still supplies it too.
+            const field_tag = if (field.type_annotations.len > 0)
+                field.type_annotations[0]
+            else
+                field.phantom;
+            if (std.mem.eql(u8, field.name, "source")) {
                 source_field_name = field.name;
+                declared_tag = field_tag;
                 found_source = true;
                 break;
-            } else if (field.is_source) {
-                // Found a Source parameter with different name
-                alternate_source_name = field.name;
             }
+            // A Source parameter with a different name — tag fallback only.
+            if (declared_tag == null) declared_tag = field_tag;
+            alternate_source_name = field.name;
         }
 
         if (!found_source) {
@@ -4512,7 +4312,10 @@ pub const Parser = struct {
             return original;
         }
 
-        return self.withSourceArg(original, source_text, phantom_type, source_field_name);
+        // The call site carries no kind tag (`{ }` / `@"path"` are tagless by
+        // ruling) — the declaration's `Source[ann]` supplies it.
+        const tag = phantom_type orelse declared_tag;
+        return self.withSourceArg(original, source_text, tag, source_field_name);
     }
 
     /// Create implicit source invocation when event is not in registry
@@ -4806,7 +4609,13 @@ pub const Parser = struct {
         if (has_implicit_file_source) {
             const marker = file_source_marker.?;
 
-            // The file path runs from just after the `@"`/`>"` to the next quote.
+            // `<type>"path"` is removed — the call site echoed a tag the
+            // parameter already declares.
+            if (marker.typed) {
+                return self.fail(.PARSE001, self.current, 0, "a typed file source `<type>\"path\"` was removed — declare the tag on the parameter (`source: Source[kind]`) and invoke with `@\"path\"`", .{});
+            }
+
+            // The file path runs from just after the `@"` to the next quote.
             const path_start = marker.marker_idx + 2;
             const path_rel_end = std.mem.indexOf(u8, trimmed_after[path_start..], "\"") orelse {
                 return self.fail(.PARSE001, self.current, 0, "File source syntax requires a closing quote", .{});
@@ -4814,11 +4623,10 @@ pub const Parser = struct {
             const path_end = path_start + path_rel_end;
             const file_path = trimmed_after[path_start..path_end];
 
-            // Split the invocation text and scope type off the front, then a
-            // `: bind` and continuation tail off the back.
-            const front = try self.splitFileSource(trimmed_after, marker.marker_idx, marker.typed);
+            // Split the invocation text off the front, then a `: bind` and
+            // continuation tail off the back.
+            const invocation_str = self.splitFileSource(trimmed_after, marker.marker_idx);
             const back = try self.extractFileBindTail(lexer.trim(trimmed_after[path_end + 1 ..]), self.getCurrentLocation());
-            const invocation_str = front.invocation_str;
 
             // Detect inline chain: `head() |> ... |> terminal <file>"path"` — the
             // file-source twin of the `… |> terminal {` chain handled below. For
@@ -4837,7 +4645,6 @@ pub const Parser = struct {
                 const tail_full = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{ tail_str, closure_str });
                 defer self.allocator.free(tail_full);
                 if (back.bind) |bn| self.allocator.free(bn);
-                if (front.phantom_type) |pt| self.allocator.free(pt);
 
                 invocation = try self.parseEventInvocation(head_str);
                 errdefer invocation.deinit(self.allocator);
@@ -4864,7 +4671,6 @@ pub const Parser = struct {
 
                 uses_implicit_source = true;
                 implicit_source_text = file_content;
-                implicit_source_phantom_type = front.phantom_type;
                 implicit_source_bind_name = back.bind;
                 implicit_source_file_path = try self.allocator.dupe(u8, file_path);
 
@@ -5002,7 +4808,10 @@ pub const Parser = struct {
                             // Check if there's a word after the space (branch name)
                             const after_pipe = lexer.trim(remaining[i + 1 ..]);
                             if (after_pipe.len > 0 and after_pipe[0] != '>' and after_pipe[0] != '?') {
-                                return self.fail(.PARSE001, self.current, @as(u16, @intCast(i)), "Branch continuation '|' must start on a new line with proper indentation", .{});
+                                // `i` indexes `remaining`, a subslice of `line` —
+                                // recover the `|`'s 1-based column by pointer offset.
+                                const pipe_column = (@intFromPtr(remaining.ptr) - @intFromPtr(line.ptr)) + i + 1;
+                                return self.fail(.PARSE001, self.current, @intCast(pipe_column), "Branch continuation '|' must start on a new line with proper indentation", .{});
                             }
                         }
                     }
@@ -5245,6 +5054,7 @@ pub const Parser = struct {
         var return_binding: ?[]const u8 = null;
         var return_binding_annotations: []const []const u8 = &[_][]const u8{};
         var return_destructure: []const ast.DestructureField = &.{};
+        var return_destructure_named: bool = false;
         var stitched_clean: ?[]const u8 = null;
         defer if (stitched_clean) |s| self.allocator.free(s);
         bind_colon: {
@@ -5297,14 +5107,58 @@ pub const Parser = struct {
             if (close_pos) |cp| {
                 var j = cp + 1;
                 while (j < clean.len and (clean[j] == ' ' or clean[j] == '\t')) : (j += 1) {}
+                // `call(args) { block }: name` — the inline source block sits
+                // between the `)` close and the bind colon; skip it so the
+                // bind lands on `return_binding` exactly as `f(): name` does.
+                // A `{` directly after `)` is never arg data (args live inside
+                // the parens) — it is the block. (210-site twin: the multi-line
+                // `}: name` close path in parseImplicitSourceBlock.)
+                if (j < clean.len and clean[j] == '{') {
+                    var bdepth: i32 = 0;
+                    var in_str2 = false;
+                    while (j < clean.len) : (j += 1) {
+                        const c2 = clean[j];
+                        if (c2 == '"' and (j == 0 or clean[j - 1] != '\\')) {
+                            in_str2 = !in_str2;
+                            continue;
+                        }
+                        if (in_str2) continue;
+                        if (c2 == '{') bdepth += 1;
+                        if (c2 == '}') {
+                            bdepth -= 1;
+                            if (bdepth == 0) break;
+                        }
+                    }
+                    j += 1;
+                    while (j < clean.len and (clean[j] == ' ' or clean[j] == '\t')) : (j += 1) {}
+                }
                 if (j < clean.len and clean[j] == ':') {
                     var k = j + 1;
                     while (k < clean.len and (clean[k] == ' ' or clean[k] == '\t')) : (k += 1) {}
-                    // Bind-position shape-destructure: `~f(): { pos: { x }, label } |> ...`
+                    // Bind-position shape-destructure: `~f(): { pos.x, label } |> ...`
                     // Brace-balance from `{`, parse the field list (same machinery as
                     // the branch-payload destructure), bind the return to a synthetic
                     // temp, and stitch out `: { ... }` so the rest sees a plain call.
-                    if (k < clean.len and clean[k] == '{') {
+                    // Named group `~f(): my:{ a: T }` binds `my` as the return and the
+                    // braces carry a field list (schema mode), not a projection.
+                    var group_name: ?[]const u8 = null;
+                    var brace_at = k;
+                    if (k < clean.len and clean[k] != '{') {
+                        // Possible `name:` prefix before the brace.
+                        var m = k;
+                        while (m < clean.len and (std.ascii.isAlphanumeric(clean[m]) or clean[m] == '_' or clean[m] == '-')) : (m += 1) {}
+                        if (m > k and m < clean.len and clean[m] == ':') {
+                            var b2 = m + 1;
+                            while (b2 < clean.len and (clean[b2] == ' ' or clean[b2] == '\t')) : (b2 += 1) {}
+                            if (b2 < clean.len and clean[b2] == '{') {
+                                const gn = clean[k..m];
+                                if (!std.mem.eql(u8, gn, "_")) group_name = gn;
+                                brace_at = b2;
+                            }
+                        }
+                    }
+                    if (brace_at < clean.len and clean[brace_at] == '{') {
+                        k = brace_at;
                         var bdepth: i32 = 0;
                         var b = k;
                         var brace_end: ?usize = null;
@@ -5327,9 +5181,15 @@ pub const Parser = struct {
                                 .{},
                             );
                         };
-                        return_destructure = try self.parseDestructureFields(lexer.trim(clean[k + 1 .. be]), 0);
-                        const temp_name = try std.fmt.allocPrint(self.allocator, "__ret_destr_{d}", .{self.destructure_ret_counter});
-                        self.destructure_ret_counter += 1;
+                        return_destructure = try self.parseDestructureFields(lexer.trim(clean[k + 1 .. be]), 0, group_name != null);
+                        if (group_name != null) return_destructure_named = true;
+                        const temp_name = if (group_name) |gn|
+                            try self.allocator.dupe(u8, gn)
+                        else blk: {
+                            const t = try std.fmt.allocPrint(self.allocator, "__ret_destr_{d}", .{self.destructure_ret_counter});
+                            self.destructure_ret_counter += 1;
+                            break :blk t;
+                        };
                         return_binding = temp_name;
                         const before_colon = lexer.trim(clean[0..j]);
                         const after = lexer.trim(clean[be + 1 ..]); // "|> ..." or ""
@@ -5482,152 +5342,20 @@ pub const Parser = struct {
         log_debug("[DEBUG] parseEventInvocation: source_block_marker={?d} invocation_part='{s}'\n", .{ source_block_marker, invocation_part });
 
         if (source_block_marker) |marker_idx| {
-            // Find the opening < by searching backwards from >{
+            // `ev <T>{ … }` is removed — the call site echoed a tag the
+            // parameter already declares. Declare it once on the param
+            // (`source: Source[T]`) and invoke with a bare `{ }`.
             const angle_idx = std.mem.lastIndexOf(u8, invocation_part[0 .. marker_idx + 1], "<");
-
-            if (angle_idx) |a_idx| {
-                // This is a Source block invocation!
-                const before_angle = lexer.trim(invocation_part[0..a_idx]);
-
-                // Extract scope type from <Type> (we know > is at marker_idx)
-                const phantom_type = lexer.trim(invocation_part[a_idx + 1 .. marker_idx]);
-
-                // Extract block content from { ... } (marker_idx + 1 points to { position + 1)
-                const brace_start = marker_idx + 1; // Position of {
-                const close_brace_idx = lexer.findMatchingBrace(invocation_part, brace_start);
-                if (close_brace_idx == null) {
-                    return self.fail(
-                        .PARSE001,
-                        self.current,
-                        0,
-                        "Source block missing closing brace",
-                        .{},
-                    );
-                }
-
-                const source_text = lexer.trim(invocation_part[brace_start + 1 .. close_brace_idx.?]);
-
-                // A |variant tag on the name part (`~std/kernel:init(Body)|gpu
-                // <Type>{ ... }`) must ride onto the invocation, same as the
-                // bare-brace form (210_140's swallow covered both).
-                const angle_variant_pipe = findTopLevelVariantPipe(before_angle);
-                const before_angle_head = if (angle_variant_pipe) |vp| lexer.trim(before_angle[0..vp]) else before_angle;
-                var angle_variant: ?[]const u8 = null;
-                if (angle_variant_pipe) |vp| {
-                    const vs = lexer.trim(before_angle[vp + 1 ..]);
-                    if (vs.len > 0) angle_variant = try self.allocator.dupe(u8, vs);
-                }
-                errdefer if (angle_variant) |v| self.allocator.free(v);
-
-                // Check if before_angle has args: event(args)
-                // If so, parse path and args separately
-                var parsed_path: ast.DottedPath = undefined;
-                var existing_args: []const ast.Arg = &[_]ast.Arg{};
-
-                if (std.mem.indexOf(u8, before_angle_head, "(")) |paren_idx| {
-                    // Has args - extract path and parse args
-                    const event_name = lexer.trim(before_angle_head[0..paren_idx]);
-                    try self.rejectDotNamespace(event_name, self.current - 1);
-                    parsed_path = try lexer.parseQualifiedPath(self.allocator, event_name, ast);
-
-                    // Parse arguments from (...)
-                    const args_str = lexer.trim(before_angle_head[paren_idx..]);
-                    var args_list = try std.ArrayList(ast.Arg).initCapacity(self.allocator, 4);
-                    defer args_list.deinit(self.allocator);
-
-                    // Find content between ( and )
-                    if (args_str.len > 2 and args_str[0] == '(' and args_str[args_str.len - 1] == ')') {
-                        const args_content = args_str[1 .. args_str.len - 1];
-                        // Same paren-hug rule as parseArgsReported — this path
-                        // tokenizes args itself instead of going through
-                        // lexer.parseArgs.
-                        if (std.ascii.isWhitespace(args_content[0]) or
-                            std.ascii.isWhitespace(args_content[args_content.len - 1]))
-                        {
-                            return self.fail(
-                                .PARSE003,
-                                self.current,
-                                1,
-                                "call parens hug their arguments — write 'f(x)', not 'f( x' or 'f(x )'",
-                                .{},
-                            );
-                        }
-                        // Simple arg parsing: split by comma, then by colon
-                        var arg_iter = std.mem.tokenizeScalar(u8, args_content, ',');
-                        while (arg_iter.next()) |arg_part| {
-                            const trimmed_arg = lexer.trim(arg_part);
-                            if (std.mem.indexOf(u8, trimmed_arg, ":")) |colon_idx| {
-                                const name = lexer.trim(trimmed_arg[0..colon_idx]);
-                                const value = lexer.trim(trimmed_arg[colon_idx + 1 ..]);
-                                try args_list.append(self.allocator, ast.Arg{
-                                    .name = try self.allocator.dupe(u8, name),
-                                    .value = try self.allocator.dupe(u8, value),
-                                });
-                            }
-                        }
-                    }
-                    existing_args = try args_list.toOwnedSlice(self.allocator);
-                } else {
-                    // No args - just parse the path
-                    try self.rejectDotNamespace(before_angle_head, self.current - 1);
-                    parsed_path = try lexer.parseQualifiedPath(self.allocator, before_angle_head, ast);
-                }
-
-                // Build path string for registry lookup
-                const path_str = try self.pathToString(parsed_path);
-                defer self.allocator.free(path_str);
-
-                // Look up event type
-                log_debug("[DEBUG] parseEventInvocation: path_str='{s}' existing_args.len={d} source_text='{s}'\n", .{ path_str, existing_args.len, source_text });
-                if (self.registry.getEventType(path_str)) |event_type| {
-                    log_debug("[DEBUG] parseEventInvocation: event found in registry, calling createImplicitSourceInvocation\n", .{});
-                    // Create base invocation with existing args
-                    const base_invocation = ast.Invocation{
-                        .path = parsed_path,
-                        .args = existing_args,
-                        .variant = angle_variant,
-                    };
-
-                    // Create invocation with implicit Source parameter added
-                    return try self.createImplicitSourceInvocation(base_invocation, source_text, phantom_type, event_type);
-                } else {
-                    // Event not found in registry - use default source param name "source"
-                    log_debug("[DEBUG] parseEventInvocation: event NOT in registry, adding source with default name\n", .{});
-
-                    // Create new args with source
-                    var new_args = try std.ArrayList(ast.Arg).initCapacity(self.allocator, existing_args.len + 1);
-                    defer new_args.deinit(self.allocator);
-
-                    // Copy existing args
-                    for (existing_args) |arg| {
-                        try new_args.append(self.allocator, arg);
-                    }
-
-                    // Create Source value
-                    const source_value = try self.allocator.create(ast.Source);
-                    const duped_phantom = if (phantom_type.len > 0) try self.allocator.dupe(u8, phantom_type) else null;
-                    source_value.* = ast.Source{
-                        .text = try self.allocator.dupe(u8, source_text),
-                        .location = self.getCurrentLocation(),
-                        .scope = ast.CapturedScope{ .bindings = &[_]ast.ScopeBinding{} },
-                        .phantom_type = duped_phantom,
-                    };
-
-                    // Add source arg
-                    try new_args.append(self.allocator, ast.Arg{
-                        .name = try self.allocator.dupe(u8, "source"),
-                        .value = try self.allocator.dupe(u8, source_text),
-                        .source_value = source_value,
-                    });
-
-                    return ast.Invocation{
-                        .path = parsed_path,
-                        .args = try new_args.toOwnedSlice(self.allocator),
-                        .variant = angle_variant,
-                    };
-                }
-            }
+            const tag = if (angle_idx) |a| lexer.trim(invocation_part[a + 1 .. marker_idx]) else "?";
+            return self.fail(
+                .PARSE001,
+                self.current,
+                0,
+                "a typed source block `<{s}>{{` was removed — the tag is declared on the parameter (`source: Source[{s}]`); invoke with a bare `{{ }}`",
+                .{ tag, tag },
+            );
         }
+
 
         // Check for bare source block: eventName { ... } (no type annotation)
         // Must check BEFORE regular invocation parsing
@@ -6049,6 +5777,7 @@ pub const Parser = struct {
             .return_binding = return_binding,
             .return_binding_annotations = return_binding_annotations,
             .return_destructure = return_destructure,
+            .return_destructure_named = return_destructure_named,
         };
         return_binding = null; // ownership transferred; disarm the errdefer
         return_binding_annotations = &[_][]const u8{}; // ownership transferred; disarm the errdefer
@@ -7481,7 +7210,15 @@ pub const Parser = struct {
     /// both cases (it is also what the old shared stamp produced).
     fn chainLinkLocation(self: *Parser, base: errors.SourceLocation, link_lines: []const usize, link_idx: usize) errors.SourceLocation {
         if (link_idx >= link_lines.len) return base;
-        return self.getLineLocation(link_lines[link_idx], base.column);
+        // base.column is already a stored 1-based column — it is the head
+        // stamp's column this function is documented to keep, not an indent
+        // to re-derive through getLineLocation.
+        const line_idx = link_lines[link_idx];
+        return .{
+            .file = base.file,
+            .line = if (line_idx < self.lines.len) line_idx + 1 else self.lines.len,
+            .column = base.column,
+        };
     }
 
     /// A `-> produce` arm: bare-return branch_constructor continuation
@@ -7682,6 +7419,7 @@ pub const Parser = struct {
         const line = self.lines[self.current];
         const trimmed = lexer.trim(line);
 
+
         // Skip the | prefix
         const after_bar = lexer.trim(trimmed[1..]);
 
@@ -7706,13 +7444,23 @@ pub const Parser = struct {
     }
 
     /// Parse the comma-separated field list of a shape-destructure binding
-    /// (inner text, outer braces already stripped). Grammar per field:
-    ///   name                  — bind payload.name
-    ///   name: Type            — bind with a representation annotation
-    ///   name: { ... }         — nested destructure into payload.name
-    ///   _                     — discard the slot (named position skipped)
+    /// (inner text, outer braces already stripped). Grammar per field —
+    /// ruled 2026-10-24, name-matched, never positional:
+    ///   path              — bind last(path) from payload.path (`{ pos.x }`
+    ///                       binds `x`; `{ k }` is the auto-pun `{ k: k }`)
+    ///   local: path       — rename: bind `local` from payload.path. Legal
+    ///                       only when `local` differs from path's last
+    ///                       segment — if you can pun, you must (`{ x: pos.x }`
+    ///                       is refused: write `{ pos.x }`)
+    ///   [ann]entry        — prefix annotations ride either form (`{ [row]f }`)
+    ///   _                 — discard
+    /// In `schema` mode the braces are a FIELD LIST, not a projection —
+    /// reached only via a named group `my:{ ... }` (the name binds the
+    /// whole payload; the shape is a codegen-inspectable definition):
+    ///   ident             — declared+bound field
+    ///   ident: TYPE       — typed field (`{ name: string, addr: { city } }`)
     /// Splitting happens at brace-depth 0 so nested shapes stay intact.
-    fn parseDestructureFields(self: *Parser, inner: []const u8, indent: usize) anyerror![]const ast.DestructureField {
+    fn parseDestructureFields(self: *Parser, inner: []const u8, indent: usize, schema: bool) anyerror![]const ast.DestructureField {
         var fields = try std.ArrayList(ast.DestructureField).initCapacity(self.allocator, 4);
         errdefer {
             for (fields.items) |*f| f.deinit(self.allocator);
@@ -7771,44 +7519,113 @@ pub const Parser = struct {
                 rest = lexer.trim(rest[close + 1 ..]);
             }
 
-            var name: []const u8 = rest;
-            var type_text: ?[]const u8 = null;
-            var sub: []const ast.DestructureField = &.{};
-
-            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
-                name = lexer.trim(rest[0..colon]);
-                const after = lexer.trim(rest[colon + 1 ..]);
-                if (after.len >= 2 and after[0] == '{' and after[after.len - 1] == '}') {
-                    sub = try self.parseDestructureFields(lexer.trim(after[1 .. after.len - 1]), indent);
-                } else if (after.len > 0) {
-                    type_text = try self.allocator.dupe(u8, after);
-                } else {
+            if (schema) {
+                // Field-list entry: `ident`, `ident: TYPE`, or
+                // `ident: { nested }` — the old destructure grammar lives
+                // verbatim inside a named group.
+                var sname: []const u8 = rest;
+                var stype: ?[]const u8 = null;
+                var ssub: []const ast.DestructureField = &.{};
+                if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                    sname = lexer.trim(rest[0..colon]);
+                    const after = lexer.trim(rest[colon + 1 ..]);
+                    if (after.len >= 2 and after[0] == '{' and after[after.len - 1] == '}') {
+                        ssub = try self.parseDestructureFields(lexer.trim(after[1 .. after.len - 1]), indent, true);
+                    } else if (after.len > 0) {
+                        stype = try self.allocator.dupe(u8, after);
+                    }
+                }
+                if (!std.mem.eql(u8, sname, "_") and !isValidIdentifier(sname)) {
                     try self.reporter.addError(
                         .PARSE001,
                         self.current,
                         indent + 2,
-                        "Destructure field '{s}' has ':' but no type or nested shape.",
-                        .{name},
+                        "Invalid field name '{s}' in a named destructure group — write '{{ name, name: Type }}'.",
+                        .{sname},
+                    );
+                    return error.InvalidBinding;
+                }
+                try fields.append(self.allocator, .{
+                    .name = try self.allocator.dupe(u8, sname),
+                    .path = try self.allocator.dupe(u8, sname),
+                    .type_text = stype,
+                    .sub = ssub,
+                    .annotations = try anns.toOwnedSlice(self.allocator),
+                });
+                continue;
+            }
+
+            var name: []const u8 = undefined;
+            var path: []const u8 = rest;
+            var type_text: ?[]const u8 = null;
+
+            if (std.mem.indexOfScalar(u8, rest, ':')) |colon| {
+                // Rename: `{ local: path }` — the RHS is the defined symbol
+                // (a path into the payload), the LHS the local name minted.
+                name = lexer.trim(rest[0..colon]);
+                path = lexer.trim(rest[colon + 1 ..]);
+                if (path.len == 0) {
+                    try self.reporter.addError(
+                        .PARSE001,
+                        self.current,
+                        indent + 2,
+                        "Destructure field '{s}' has ':' but no source path — write '{{ {s}: field.path }}'.",
+                        .{ name, name },
                     );
                     return error.InvalidBinding;
                 }
             }
 
-            if (!std.mem.eql(u8, name, "_") and !isValidIdentifier(name) and !isValidDottedName(name)) {
+            // A type-shaped RHS (`x: []string`, `x: ?bool`, `x: {…}`) can
+            // never name a field, so it is never a rename — it is the
+            // arm's type spec, and the arm's consumer decides what the
+            // spec means (a json schema type, a regex conversion). We
+            // carry it on type_text with the field path defaulted to the
+            // name — the same shape schema mode produces.
+            const is_rename = std.mem.indexOfScalar(u8, rest, ':') != null;
+            const sigil_type = is_rename and blk: {
+                for (path) |ch| {
+                    if (ch == '[' or ch == '?' or ch == '*' or ch == '{' or ch == '<') break :blk true;
+                }
+                break :blk false;
+            };
+            if (sigil_type) {
+                type_text = path;
+                path = name;
+            }
+
+            // The path's last segment is the auto-pun name; a rename whose
+            // local equals it is refused — if you can pun, you must.
+            const last_seg = if (std.mem.lastIndexOfScalar(u8, path, '.')) |d| path[d + 1 ..] else path;
+            if (!is_rename) name = last_seg;
+            if (!sigil_type and is_rename and std.mem.eql(u8, name, last_seg)) {
                 try self.reporter.addError(
                     .PARSE001,
                     self.current,
                     indent + 2,
-                    "Invalid destructure field name '{s}' - must be a valid identifier, dotted path, or '_'.",
-                    .{name},
+                    "redundant rename '{{ {s}: {s} }}' — the auto-pun already binds '{s}'; write '{{ {s} }}'",
+                    .{ name, path, last_seg, path },
+                );
+                return error.InvalidBinding;
+            }
+
+            const name_ok = std.mem.eql(u8, name, "_") or isValidIdentifier(name);
+            const path_ok = sigil_type or isValidIdentifier(path) or isValidDottedName(path);
+            if (!name_ok or !path_ok) {
+                try self.reporter.addError(
+                    .PARSE001,
+                    self.current,
+                    indent + 2,
+                    "Invalid destructure '{s}' — write '{{ path }}' or '{{ local: path }}' (a path is identifiers joined by '.').",
+                    .{rest},
                 );
                 return error.InvalidBinding;
             }
 
             try fields.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, name),
-                .type_text = type_text,
-                .sub = sub,
+                .path = try self.allocator.dupe(u8, path),
+                .type_text = if (type_text) |t| try self.allocator.dupe(u8, t) else null,
                 .annotations = try anns.toOwnedSlice(self.allocator),
             });
         }
@@ -8085,10 +7902,37 @@ pub const Parser = struct {
         var binding: ?[]const u8 = null;
         var binding_annotations: [][]const u8 = &[_][]const u8{};
         var destructure: []const ast.DestructureField = &.{};
+        var destructure_named: bool = false;
+        var produce: []const ast.DestructureField = &.{};
         var rest = parts.rest();
+        var named_group = false;
+        var fused_head: ?[]const u8 = null;
 
-        if (parts.peek()) |maybe_brace| {
-            if (maybe_brace.len > 0 and maybe_brace[0] == '{') {
+        // Named group: `| ok my:{ ... }` or `| ok my: { ... }` — `my` binds
+        // the whole payload and the braces are a field list (schema), not a
+        // projection.
+        if (parts.peek()) |tok0| {
+            if (std.mem.indexOfScalar(u8, tok0, ':')) |ci| {
+                const cand = tok0[0..ci];
+                const after = tok0[ci + 1 ..];
+                if (isValidIdentifier(cand) and after.len > 0 and after[0] == '{') {
+                    _ = parts.next(); // fused `my:{...`
+                    if (!std.mem.eql(u8, cand, "_")) binding = cand;
+                    named_group = true;
+                    fused_head = after;
+                } else if (isValidIdentifier(cand) and after.len == 0) {
+                    _ = parts.next(); // spaced `my:` — brace must follow
+                    const ahead = lexer.trim(parts.rest());
+                    if (ahead.len > 0 and ahead[0] == '{') {
+                        if (!std.mem.eql(u8, cand, "_")) binding = cand;
+                        named_group = true;
+                    }
+                }
+            }
+        }
+
+        if (fused_head != null or (parts.peek() != null and parts.peek().?.len > 0 and parts.peek().?[0] == '{')) {
+            {
                 // Shape-destructure at the binding position:
                 //   | found { name, age: i64, user: { city } } |> ...
                 // Consume whitespace tokens until the brace depth closes, then
@@ -8097,8 +7941,15 @@ pub const Parser = struct {
                 var collected = try std.ArrayList(u8).initCapacity(self.allocator, 64);
                 defer collected.deinit(self.allocator);
                 var depth: i32 = 0;
-                var closed = false;
-                while (parts.peek() != null) {
+                if (fused_head) |fh| {
+                    try collected.appendSlice(self.allocator, fh);
+                    for (fh) |ch| {
+                        if (ch == '{') depth += 1;
+                        if (ch == '}') depth -= 1;
+                    }
+                }
+                var closed = depth == 0 and fused_head != null;
+                while (!closed and parts.peek() != null) {
                     const tok = parts.next().?;
                     if (collected.items.len > 0) try collected.append(self.allocator, ' ');
                     try collected.appendSlice(self.allocator, tok);
@@ -8122,13 +7973,18 @@ pub const Parser = struct {
                     return error.InvalidBinding;
                 }
                 const text = collected.items;
-                // Strip the outer braces and parse the field list.
-                destructure = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent);
+                // Strip the outer braces and parse the field list — schema
+                // mode inside a named group, projection mode otherwise.
+                destructure = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent, named_group);
+                if (named_group) destructure_named = true;
                 rest = parts.rest();
             }
         }
 
         if (destructure.len == 0) {
+            // `{` AFTER a binding is the produce literal — `! each i { f }`
+            // — schema-mode field list: `name` pun / `name: expr` in scope.
+            // Checked inside the binding branch below once `binding` is set.
             if (parts.peek()) |next| {
                 if (!std.mem.startsWith(u8, next, "|>") and !std.mem.startsWith(u8, next, "=>") and
                     !std.mem.startsWith(u8, next, "->") and
@@ -8201,27 +8057,90 @@ pub const Parser = struct {
             }
         }
 
-        // Check for when clause
+        // Stage chain: `! each BINDING (when EXPR | { FIELDS })*` — bind,
+        // then filter/project stages in text order. A `when` before the
+        // `{ }` guards the binding scope (`condition`); after, the produced
+        // scope (`post_condition`). One `{ }` stage per arm for now — the
+        // stage-list AST generalizes the chain.
         var condition: ?[]const u8 = null;
-        if (parts.peek()) |next| {
-            if (std.mem.eql(u8, next, "when")) {
+        var post_condition: ?[]const u8 = null;
+        while (parts.peek()) |stage_tok| {
+            if (stage_tok.len > 0 and stage_tok[0] == '{') {
+                // `{` after the binding is the produce literal —
+                // `! each i { f, g: e }` — a field list (`name` pun /
+                // `name: expr`), not a destructure.
+                if (produce.len > 0) {
+                    try self.reporter.addError(
+                        .PARSE001,
+                        self.current,
+                        indent + 2,
+                        "Second projection stage in one arm — one `{{ ... }}` produce per `! each` arm for now.",
+                        .{},
+                    );
+                    return error.InvalidBinding;
+                }
+                var collected = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+                defer collected.deinit(self.allocator);
+                var depth: i32 = 0;
+                var closed = false;
+                while (parts.peek() != null) {
+                    const tok = parts.next().?;
+                    if (collected.items.len > 0) try collected.append(self.allocator, ' ');
+                    try collected.appendSlice(self.allocator, tok);
+                    for (tok) |ch| {
+                        if (ch == '{') depth += 1;
+                        if (ch == '}') depth -= 1;
+                    }
+                    if (depth == 0) {
+                        closed = true;
+                        break;
+                    }
+                }
+                if (closed) {
+                    const text = collected.items;
+                    produce = try self.parseDestructureFields(lexer.trim(text[1 .. text.len - 1]), indent, true);
+                    // Must-pun: a `name: name` self-rename has a shorter
+                    // spelling — `{ i }`. `:` is for renames and computations
+                    // (`{ i: i + 1 }`, `{ x: it.k }`), never the same name twice.
+                    for (produce) |pf| {
+                        if (pf.type_text) |t| {
+                            if (std.mem.eql(u8, pf.name, lexer.trim(t))) {
+                                try self.reporter.addError(
+                                    .PARSE001,
+                                    self.current,
+                                    indent + 2,
+                                    "Redundant rename '{s}: {s}' in a produce stage — write '{{ {s} }}' (the pun already means this).",
+                                    .{ pf.name, t, pf.name },
+                                );
+                                return error.InvalidBinding;
+                            }
+                        }
+                    }
+                    rest = parts.rest();
+                    parts = std.mem.tokenizeAny(u8, rest, " ");
+                    continue;
+                }
+                break;
+            } else if (std.mem.eql(u8, stage_tok, "when")) {
                 _ = parts.next(); // consume "when"
 
                 // Find where the condition ends: at the earliest arm-body
-                // delimiter — `|>` chain, `->` produce, or `=>` branch
-                // construct. A `when` guard can precede any of them
-                // (`when g |> body`, `when g -> value`, `when g => branch`);
-                // none of those glyphs is a legal expression operator, so the
-                // earliest top-level occurrence unambiguously ends the guard.
-                // (320_137: omitting `=>` swallowed `=> catalog` into the
-                // condition and emit pasted `if (p == 0 => catalog)`.)
+                // delimiter — `|>` chain, `->` produce, `=>` branch
+                // construct, or the produce stage's `{`. A `when` guard can
+                // precede any of them (`when g |> body`, `when g -> value`,
+                // `when g => branch`, `when g { f }`); none of those glyphs
+                // is a legal expression operator, so the earliest top-level
+                // occurrence unambiguously ends the guard. (320_137: omitting
+                // `=>` swallowed `=> catalog` into the condition and emit
+                // pasted `if (p == 0 => catalog)`.)
                 const remaining = parts.rest();
                 const pipe_idx = std.mem.indexOf(u8, remaining, "|>");
                 const arrow_idx = indexOfTopLevelHeadArrow(remaining); // `=>` or `->`
-                const end_idx: ?usize = if (pipe_idx) |p|
-                    (if (arrow_idx) |a| @min(p, a) else p)
-                else
-                    arrow_idx;
+                const brace_idx = indexOfTopLevelBrace(remaining); // `{` produce stage
+                var end_idx: ?usize = null;
+                for ([_]?usize{ pipe_idx, arrow_idx, brace_idx }) |cand| {
+                    if (cand) |c| end_idx = if (end_idx) |e| @min(e, c) else c;
+                }
 
                 const condition_str = if (end_idx) |idx|
                     lexer.trim(remaining[0..idx])
@@ -8272,16 +8191,43 @@ pub const Parser = struct {
                     }
                 }
 
-                condition = try self.allocator.dupe(u8, condition_str);
+                const cond_dupe = try self.allocator.dupe(u8, condition_str);
+                if (produce.len == 0) {
+                    if (condition != null) {
+                        self.allocator.free(cond_dupe);
+                        try self.reporter.addError(
+                            .PARSE001,
+                            self.current,
+                            indent + 2,
+                            "Second 'when' before any projection — combine the guards with 'and'.",
+                            .{},
+                        );
+                        return error.InvalidBinding;
+                    }
+                    condition = cond_dupe;
+                } else {
+                    if (post_condition != null) {
+                        self.allocator.free(cond_dupe);
+                        try self.reporter.addError(
+                            .PARSE001,
+                            self.current,
+                            indent + 2,
+                            "Second 'when' after the projection — combine the guards with 'and'.",
+                            .{},
+                        );
+                        return error.InvalidBinding;
+                    }
+                    post_condition = cond_dupe;
+                }
 
                 // Update rest to skip past the condition — preserving the
-                // delimiter (`|>` / `->` / `=>`) so the arm body parses downstream.
-                if (end_idx) |idx| {
-                    rest = remaining[idx..];
-                } else {
-                    rest = "";
-                }
+                // delimiter (`|>` / `->` / `=>` / `{`) so the arm body or the
+                // next stage parses downstream.
+                rest = if (end_idx) |idx| remaining[idx..] else "";
+                parts = std.mem.tokenizeAny(u8, rest, " ");
+                continue;
             }
+            break;
         }
 
         // Parse the condition expression if we have one
@@ -8524,9 +8470,12 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = steps_inner[0],
                         .indent = indent,
@@ -8620,9 +8569,12 @@ pub const Parser = struct {
                 pipe_cont.branch = owned_branch;
                 pipe_cont.binding = binding;
                 pipe_cont.destructure = destructure;
+                pipe_cont.destructure_named = destructure_named;
+                pipe_cont.produce = produce;
                 pipe_cont.binding_annotations = binding_annotations;
                 pipe_cont.binding_type = .branch_payload;
                 pipe_cont.condition = condition;
+                pipe_cont.post_condition = post_condition;
                 pipe_cont.condition_expr = condition_expr;
                 if (allocated_rest) |ar| self.allocator.free(ar);
                 return pipe_cont;
@@ -8671,9 +8623,12 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = step,
                         .indent = indent,
@@ -8695,9 +8650,12 @@ pub const Parser = struct {
                         .branch = owned_branch,
                         .binding = binding,
                         .destructure = destructure,
+                        .destructure_named = destructure_named,
+                        .produce = produce,
                         .binding_annotations = binding_annotations,
                         .binding_type = .branch_payload,
                         .condition = condition,
+                        .post_condition = post_condition,
                         .condition_expr = condition_expr,
                         .node = step,
                         .indent = indent,
@@ -8712,9 +8670,12 @@ pub const Parser = struct {
             .branch = owned_branch,
             .binding = binding,
             .destructure = destructure,
+            .destructure_named = destructure_named,
+            .produce = produce,
             .binding_annotations = binding_annotations,
             .binding_type = .branch_payload, // Parser always uses branch_payload; backend determines transition semantics
             .condition = condition,
+            .post_condition = post_condition,
             .condition_expr = condition_expr,
             .node = step,
             .indent = indent,
@@ -8817,8 +8778,11 @@ pub const Parser = struct {
 
         const file_marker = findFileSourceMarker(content);
         if (file_marker) |marker| {
-            // File-source step: the terminal carries a file closure (`<type>"path"`
-            // or `@"path"`) — the file twin of the `… {` source block handled below.
+            if (marker.typed) {
+                return self.fail(.PARSE005, location.line - 1, 0, "a typed file source `<type>\"path\"` was removed — declare the tag on the parameter (`source: Source[kind]`) and invoke with `@\"path\"`", .{});
+            }
+            // File-source step: the terminal carries a file closure `@"path"` —
+            // the file twin of the `… {` source block handled below.
             // The step may itself contain further `|>` steps (`info(): i |> … |>
             // fmt.blk <file>"t.txt"`), which parseEventInvocation resolves; the file
             // source attaches to the terminal, and a `: bind`/`|>` tail after the
@@ -8830,9 +8794,9 @@ pub const Parser = struct {
             const path_end = path_start + path_rel_end;
             const file_path = content[path_start..path_end];
 
-            const front = try self.splitFileSource(content, marker.marker_idx, marker.typed);
+            const front = self.splitFileSource(content, marker.marker_idx);
             const back = try self.extractFileBindTail(lexer.trim(content[path_end + 1 ..]), location);
-            const temp_invocation = try self.parseEventInvocation(front.invocation_str);
+            const temp_invocation = try self.parseEventInvocation(front);
             const path_str = try self.pathToString(temp_invocation.path);
             defer self.allocator.free(path_str);
 
@@ -8842,9 +8806,9 @@ pub const Parser = struct {
 
             var final_invocation: ast.Invocation = undefined;
             if (self.registry.getEventType(path_str)) |event_type| {
-                final_invocation = try self.createImplicitSourceInvocation(temp_invocation, file_content, front.phantom_type, event_type);
+                final_invocation = try self.createImplicitSourceInvocation(temp_invocation, file_content, null, event_type);
             } else {
-                final_invocation = try self.createImplicitSourceInvocationDefault(temp_invocation, file_content, front.phantom_type);
+                final_invocation = try self.createImplicitSourceInvocationDefault(temp_invocation, file_content, null);
             }
             if (back.bind) |rb| final_invocation.return_binding = rb;
             self.allocator.free(file_content);
@@ -9108,7 +9072,7 @@ pub const Parser = struct {
             return self.fail(
                 .PARSE001,
                 self.current,
-                indent,
+                indent + 1,
                 "Pipeline continuation '|>' requires a step. Nested flows (~) are not allowed here.",
                 .{},
             );
@@ -10199,65 +10163,75 @@ pub const Parser = struct {
         }
     }
 
-    /// Phantom state in a type position must use ANGLE brackets: `Type<state>`.
-    /// The square-bracket form `Type[state]` is otherwise silently swallowed
-    /// into the type string (phantom stays null → no obligation checking, false
-    /// safety; AST shows `*Resource[active!]` keeps the brackets in `type` and
-    /// reports `phantom: null`). Reject it loudly with a fix hint. No-op unless
-    /// `s` ends with a phantom-shaped `[...]`.
-    fn rejectSquareBracketPhantom(self: *Parser, s: []const u8) !void {
-        if (s.len == 0 or s[s.len - 1] != ']') return;
-        var depth: i32 = 0;
-        var j: usize = s.len - 1;
-        var open: ?usize = null;
-        while (true) : (j -= 1) {
-            if (s[j] == ']') {
-                depth += 1;
-            } else if (s[j] == '[') {
-                depth -= 1;
-                if (depth == 0) {
-                    open = j;
-                    break;
+    /// Peel trailing `[…]` groups off a declaration type: `T[a]` → `T` with
+    /// annotation "a"; `T[a,b]` → "a","b". Compiler annotations are opaque
+    /// strings — ANY content is legal (digits, `!`, regexes), the `[]` lane
+    /// owns the bracket on type positions unconditionally (ruled 2026-10-24).
+    /// Peeled groups prepend, so `T[a][b]` reads in declaration order.
+    fn splitTrailingAnnotationsOwned(
+        self: *Parser,
+        type_str_in: []const u8,
+        anns_out: *std.ArrayList([]const u8),
+    ) ![]const u8 {
+        var s = type_str_in;
+        while (s.len > 0 and s[s.len - 1] == ']') {
+            var depth: i32 = 0;
+            var j: usize = s.len;
+            var open: ?usize = null;
+            while (j > 0) {
+                j -= 1;
+                if (s[j] == ']') {
+                    depth += 1;
+                } else if (s[j] == '[') {
+                    depth -= 1;
+                    if (depth == 0) {
+                        open = j;
+                        break;
+                    }
                 }
             }
-            if (j == 0) break;
-        }
-        const at = open orelse return;
-        if (at == 0) return; // leading `[..]` = slice/array prefix, not phantom
-        const content = s[at + 1 .. s.len - 1];
-        if (content.len == 0) return;
-        // Phantom-shaped content carries a state name (letter) or obligation
-        // marker `!`, distinguishing it from a numeric array size like `[3]`.
-        var looks_phantom = false;
-        for (content) |c| {
-            if (std.ascii.isAlphabetic(c) or c == '!') {
-                looks_phantom = true;
-                break;
+            const at = open orelse break;
+            if (at == 0) break; // `[]`-led type — a slice, not a suffix
+            const content = s[at + 1 .. s.len - 1];
+            var insert_at: usize = 0;
+            var it = std.mem.splitScalar(u8, content, ',');
+            while (it.next()) |piece| {
+                const t = lexer.trim(piece);
+                if (t.len == 0) continue;
+                try anns_out.insert(self.allocator, insert_at, try self.allocator.dupe(u8, t));
+                insert_at += 1;
             }
+            s = s[0..at];
         }
-        if (!looks_phantom) return;
-        // `self.current` has usually drifted past the declaration by the time a
-        // shape is parsed, so locate the source line that actually contains the
-        // offending `[state]` rather than blaming wherever the cursor landed.
-        const bracket_expr = s[at..]; // e.g. "[active!]"
-        var report_line: usize = self.current + 1;
-        var report_col: usize = 1;
-        for (self.lines, 0..) |line_text, idx| {
-            if (std.mem.indexOf(u8, line_text, bracket_expr)) |col| {
-                report_line = idx + 1;
-                report_col = col + 1;
-                break;
+        return s;
+    }
+
+    /// Combined trailing-suffix split for declaration type positions:
+    /// `Type<phantom>[ann]` — phantom inner on the type name, annotations
+    /// outermost. Loops so a reversed `Type[ann]<phantom>` also resolves.
+    /// Returns the base type (borrowed); outputs are owned.
+    fn splitTypeSuffixesOwned(
+        self: *Parser,
+        type_str_in: []const u8,
+        phantom_out: *?[]const u8,
+        anns_out: *std.ArrayList([]const u8),
+        allow_phantom: bool,
+    ) ![]const u8 {
+        var s = type_str_in;
+        while (s.len > 0) {
+            const before = s;
+            s = try self.splitTrailingAnnotationsOwned(s, anns_out);
+            if (allow_phantom) {
+                var p: ?[]const u8 = null;
+                s = try self.splitTrailingPhantomOwned(s, &p);
+                if (p) |tag| {
+                    if (phantom_out.*) |old| self.allocator.free(old);
+                    phantom_out.* = tag;
+                }
             }
+            if (s.len == before.len and s.ptr == before.ptr) break;
         }
-        return self.failWithHint(
-            .KORU033,
-            report_line,
-            report_col,
-            "invalid phantom-state syntax",
-            .{},
-            "phantom state uses angle brackets — write `{s}<{s}>`",
-            .{ s[0..at], content },
-        );
+        return s;
     }
 
     const HostStructParse = struct { decl: ast.HostTypeDecl, next: usize };
@@ -10754,7 +10728,8 @@ pub const Parser = struct {
         try self.rejectSnakeName(arm_name, line_index, "resume arm");
 
         var phantom: ?[]const u8 = null;
-        const type_src = try self.splitTrailingPhantomOwned(lexer.trim(trimmed[name_end..]), &phantom);
+        var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+        const type_src = try self.splitTypeSuffixesOwned(lexer.trim(trimmed[name_end..]), &phantom, &type_annotations, true);
 
         // A `{`-led arm type is a record field list — the same text a record
         // return or record resume carries; validate it before the emitter
@@ -10779,6 +10754,7 @@ pub const Parser = struct {
             .name = try self.allocator.dupe(u8, arm_name),
             .type = if (type_src.len > 0) try self.allocator.dupe(u8, type_src) else null,
             .phantom = phantom,
+            .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
         };
     }
 
@@ -11214,23 +11190,14 @@ pub const Parser = struct {
             // braced payload fields).
             try self.rejectIdentityBranchDefault(type_and_annotation, self.current, 1, branch_name);
 
-            // Identity branches carry the full type string (including any phantom
-            // type suffix).  Phantom extraction happens below; we no longer strip
-            // trailing [identifier] as a "branch annotation" because bare phantom
-            // state literals (e.g. [celsius], [open]) were incorrectly swallowed
-            // here.  The only annotation historically used on identity branches
-            // ([mutable]) is unused in current code and is better handled as a
-            // phantom type or binding annotation in the continuation.
+            // Identity branches carry the full type string. Suffixes peel
+            // here: `[…]` groups are compiler annotations (`u64[\d+]` →
+            // "u64" + annotation), `<…>` is the phantom — `T<state>[ann]`.
             var type_str = type_and_annotation;
 
-            // Phantom labels: Type<tag>. Angle brackets have no Zig
-            // type-position meaning, so any `<...>` at type end is
-            // unambiguously phantom.
             var phantom: ?[]const u8 = null;
-            type_str = try self.splitTrailingPhantomOwned(type_str, &phantom);
-
-            // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
-            try self.rejectSquareBracketPhantom(type_str);
+            var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+            type_str = try self.splitTypeSuffixesOwned(type_str, &phantom, &type_annotations, true);
 
             // Canonical text type — same rule as a braced payload field
             // (parseShape), on the phantom-stripped BASE. Reject the raw Zig
@@ -11294,6 +11261,7 @@ pub const Parser = struct {
                 .type = actual_type,
                 .module_path = module_path,
                 .phantom = phantom,
+                .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
             };
 
             return ast.Branch{
@@ -11664,7 +11632,9 @@ pub const Parser = struct {
             var is_expression = false;
             var is_invocation_meta = false;
             if (std.mem.eql(u8, field_type, "Source") or std.mem.startsWith(u8, field_type, "Source<") or
-                std.mem.eql(u8, field_type, "?Source") or std.mem.startsWith(u8, field_type, "?Source<"))
+                std.mem.startsWith(u8, field_type, "Source[") or
+                std.mem.eql(u8, field_type, "?Source") or std.mem.startsWith(u8, field_type, "?Source<") or
+                std.mem.startsWith(u8, field_type, "?Source["))
             {
                 // `source: ?Source` is the blockless-declaring form: the block
                 // binds when present and the handler still fires without one —
@@ -11705,16 +11675,20 @@ pub const Parser = struct {
             // with no positional at the call site is KORU080's business, and
             // that is the wall that was actually missing (400_183/184/187).
 
-            // Phantom labels: Type<tag>. Angle brackets have no Zig
-            // type-position meaning, so any `<...>` at type end is
-            // unambiguously phantom. Opaque capture — analyzers interpret.
+            // Type suffixes: trailing `[…]` groups are compiler annotations —
+            // opaque, any content, peeled unconditionally (`Type[text]`,
+            // `u64[\d+]`). Trailing `<…>` is the phantom — peeled for every
+            // field kind but File/EmbedFile/Expression, whose `<T>` tail is
+            // part of their own spelling, not obligation state. Stacking is
+            // `Type<phantom>[ann]` — annotations outermost.
             var phantom: ?[]const u8 = null;
-            if (!is_source and !is_file and !is_embed_file and !is_expression) {
-                field_type = try self.splitTrailingPhantomOwned(field_type, &phantom);
-
-                // Reject the square-bracket phantom form `Type[state]` (must be `Type<state>`).
-                try self.rejectSquareBracketPhantom(field_type);
-            }
+            var type_annotations = try std.ArrayList([]const u8).initCapacity(self.allocator, 2);
+            field_type = try self.splitTypeSuffixesOwned(
+                field_type,
+                &phantom,
+                &type_annotations,
+                !(is_file or is_embed_file or is_expression),
+            );
 
             // Canonical text type, checked on the phantom-stripped BASE so
             // `[]const u8` and `[]const u8<!tag>` are both caught: the raw Zig
@@ -11794,6 +11768,7 @@ pub const Parser = struct {
                 .type = owned_type,
                 .module_path = module_path,
                 .phantom = phantom,
+                .type_annotations = try type_annotations.toOwnedSlice(self.allocator),
                 .is_source = is_source,
                 .is_file = is_file,
                 .is_embed_file = is_embed_file,
@@ -12912,4 +12887,49 @@ test "item gate filters event decls at parse time" {
     try std.testing.expect(!parser.reporter.hasErrors());
     try std.testing.expect(parse_result.source_file.items.len == 1);
     try std.testing.expect(parse_result.source_file.items[0] == .event_decl);
+}
+
+test "parser lands [parallel] on a for-invocation's annotations" {
+    const allocator = std.testing.allocator;
+
+    // Pin: `! as a |> [parallel]for(1..4)` — the bracketed annotation prefix on
+    // the invocation lands in invocation.annotations (["parallel"]), the same
+    // slot [size(16k)] rides on std/fmt:ln calls. This is the @threaded-scope
+    // surface marker the threaded checker seeds from (frag: locksets).
+    const source =
+        \\~capture { acc: 0[i64] }
+        \\! as a |> [parallel]for(1..4)
+        \\    ! each i |> captured { acc: i }
+    ;
+
+    var parser = try Parser.init(allocator, source, "test.kz", &[_][]const u8{}, null);
+    defer parser.deinit();
+
+    var parse_result = try parser.parse();
+    defer parse_result.deinit();
+
+    try std.testing.expect(parse_result.source_file.items.len == 1);
+    const item = parse_result.source_file.items[0];
+    try std.testing.expect(item == .flow);
+
+    const flow = item.flow;
+    try std.testing.expect(flow.body.continuations.len >= 1);
+
+    // Find the `for` continuation and assert the annotation landed.
+    var found = false;
+    for (flow.body.continuations) |*cont| {
+        if (cont.node) |*step| {
+            const inv = switch (step.*) {
+                .invocation => step.invocation,
+                .label_with_invocation => step.label_with_invocation.invocation,
+                else => continue,
+            };
+            if (inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "for")) {
+                try std.testing.expectEqual(@as(usize, 1), inv.annotations.len);
+                try std.testing.expectEqualStrings("parallel", inv.annotations[0]);
+                found = true;
+            }
+        }
+    }
+    try std.testing.expect(found);
 }

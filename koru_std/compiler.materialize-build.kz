@@ -1,0 +1,249 @@
+// Compiler host-build drivers — Stage D of artifact materialization
+//
+// host-build-zig and host-build-cs are the pipeline-visible toolchain
+// verbs: zig build / build-exe / dotnet build, the csproj driver, the
+// overlay + optimize-mode + cross-target reads. Ordinary tors like the
+// rest of materialization — a user emission override can swap them,
+// interpose around them, or drop them for an emit-only pipeline.
+// `output` names the produced binary (overrides the -o argv name);
+// `dir` is where write-artifact staged the emitted source.
+// ============================================================
+
+// Stage D for the Zig target: zig build (via build_output.zig when the
+// program declared build:requires) or a direct build-exe, then place the
+// artifact at the -o name. Failures exit non-zero — the compile's verdict
+// IS the build's verdict. `output` overrides the -o argv name; `dir` is
+// where write-artifact staged output_emitted.zig.
+~pub tor host-build-zig { ctx: CompilerContext, code: string, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~proc host-build-zig|zig {
+    const emitter_helpers = @import("emitter_helpers");
+    const allocator = ctx.allocator;
+    const stdout = std.fs.File.stdout();
+    const stderr = std.fs.File.stderr();
+    var buf: [512]u8 = undefined;
+
+    const output_exe = if (output) |o| allocator.dupe(u8, o) catch unreachable else emitter_helpers.outputExeName(allocator);
+    const emitted_src = if (dir) |d| std.fs.path.join(allocator, &.{ d, "output_emitted.zig" }) catch unreachable else "output_emitted.zig";
+
+    // Cross target: build:config, then KORU_BACKEND_TARGET for hosts
+    // whose glibc predates zig's native baseline — declared wins.
+    const env_target = std.process.getEnvVarOwned(allocator, "KORU_BACKEND_TARGET") catch null;
+    defer if (env_target) |t| allocator.free(t);
+    const build_target = emitter_helpers.getBuildConfig("target") orelse env_target;
+
+    var zig_lib_buf: [4096]u8 = undefined;
+    const zig_lib_overlay = emitter_helpers.ensureZigLibOverlay(allocator, CompilerEnv.koru_home, &zig_lib_buf);
+    if (zig_lib_overlay == null) stderr.writeAll("note: koru zig-lib overlay unavailable — building emitted program against stock zig std\n") catch {};
+
+    // First check if build_output.zig exists (has user build requirements)
+    const has_build_output = if (std.fs.cwd().access("build_output.zig", .{})) |_| true else |_| false;
+    if (has_build_output and dir != null) {
+        stderr.writeAll("error[KORU209]: `dir:` relocates the emitted artifact, but the program declared build:requires — the generated build_output.zig stages output_emitted.zig in cwd and cannot see it there\n  fix: drop `dir:` for this program, or drop build:requires\n") catch {};
+        std.process.exit(1);
+    }
+
+    if (has_build_output) {
+        // Use zig build with build_output.zig (includes user dependencies)
+        var bo_argv: [9][]const u8 = undefined;
+        bo_argv[0] = emitter_helpers.zigExe();
+        bo_argv[1] = "build";
+        bo_argv[2] = "--build-file";
+        bo_argv[3] = "build_output.zig";
+        var bo_argc: usize = 4;
+        if (zig_lib_overlay) |ov| {
+            bo_argv[bo_argc] = "--zig-lib-dir"; bo_argc += 1;
+            bo_argv[bo_argc] = ov; bo_argc += 1;
+        }
+        var opt_buf: [24]u8 = undefined;
+        // Output Debug by default; --release=<mode> or -O <Mode> opts
+        // into a release build. Passed as -Doptimize so
+        // build_output.zig's standardOptimizeOption honors it.
+        const out_opt = if (CompilerEnv.hasFlag("debug")) "Debug" else if (CompilerEnv.hasFlag("release=fast")) "ReleaseFast" else if (CompilerEnv.hasFlag("release=safe")) "ReleaseSafe" else if (CompilerEnv.hasFlag("release=small")) "ReleaseSmall" else "Debug";
+        bo_argv[bo_argc] = std.fmt.bufPrint(&opt_buf, "-Doptimize={s}", .{out_opt}) catch "-Doptimize=Debug";
+        bo_argc += 1;
+        var dt_buf: [128]u8 = undefined;
+        if (build_target) |t| {
+            bo_argv[bo_argc] = std.fmt.bufPrint(&dt_buf, "-Dtarget={s}", .{t}) catch "-Dtarget=native";
+            bo_argc += 1;
+        }
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = bo_argv[0..bo_argc],
+            .max_output_bytes = 10 * 1024 * 1024,
+        }) catch |err| {
+            const err_msg = std.fmt.bufPrint(&buf, "✗ zig build failed: {}\n", .{err}) catch "✗ zig build failed\n";
+            stderr.writeAll(err_msg) catch {};
+            std.process.exit(1);
+        };
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        var buf2: [512]u8 = undefined;
+        // Full Term union — a bare `.Exited` access panics when the zig
+        // build was signal-killed (OOM killer under memory pressure),
+        // and that panic reads as a compiler crash.
+        switch (result.term) {
+            .Exited => |exit_code| if (exit_code == 0) {
+                // Copy from zig-out/bin/output to the requested output name.
+                //
+                // Zig names a wasm executable `output.wasm`; every other
+                // target produces a bare `output`. Looking only for the bare
+                // name made a SUCCESSFUL cross-compile report failure —
+                // "Failed to copy output: error.FileNotFound" with a perfectly
+                // good .wasm sitting in zig-out/bin the whole time.
+                //
+                // Only the SOURCE name varies. The destination stays exactly
+                // what was asked for: a wasm host is handed the bytes, and
+                // neither WebAssembly.compile nor the test harness cares what
+                // the file on disk is called.
+                const is_wasm = if (build_target) |t| std.mem.indexOf(u8, t, "wasm") != null else false;
+                const zig_artifact = if (is_wasm) "zig-out/bin/output.wasm" else "zig-out/bin/output";
+                std.fs.cwd().copyFile(zig_artifact, std.fs.cwd(), output_exe, .{}) catch |copy_err| {
+                    const msg2 = std.fmt.bufPrint(&buf2, "✗ Failed to copy output: {}\n", .{copy_err}) catch "✗ Failed to copy output\n";
+                    stderr.writeAll(msg2) catch {};
+                    std.process.exit(1);
+                };
+                // The mode rides the success line — a silent Debug
+                // default is how a benchmark ends up timing a
+                // bounds-checked binary without knowing it.
+                const msg2 = std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, out_opt }) catch return .{ .ctx = ctx, .code = code };
+                stdout.writeAll(msg2) catch {};
+            } else {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{}) catch "✗ Compilation failed\n";
+                stdout.writeAll(msg2) catch {};
+                if (result.stderr.len > 0) {
+                    stderr.writeAll("Error: ") catch {};
+                    stderr.writeAll(result.stderr) catch {};
+                    stderr.writeAll("\n") catch {};
+                }
+                std.process.exit(1);
+            },
+            .Signal => |sig| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally. Check memory and load, then rerun. The source program was never judged.\n", .{sig}) catch "✗ zig build killed\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+            .Stopped => |sig| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build was stopped by signal {d} and never resumed — resume or kill it, then rerun\n", .{sig}) catch "✗ zig build stopped\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+            .Unknown => |status| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build ended in an unknown state (status {d}) — rerun; if it repeats, the machine is the suspect\n", .{status}) catch "✗ zig build failed\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+        }
+    } else {
+        // Fall back to direct zig build-exe (no user dependencies)
+        var emit_path_buf: [256]u8 = undefined;
+        const emit_path = std.fmt.bufPrint(&emit_path_buf, "-femit-bin={s}", .{output_exe}) catch unreachable;
+        const debug = CompilerEnv.hasFlag("debug");
+        const release_fast = CompilerEnv.hasFlag("release=fast");
+        const release_safe = CompilerEnv.hasFlag("release=safe");
+        const release_small = CompilerEnv.hasFlag("release=small");
+        const exe_opt = if (debug) "Debug" else if (release_fast) "ReleaseFast" else if (release_safe) "ReleaseSafe" else if (release_small) "ReleaseSmall" else "Debug";
+        // `Source`-typed fields emit `__koru_ast.` references into
+        // output_emitted.zig. When the emitted text uses them, the ast
+        // module (plus its errors and glob_pattern_matcher deps) must be
+        // mapped via --dep/-M — the bare build-exe path has no build file
+        // to do it. Positional and -M main-module spellings conflict, so
+        // the module cluster takes the explicit -Mroot= form.
+        const needs_ast_module = std.mem.indexOf(u8, code, "__koru_ast.") != null;
+        var exe_argv: [24][]const u8 = undefined;
+        var exe_argc: usize = 0;
+        exe_argv[exe_argc] = emitter_helpers.zigExe(); exe_argc += 1;
+        exe_argv[exe_argc] = "build-exe"; exe_argc += 1;
+        // koru_allocator() backs onto std.heap.c_allocator (real libc
+        // malloc/free) -- needs libc linked on this direct build-exe path too.
+        exe_argv[exe_argc] = "-lc"; exe_argc += 1;
+        if (build_target) |t| {
+            exe_argv[exe_argc] = "-target"; exe_argc += 1;
+            exe_argv[exe_argc] = t; exe_argc += 1;
+        }
+        exe_argv[exe_argc] = "-O"; exe_argc += 1;
+        // The OUTPUT binary defaults to Debug: safety checks (bounds,
+        // overflow, unreachable) stay on, which is the mode the test suite
+        // should judge. The earlier ReleaseFast default was a benchmark
+        // optimization that leaked into every output and hid UB.
+        // `--release=<mode>` or `-O <Mode>` opts into a release build;
+        // `--debug` stays an explicit Debug and wins over release flags.
+        exe_argv[exe_argc] = exe_opt; exe_argc += 1;
+        exe_argv[exe_argc] = emit_path; exe_argc += 1;
+        if (zig_lib_overlay) |ov| {
+            exe_argv[exe_argc] = "--zig-lib-dir"; exe_argc += 1;
+            exe_argv[exe_argc] = ov; exe_argc += 1;
+        }
+        var ast_path_buf: [1024]u8 = undefined;
+        var errors_path_buf: [1024]u8 = undefined;
+        var gpm_path_buf: [1024]u8 = undefined;
+        var root_mod_buf: [512]u8 = undefined;
+        var ast_mod_buf: [1088]u8 = undefined;
+        var errors_mod_buf: [1088]u8 = undefined;
+        var gpm_mod_buf: [1088]u8 = undefined;
+        if (needs_ast_module) {
+            const ast_path = std.fmt.bufPrint(&ast_path_buf, "{s}/src/ast.zig", .{CompilerEnv.koru_home}) catch unreachable;
+            const errors_path = std.fmt.bufPrint(&errors_path_buf, "{s}/src/errors.zig", .{CompilerEnv.koru_home}) catch unreachable;
+            const gpm_path = std.fmt.bufPrint(&gpm_path_buf, "{s}/src/glob_pattern_matcher.zig", .{CompilerEnv.koru_home}) catch unreachable;
+            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            exe_argv[exe_argc] = "ast"; exe_argc += 1;
+            exe_argv[exe_argc] = std.fmt.bufPrint(&root_mod_buf, "-Mroot={s}", .{emitted_src}) catch unreachable; exe_argc += 1;
+            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            exe_argv[exe_argc] = "errors"; exe_argc += 1;
+            exe_argv[exe_argc] = "--dep"; exe_argc += 1;
+            exe_argv[exe_argc] = "glob_pattern_matcher"; exe_argc += 1;
+            exe_argv[exe_argc] = std.fmt.bufPrint(&ast_mod_buf, "-Mast={s}", .{ast_path}) catch unreachable; exe_argc += 1;
+            exe_argv[exe_argc] = std.fmt.bufPrint(&errors_mod_buf, "-Merrors={s}", .{errors_path}) catch unreachable; exe_argc += 1;
+            exe_argv[exe_argc] = std.fmt.bufPrint(&gpm_mod_buf, "-Mglob_pattern_matcher={s}", .{gpm_path}) catch unreachable; exe_argc += 1;
+        } else {
+            exe_argv[exe_argc] = emitted_src; exe_argc += 1;
+        }
+        const result = std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = exe_argv[0..exe_argc],
+            .max_output_bytes = 10 * 1024 * 1024,
+        }) catch |err| {
+            const err_msg = std.fmt.bufPrint(&buf, "✗ zig build-exe failed: {}\n", .{err}) catch "✗ zig build-exe failed\n";
+            stderr.writeAll(err_msg) catch {};
+            std.process.exit(1);
+        };
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+
+        var buf2: [512]u8 = undefined;
+        // Full Term union — same contract as the build-file path above.
+        switch (result.term) {
+            .Exited => |exit_code| if (exit_code == 0) {
+                const msg2 = std.fmt.bufPrint(&buf2, "✓ Compiled to {s} ({s})\n", .{ output_exe, exe_opt }) catch return .{ .ctx = ctx, .code = code };
+                stdout.writeAll(msg2) catch {};
+            } else {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ Compilation failed\n", .{}) catch "✗ Compilation failed\n";
+                stdout.writeAll(msg2) catch {};
+                if (result.stderr.len > 0) {
+                    stderr.writeAll("Error: ") catch {};
+                    stderr.writeAll(result.stderr) catch {};
+                    stderr.writeAll("\n") catch {};
+                }
+                std.process.exit(1);
+            },
+            .Signal => |sig| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build-exe was killed by signal {d} — ended from outside, before it could finish. This usually means the machine ran out of memory, or something killed it externally. Check memory and load, then rerun. The source program was never judged.\n", .{sig}) catch "✗ zig build-exe killed\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+            .Stopped => |sig| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build-exe was stopped by signal {d} and never resumed — resume or kill it, then rerun\n", .{sig}) catch "✗ zig build stopped\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+            .Unknown => |status| {
+                const msg2 = std.fmt.bufPrint(&buf2, "✗ zig build-exe ended in an unknown state (status {d}) — rerun; if it repeats, the machine is the suspect\n", .{status}) catch "✗ zig build failed\n";
+                stderr.writeAll(msg2) catch {};
+                std.process.exit(1);
+            },
+        }
+    }
+
+    return .{ .ctx = ctx, .code = code };
+}

@@ -61,10 +61,10 @@
 // baggage), so the shape is pinned by the regex before the conversion runs —
 // the |js discipline, ported.
 ~proc parse-int|cs {
-    if (!global::System.Text.RegularExpressions.Regex.IsMatch(s.data, "^[+-]?[0-9]+$")) {
+    if (!global::System.Text.RegularExpressions.Regex.IsMatch(s, "^[+-]?[0-9]+$")) {
         return new Output { tag = "err", err = "not an integer" };
     }
-    return new Output { tag = "ok", ok = long.Parse(s.data) };
+    return new Output { tag = "ok", ok = long.Parse(s) };
 }
 
 ~proc from-int|cs {

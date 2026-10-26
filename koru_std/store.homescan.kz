@@ -4,7 +4,6 @@
 // Lifted out of `store.new.kz` at the 2026-10 merge — the wall pins module
 // files and these namespaces were always self-contained.
 
-
 const HomeScan = struct {
     const ast = @import("ast");
     fn stripQuotes(n: []const u8) []const u8 {
@@ -85,14 +84,9 @@ const HomeScan = struct {
         const inv = f.inv();
         if (inv.path.segments.len != 1) return false;
         if (!std.mem.eql(u8, inv.path.segments[0], verb)) return false;
-        const mq = inv.path.module_qualifier orelse return false;
-        if (!std.mem.eql(u8, mq, "std.store")) return false;
+        if (!std.mem.eql(u8, inv.path.module_qualifier orelse return false, "std.store")) return false;
         if (want_name) |n| {
-            for (inv.args) |a| {
-                if (std.mem.eql(u8, a.name, "expr")) {
-                    return std.mem.eql(u8, stripQuotes(a.value), n);
-                }
-            }
+            for (inv.args) |a| if (std.mem.eql(u8, a.name, "expr")) return std.mem.eql(u8, stripQuotes(a.value), n);
             return false;
         }
         return true;
@@ -126,9 +120,8 @@ const HomeScan = struct {
         return false;
     }
     // A whole-program walk over one flow, lowering every text slot an
-    // expression may stand in. `scope` carries the program's store names
-    // with the prefix each needs (empty here — the plural walk reads from
-    // the declaring module's own namespace).
+    // expression may stand in (`scope` = the program's store names, empty
+    // prefix — the plural walk reads the declaring module's namespace).
     fn storeRefsContH(alloc: std.mem.Allocator, prog: *const ast.Program, cont: *ast.Continuation, scope: StoreScope, ident: []const []const u8, bound: []const []const u8) void {
         const ast2 = @import("ast");
         // A continuation's OWN bindings shadow store names (690_090): a
@@ -214,6 +207,13 @@ const HomeScan = struct {
                             @constCast(fld).type = lowered;
                         }
                     }
+                },
+                // A produce arm (`| then -> s[h].f`) is an expression node —
+                // the arm's return text reached Zig verbatim as `s[h].f`
+                // while the guard lowered (690_376); plural twin of the
+                // identity-store walk's arm (110_022).
+                .expression => {
+                    @constCast(n).* = .{ .expression = storeLowerText(alloc, prog, n.expression, scope, ident, bound_all) };
                 },
                 else => {},
             }

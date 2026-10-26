@@ -1,110 +1,13 @@
 // Koru Standard Library: the `handles` part of interpreter.kz — the
-// handle-pool custody cluster: the assert-held gate, the discharge sweeps,
-// and the held-handles report. Joined via `~part handles` in interpreter.kz;
-// merged into the interpreter module at load.
+// handle-pool custody cluster: the discharge sweeps and the held-handles
+// report. Joined via `~part handles` in interpreter.kz; merged into the
+// interpreter module at load.
 
 // renderHeldHandles moved to the `custody` part — the record's witnesses
 // live beside Handle/CustodyKind now.
-
-/// Refuse a discharge tor that names a handle the pool does not hold.
-///
-/// The handle name IS the capability: a run may act on what it was handed and
-/// on nothing else. Called BEFORE the dispatcher, because the discharge proc is
-/// the irreversible half — releasing a resource you were never given cannot be
-/// walked back by observing afterwards that no obligation was retired.
-///
-/// `error.HandleNotHeld` surfaces as `dispatch-error` carrying that name, the
-/// same channel `EventDenied` uses for a verb the scope refuses.
-fn assertHandlesHeld(
-    ctx: *InterpreterContext,
-    pool: *HandlePool,
-    event_name: []const u8,
-    args: []const ast.Arg,
-) !void {
-    if (ctx.discharges_spec_fn) |spec_fn| {
-        for (spec_fn(event_name)) |spec| {
-            for (args) |arg| {
-                if (!std.mem.eql(u8, arg.name, spec.arg_name)) continue;
-                // SPEND possession — `field: T<!state>` must name a live
-                // handle carrying EXACTLY that obligation, the same gate the
-                // borrow pass below enforces for `T<state>`. An existence-only
-                // check let a live-but-wrong-tag arg reach the spend proc —
-                // a <found> in `confirm(held:)` booked the search JSON
-                // env-side, and the discharge machinery would have retired
-                // the <found>. Measured on kopium's airline-native scope.
-                const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
-                    // "names nothing" vs "was already spent": the pool keeps
-                    // discharged handles, so a raw scan tells a spent rN
-                    // from a literal that never was one.
-                    var spent = false;
-                    for (pool.handles.items) |*x| {
-                        if (x.discharged and
-                            std.mem.eql(u8, x.scope_name, ctx.scope_name) and
-                            std.mem.eql(u8, x.handle_id, arg.value)) {
-                            spent = true;
-                            break;
-                        }
-                    }
-                    const clause: []const u8 = if (spent)
-                        "was already spent — an obligation discharges once" else
-                        "names nothing the session holds";
-                    ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                        "'{s}' wants a live <{s}> to spend — '{s}' {s}. Mint one through a verb whose signature ends '-> <{s}!>'",
-                        .{ spec.arg_name, spec.obligation_name, arg.value, clause, spec.obligation_name }) catch null;
-                    return error.HandleNotHeld;
-                };
-                if (!std.mem.eql(u8, h.obligation_name, spec.obligation_name)) {
-                    ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                        "'{s}' wants a <{s}> to spend — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
-                        .{ spec.arg_name, spec.obligation_name, arg.value, h.obligation_name, spec.obligation_name }) catch null;
-                    return error.HandleNotHeld;
-                }
-                break;
-            }
-        }
-    } else if (ctx.discharges_obligations_fn) |discharges_fn| {
-        if (discharges_fn(event_name).len != 0 and args.len > 0 and
-            pool.findByHandleIdAnyScope(args[0].value) == null)
-        {
-            return error.HandleNotHeld;
-        }
-    }
-
-    // BORROW possession — `field: T<state>` (no `!`) must name a live handle
-    // carrying that obligation. Consumes are covered by the spec pass above;
-    // a borrow proves the session holds the value without spending it — the
-    // arg IS the capability either way. A literal in this position is a
-    // forgery the wire cannot express any other way.
-    const input_fn = ctx.input_fn orelse return;
-    const fields = input_fn(event_name) orelse return;
-    for (fields) |field| {
-        const p = field.phantom orelse continue;
-        if (p.len == 0 or p[0] == '!' or p[p.len - 1] == '!') continue;
-        const state = if (std.mem.lastIndexOfScalar(u8, p, ':')) |c| p[c + 1 ..] else p;
-        for (args) |arg| {
-            if (!std.mem.eql(u8, arg.name, field.name)) continue;
-            const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
-                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                    "'{s}' wants a live <{s}> — '{s}' names nothing the session holds. Mint one through a verb whose signature ends '-> <{s}!>'",
-                    .{ field.name, state, arg.value, state }) catch null;
-                return error.HandleNotHeld;
-            };
-            if (!std.mem.eql(u8, h.obligation_name, state)) {
-                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                    "'{s}' wants a live <{s}> — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
-                    .{ field.name, state, arg.value, h.obligation_name, state }) catch null;
-                return error.HandleNotHeld;
-            }
-            // The claim is proven — witness the exercise so the record
-            // carries the third leg of obligation safety (no leak, no
-            // double-discharge, no use-after-release): a `use` line on a
-            // dead handle in the log can then only mean this gate
-            // regressed, which is what the checker re-decides.
-            pool.noteUse(h, event_name);
-            break;
-        }
-    }
-}
+//
+// assertHandlesHeld moved to the `mounted` part — the held gate consults
+// the verb's owner, and owners are a scope-set question now.
 
 fn autoDischargeHandles(
     auto_discharge: bool,
@@ -121,7 +24,9 @@ fn autoDischargeHandles(
     // `std/bridge:close`, which calls the same loop below.
     if (using_external_pool) return;
 
-    dischargeAllHandles("AUTO-DISCHARGE", active_pool, discharges_spec_fn, dispatcher, allocator);
+    // The run's mounted set rides the channel — a mounted handle's discharge
+    // tor is looked up in the sweep like a bound one.
+    dischargeAllHandles("AUTO-DISCHARGE", active_pool, discharges_spec_fn, dispatcher, allocator, runMountedScopes());
 }
 
 /// Release every handle still held on `pool` by invoking its recorded discharge
@@ -145,6 +50,7 @@ pub fn dischargeAllHandles(
     discharges_spec_fn: ?DischargesSpecFn,
     dispatcher: DispatchFn,
     allocator: std.mem.Allocator,
+    mounted: ?[]const @import("root").koru_std.koru_runtime.ScopeRuntime,
 ) void {
     if (pool.countUndischarged() == 0) return;
 
@@ -175,6 +81,7 @@ pub fn dischargeAllHandles(
 
             // Find the arg_name for this discharge tor by looking up DischargeSpec
             var arg_name: ?[]const u8 = null;
+            var owner_dispatcher = dispatcher;
             if (discharges_spec_fn) |spec_fn| {
                 const specs = spec_fn(handle.discharge_event);
                 // Match on obligation_module/name (don't assume first item)
@@ -184,6 +91,15 @@ pub fn dischargeAllHandles(
                         arg_name = spec.arg_name;
                         break;
                     }
+                }
+            }
+            // A discharge verb the bound scope doesn't own may live on a
+            // mounted scope — same spec match, dispatched through ITS
+            // dispatcher (the `mounted` part owns the search).
+            if (arg_name == null) {
+                if (mountedDischargeOwner(mounted, handle.discharge_event, handle.obligation_module, handle.obligation_name)) |own| {
+                    arg_name = own.arg_name;
+                    owner_dispatcher = own.dispatcher;
                 }
             }
 
@@ -205,7 +121,7 @@ pub fn dischargeAllHandles(
             // the sweep is no exception; the channel is per-call.
             setDispatchPool(pool, handle.scope_name);
             defer clearDispatchPool();
-            dispatcher(&discharge_inv, &discharge_result) catch |err| {
+            owner_dispatcher(&discharge_inv, &discharge_result) catch |err| {
                 std.debug.print("[{s}] Failed '{s}': {s}\n",
                     .{label, handle.discharge_event, @errorName(err)});
                 continue;  // Don't mark as discharged if dispatch failed

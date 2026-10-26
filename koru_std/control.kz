@@ -104,9 +104,8 @@ const std = @import("std");
 // - Zero-overhead: comptime-known handlers inline into the loop.
 
 // - `keep:` is OPTIONAL and turns the loop into one that STOPS: the emitted body
-//   breaks the moment the expression goes false. Omit it and `for` is exactly
-//   what it always was — an absent `keep` renders no line at all, so every
-//   existing call site emits byte-identical code.
+//   breaks the moment the expression goes false. Omit it and `for` emits
+//   byte-identical code to before.
 //
 //   This started life as a separate `scan` keyword and that was WRONG. The two
 //   templates differed by ONE line and shared everything else, across two targets
@@ -119,20 +118,13 @@ const std = @import("std");
 //   concept's own prescription.
 ~[keyword]pub tor for { expr: Expression, keep: ?Expression }
 ! each *
+! ?else *
 | ?done
 
-~[template]proc for|zig {
-    for ({{ expr }}) |__koru_item{{ __site }}| {
-        {% if keep != "" %}if (!({{ keep }})) break;
-        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
-        {% endfor %}
-    }
-    {{ continuations["done"].continue }}
-}
-
-
+~part for
 
 // CONST moved to koru_std/declarations.kz — it is a value declaration, not
 // control flow (and not a type). See `declarations.kz` for the tor + the
 // per-target template procs.
 ~part capture
+~part c

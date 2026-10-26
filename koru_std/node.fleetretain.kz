@@ -1,0 +1,46 @@
+// Koru Standard Library: the `fleetretain` part of node — the fleet-event
+// retention splice `node:new` needs. Joined via `~part fleetretain` in
+// node.kz; merged into the node module at load.
+
+// The fleet tors are called from HOST code — nothing in the program
+// spells `std/fleet:claim`, so dead-strip retires the tors and
+// `koru_fleet` would never emit. This splice is duplicated in
+// `cell.retain.kz` ON PURPOSE: the transform's emitted handler runs
+// inside the backend compiler, so its body must not reference
+// `koru_fleet` — the module exists in that emit only because the
+// retain already ran. Sharing this helper creates a bootstrap cycle.
+fn retainFleetEvents(prog: *const ast.Program, alloc: std.mem.Allocator) void {
+    const W = struct {
+        fn retain(its: []const ast.Item, want: []const u8, al: std.mem.Allocator) void {
+            for (its) |*pi| {
+                switch (pi.*) {
+                    .module_decl => |*md| {
+                        if (std.mem.eql(u8, md.logical_name, "std.fleet")) {
+                            for (md.items) |*mi| {
+                                if (mi.* != .event_decl) continue;
+                                const ed = &mi.event_decl;
+                                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], want)) {
+                                    for (ed.annotations) |a| if (std.mem.eql(u8, a, "retain")) return;
+                                    const grown = al.alloc([]const u8, ed.annotations.len + 1) catch unreachable;
+                                    @memcpy(grown[0..ed.annotations.len], ed.annotations);
+                                    grown[ed.annotations.len] = al.dupe(u8, "retain") catch unreachable;
+                                    @constCast(ed).annotations = grown;
+                                }
+                            }
+                            return;
+                        }
+                        retain(md.items, want, al);
+                    },
+                    else => {},
+                }
+            }
+        }
+    };
+    W.retain(prog.items, "claim", alloc);
+    W.retain(prog.items, "owner", alloc);
+    W.retain(prog.items, "seize", alloc);
+    W.retain(prog.items, "renew", alloc);
+    W.retain(prog.items, "release", alloc);
+    W.retain(prog.items, "guard", alloc);
+    W.retain(prog.items, "reset", alloc);
+}

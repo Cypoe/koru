@@ -1,0 +1,176 @@
+// Koru Standard Library: the `mount` part of bridge — installing a
+// runtime scope from a native module (`.dylib`) onto a live session.
+// Joined via `~part mount` in bridge.kz; merged into the bridge module
+// at load.
+//
+// The loadable unit is a SCOPE, not a proc: the module exports one
+// symbol, `koru_module_init`, which the host calls with a service table
+// and which returns the scope's `ScopeRuntime` — the same vtable a
+// `register` block emits at comptime. Once mounted, the scope's verbs
+// dispatch against THIS bridge's pool: a mounted tor can borrow a handle
+// the bound scope minted three turns ago, mint obligations the hang-up
+// sweep will discharge through the module's own dispatcher, and appear
+// in `vocabulary()`/`grammar()` beside the compiled verbs.
+//
+// Capability grows; authority doesn't. Mount is a host-held tor — the
+// wire cannot reach it, the session cannot install vocabulary on itself.
+//
+// Mount-for-life: the lib stays open until the bridge closes, because a
+// handle whose discharge path lives inside the module must be callable
+// at hang-up. There is no `unmount` while custody is live; the bridge's
+// `deinit` closes the libs after `dischargeAll` has run.
+
+~pub tor mount { br: *Bridge<session>, path: string }
+| mounted string
+| failed string
+
+~proc mount|zig {
+    // callconv(.c) is load-bearing: `export fn` in the module is C
+    // convention, and a Zig-conv `*const fn` lowers `?*const` returns
+    // through a hidden result slot — declaring Zig conv here shifts every
+    // argument register and the module reads garbage for `services`.
+    const InitFn = *const fn (*const Interp.MountedHostServices) callconv(.c) ?*const Runtime.ScopeRuntime;
+
+    var lib = std.DynLib.open(path) catch |e| {
+        return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+            "mount: cannot load '{s}': {s}", .{ path, @errorName(e) })
+            catch "mount: cannot load module" };
+    };
+
+    const init_fn = lib.lookup(InitFn, "koru_module_init") orelse {
+        lib.close();
+        return .{ .failed = "mount: module exports no 'koru_module_init' — not a Koru scope module" };
+    };
+
+    var services = Interp.mountedHostServices();
+    const scope_rt = init_fn(&services) orelse {
+        lib.close();
+        return .{ .failed = "mount: koru_module_init refused the host — ABI version mismatch" };
+    };
+    const scope = scope_rt.*;
+
+    // The vtable must be complete enough to enforce: no events table
+    // means no owner resolution — dispatch, the gate, and the sweep all
+    // ask membership this way.
+    const events_fn = scope.events_fn orelse {
+        lib.close();
+        return .{ .failed = "mount: scope declares no events table — its verbs cannot be resolved" };
+    };
+    if (scope.name.len == 0) {
+        lib.close();
+        return .{ .failed = "mount: scope names itself \"\" — mount requires a name" };
+    }
+    const new_events = events_fn();
+    if (new_events.len == 0) {
+        lib.close();
+        return .{ .failed = "mount: scope declares zero verbs — nothing to install" };
+    }
+
+    // Collision is a mount refusal, not a dispatch surprise: a mounted
+    // verb never outranks what the session already owns — the bound
+    // scope's compiled verbs, a previously mounted scope's, the session's
+    // defined flows, and the granted host verbs all keep their names.
+    switch (Runtime.get_scope_event.handler(.{ .name = br.scope })) {
+        .scope => |s| if (s.events_fn) |ef| {
+            for (ef()) |ev| for (new_events) |ne| {
+                if (std.mem.eql(u8, ev, ne)) {
+                    lib.close();
+                    return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+                        "mount: verb '{s}' collides with the bound scope '{s}'", .{ ne, br.scope })
+                        catch "mount: verb collides with bound scope" };
+                }
+            };
+        },
+        .not_found => {},
+    }
+    for (br.mounted_scopes.items) |m| {
+        if (std.mem.eql(u8, m.name, scope.name)) {
+            lib.close();
+            return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+                "mount: scope '{s}' is already mounted", .{scope.name})
+                catch "mount: scope already mounted" };
+        }
+        if (m.events_fn) |ef| {
+            for (ef()) |ev| for (new_events) |ne| {
+                if (std.mem.eql(u8, ev, ne)) {
+                    lib.close();
+                    return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+                        "mount: verb '{s}' collides with mounted scope '{s}'", .{ ne, m.name })
+                        catch "mount: verb collides with a mounted scope" };
+                }
+            };
+        }
+    }
+    for (new_events) |ne| {
+        if (Interp.findDefinedFlow(br.defined, ne) != null) {
+            lib.close();
+            return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+                "mount: verb '{s}' collides with a defined flow", .{ne})
+                catch "mount: verb collides with a defined flow" };
+        }
+        if (hostInputLookup(ne) != null) {
+            lib.close();
+            return .{ .failed = std.fmt.allocPrint(koru_allocator(),
+                "mount: verb '{s}' collides with a granted host verb", .{ne})
+                catch "mount: verb collides with a host verb" };
+        }
+    }
+
+    br.mounted_scopes.append(br.allocator, scope) catch {
+        lib.close();
+        return .{ .failed = "mount: out of memory installing the scope" };
+    };
+    br.mounted_libs.append(br.allocator, lib) catch {
+        _ = br.mounted_scopes.pop();
+        lib.close();
+        return .{ .failed = "mount: out of memory retaining the module" };
+    };
+
+    return .{ .mounted = scope.name };
+}
+
+// ============================================================================
+// DISCHARGE_ALL - the hang-up sweep over the installed scope set
+// ============================================================================
+//
+// Invoke the real discharge tor for every handle still held, through the
+// session's scope.
+//
+// This used to print a line, set `discharged = true`, and call nothing: the
+// counter went to zero while every file stayed open. It now runs the same
+// loop the interpreter's end-of-run auto-discharge runs, because releasing a
+// resource is one act, not two implementations.
+//
+// A session that CANNOT release what it holds panics rather than returning
+// a number. It briefly returned the still-held count, which read as honest
+// and was not: nothing obliges a caller to look at a return value, so the
+// unread count is the same shape as the boolean it replaced — satisfied
+// bookkeeping over a live resource. It also cost more than it looked:
+// auto-discharge can only insert a disposer with NOTHING TO BIND
+// (`auto_discharge_inserter.zig:2742`), so a `-> u32` close disqualified
+// itself and every failure arm of every conversation had to hang up by hand.
+pub fn dischargeAll(br: *Bridge) void {
+    const rt = @import("root").koru_std.koru_runtime;
+    const interp = @import("root").koru_std.koru_interpreter;
+
+    switch (rt.get_scope_event.handler(.{ .name = br.scope })) {
+        .scope => |s| interp.dischargeAllHandles(
+            "BRIDGE",
+            &br.pool,
+            s.discharges_spec_fn,
+            s.dispatcher,
+            br.allocator,
+            br.mounted_scopes.items,
+        ),
+        .not_found => std.debug.panic(
+            "std/bridge:close: session '{s}' holds {d} handle(s) and its scope '{s}' is not registered, so nothing can release them",
+            .{ br.session_id, br.getHandleCount(), br.scope },
+        ),
+    }
+
+    const stranded = br.getHandleCount();
+    if (stranded != 0) std.debug.panic(
+        "std/bridge:close: session '{s}' still holds {d} handle(s) after hang-up — a discharge event failed (see the [BRIDGE] lines above)",
+        .{ br.session_id, stranded },
+    );
+}

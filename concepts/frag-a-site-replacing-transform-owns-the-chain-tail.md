@@ -24,6 +24,13 @@ the same splice `query` makes. `rule` still carries the empty-continuation
 replacement; whether its sites can legally carry a tail is the same
 question, now open on `rule`.
 
+`node:new` is the second offender, found by the 115 mirror wall (2026-10-21):
+its `rootSite` passed `&.{}` for continuations, so `std/node:new |>` anything
+silently never ran — the leak-check failure was the only tell that the drain
+tail had been eaten. Same empty-continuation shape as `preorder`, caught by a
+mirror that only existed because the wall demanded the transform fire in
+module position.
+
 ## Family
 
 Sibling of [[frag-a-continuations-owner-is-written-in-its-branch-name]]:
@@ -34,4 +41,6 @@ transform that never looked at the sequel at all.
 
 ## Pin
 
-Regression 695_008 `preorder_keeps_chain_tail`.
+Regression 695_008 `preorder_keeps_chain_tail`; 115_058
+`node_new_in_module` and 115_059 `node_spawn_in_module` pin the tail
+through `std/node:new`.

@@ -1,0 +1,17 @@
+name: health
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Auto-registered when a208056b4 declared `Signal: health` for "the
+  apparent post-emitter-fix regression surface was environmental; the
+  board is clean of new fails".
+
+  IT SHOULD NOT HAVE BEEN A NEW TYPE. The claim was that a reported
+  regression was a property of the run, not the code — that is
+  `measurement-artifact` (a number that belonged to the instrument), or
+  `test-health` (green|red vs last commit) for the board transition
+  itself. Declare those names; this file stays so the sealed commit
+  derefs.
+route: surface

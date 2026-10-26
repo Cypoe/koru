@@ -64,6 +64,11 @@
 | ok string
 | not-found
 
+// The per-scope emitters — `appendScopeVocabularyLines` and
+// `appendMountedObligationLines` — moved to the `scopelines` part: the
+// bridge's `vocabulary`/`grammar` call them for mounted scopes, so they
+// live beside the wire-spelling helpers they share.
+
 ~proc scope-vocabulary|zig {
     // A local arena over page_allocator — the same substrate the interpreter's
     // own arena and its message dupes use. ArrayList growth here allocates
@@ -77,28 +82,7 @@
 
     inline for (comptime buildScopeTable()) |scope_info| {
         if (std.mem.eql(u8, name, scope_info.name)) {
-            const events = scope_info.events_fn.?();
-            for (events) |event_name| {
-                if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-                const input = if (scope_info.input_fn) |f| f(event_name) orelse &.{} else &.{};
-                wireSignatureLine(&out, allocator, event_name, input);
-                // The outcome clause — the decl's own tail: `-> T<obl!>`
-                // for a bare return, `| name T` for declared branches,
-                // nothing for a void tor. The create/mint edge folds into
-                // the type text or names its branch.
-                const branches = if (scope_info.branches_fn) |bf| bf(event_name) else &[_]BranchSpec{};
-                wireDeclOutcome(&out, allocator, branches);
-                // What the verb IS — declaration prose beside the outcome
-                // contract, first line only (prose joins multi-line).
-                if (scope_info.doc_fn) |df| {
-                    const doc = df(event_name);
-                    const first_line = if (std.mem.indexOfScalar(u8, doc, '\n')) |nl| doc[0..nl] else doc;
-                    if (first_line.len > 0) {
-                        out.appendSlice(allocator, " — ") catch unreachable;
-                        out.appendSlice(allocator, first_line) catch unreachable;
-                    }
-                }
-            }
+            appendScopeVocabularyLines(&out, allocator, scope_info);
             return .{ .ok = out.toOwnedSlice(allocator) catch unreachable };
         }
     }

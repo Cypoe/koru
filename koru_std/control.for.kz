@@ -1,0 +1,117 @@
+~[template]proc for|zig {
+    {% if __parallel != "" %}{
+        // [parallel]for — split the iteration space, spawn one thread per
+        // chunk, fold each serially, join. Ranges (`lo..hi`) split
+        // arithmetically; anything else materializes into a stack buffer
+        // (usize items, 8192 cap — spike shape).
+        //
+        // Capture cells (`.assignment` targets under the effect arms) are
+        // PARTITIONED, never shared: each worker receives a copy, zeroes its
+        // written fields (the additive identity), folds its chunk into the
+        // private cell, and hands the partial back through a slot the join
+        // combines into the real cell field-wise with `+=`. The capture
+        // transform retargeted these writes to worker-local names — a
+        // worker can't rebind the outer cell's name without tripping Zig's
+        // no-shadow rule. A write the checker can't prove additive renders
+        // as @compileError inside run — partition without a combine law is
+        // a wrong answer, not a missing feature. A failed spawn runs the
+        // chunk inline — the work is owed, width is the only thing lost.
+        const __koru_par_body{{ __site }} = struct {
+            {% if __range_lo != "" %}fn run(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                {% for e in __env %}const {{ e.local }} = __koru_par_env.{{ e.name }}; _ = &{{ e.local }};
+                {% endfor %}{% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
+                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
+                {% endif %}{% endfor %}{% endfor %}for (__koru_par_lo..__koru_par_hi) |__koru_item{{ __site }}| {
+                    {% if keep != "" %}if (!({{ keep }})) break;
+                    {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+                    {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
+                }
+                {% for c in __cells %}__koru_par_cap_out.{{ c.name }} = {{ c.name }};
+                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
+                {% endif %}{% endfor %}{% endfor %}
+            }
+            fn runTask(__koru_par_lo: usize, __koru_par_hi: usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                __koru_par_depth += 1;
+                defer __koru_par_depth -= 1;
+                run(__koru_par_lo, __koru_par_hi{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %}{% if __env %}, __koru_par_env{% endif %});
+                _ = __koru_par_tasks.fetchSub(1, .monotonic);
+            }
+            {% else %}fn run(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                {% for e in __env %}const {{ e.local }} = __koru_par_env.{{ e.name }}; _ = &{{ e.local }};
+                {% endfor %}{% for c in __cells %}var {{ c.name }} = __koru_par_cap_in.{{ c.name }};
+                {% for f in c.fields %}{% if f.ok != "" %}{{ c.name }}.{{ f.name }} = {{ f.init }};
+                {% endif %}{% endfor %}{% endfor %}for (__koru_par_slice) |__koru_item{{ __site }}| {
+                    {% if keep != "" %}if (!({{ keep }})) break;
+                    {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+                    {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
+                }
+                {% for c in __cells %}__koru_par_cap_out.{{ c.name }} = {{ c.name }};
+                {% for f in c.fields %}{% if f.ok == "" %}@compileError("[parallel]for: `{{ f.expr }}` is not a provably additive write to `{{ c.real }}.{{ f.name }}` — partition needs a combine law (provable monoid); write `{{ f.name }}: {{ c.real }}.{{ f.name }} + <expr>` (or `*` / `@rem` fold) or drop [parallel]");
+                {% endif %}{% endfor %}{% endfor %}
+            }
+            fn runTask(__koru_par_slice: []const usize{% if __cells %}, __koru_par_cap_in: anytype, __koru_par_cap_out: anytype{% endif %}{% if __env %}, __koru_par_env: anytype{% endif %}) void {
+                __koru_par_depth += 1;
+                defer __koru_par_depth -= 1;
+                run(__koru_par_slice{% if __cells %}, __koru_par_cap_in, __koru_par_cap_out{% endif %}{% if __env %}, __koru_par_env{% endif %});
+                _ = __koru_par_tasks.fetchSub(1, .monotonic);
+            }
+            {% endif %}
+        };
+        const __koru_par_CAP{{ __site }} = 64;
+        const __koru_par_C{{ __site }} = @min(@import("std").Thread.getCpuCount() catch 4, __koru_par_CAP{{ __site }});
+        var __koru_par_wg{{ __site }}: @import("std").Thread.WaitGroup = .{};
+        {% if __cells %}var __koru_par_caps{{ __site }}: [__koru_par_CAP{{ __site }}]@TypeOf(.{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }) = undefined;
+        var __koru_par_ok{{ __site }}: [__koru_par_CAP{{ __site }}]bool = @splat(false);
+        {% endif %}{% if __range_lo != "" %}const __koru_par_rlo{{ __site }}: usize = {{ __range_lo }};
+        const __koru_par_rhi{{ __site }}: usize = {{ __range_hi }};
+        for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
+            const __koru_par_lo = __koru_par_rlo{{ __site }} + __koru_par_c * (__koru_par_rhi{{ __site }} - __koru_par_rlo{{ __site }}) / __koru_par_C{{ __site }};
+            const __koru_par_hi = __koru_par_rlo{{ __site }} + (__koru_par_c + 1) * (__koru_par_rhi{{ __site }} - __koru_par_rlo{{ __site }}) / __koru_par_C{{ __site }};
+            if (__koru_par_lo < __koru_par_hi) {
+                {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
+                {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
+                    _ = __koru_par_tasks.fetchAdd(1, .monotonic);
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %} });
+                } else {
+                    __koru_par_body{{ __site }}.run(__koru_par_lo, __koru_par_hi{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %});
+                }
+            }
+        }
+        {% else %}var __koru_par_buf{{ __site }}: [8192]usize = undefined;
+        var __koru_par_n{{ __site }}: usize = 0;
+        for ({{ expr }}) |__koru_par_it| {
+            if (@TypeOf(__koru_par_it) != usize) @compileError("[parallel]for materializes non-range iterables as usize — item type '" ++ @typeName(@TypeOf(__koru_par_it)) ++ "' isn't lowered yet. Split a usize range (lo..hi), or drop [parallel]");
+            __koru_par_buf{{ __site }}[__koru_par_n{{ __site }}] = __koru_par_it;
+            __koru_par_n{{ __site }} += 1;
+        }
+        const __koru_par_items{{ __site }} = __koru_par_buf{{ __site }}[0..__koru_par_n{{ __site }}];
+        for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
+            const __koru_par_lo = __koru_par_c * __koru_par_items{{ __site }}.len / __koru_par_C{{ __site }};
+            const __koru_par_hi = (__koru_par_c + 1) * __koru_par_items{{ __site }}.len / __koru_par_C{{ __site }};
+            if (__koru_par_lo < __koru_par_hi) {
+                {% if __cells %}__koru_par_ok{{ __site }}[__koru_par_c] = true;
+                {% endif %}if (__koru_par_tasks.load(.monotonic) < __koru_par_CAP) {
+                    _ = __koru_par_tasks.fetchAdd(1, .monotonic);
+                    __koru_par_pool_ensure().spawnWg(&__koru_par_wg{{ __site }}, __koru_par_body{{ __site }}.runTask, .{ __koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %} });
+                } else {
+                    __koru_par_body{{ __site }}.run(__koru_par_items{{ __site }}[__koru_par_lo..__koru_par_hi]{% if __cells %}, .{ {% for c in __cells %}.{{ c.name }} = {{ c.real }},{% endfor %} }, &__koru_par_caps{{ __site }}[__koru_par_c]{% endif %}{% if __env %}, .{ {% for e in __env %}.{{ e.name }} = {{ e.name }},{% endfor %} }{% endif %});
+                }
+            }
+        }
+        {% endif %}if (__koru_par_pool_ready) __koru_par_pool.waitAndWork(&__koru_par_wg{{ __site }});
+        {% if __cells %}for (0..__koru_par_C{{ __site }}) |__koru_par_c| {
+            if (__koru_par_ok{{ __site }}[__koru_par_c]) {
+                {% for c in __cells %}{% for f in c.fields %}{% if f.ok != "" %}{% if f.wrap != "" %}{{ c.real }}.{{ f.name }} = @rem({{ c.real }}.{{ f.name }} {{ f.op }} __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }}, {{ f.wrap }});
+                {% else %}{{ c.real }}.{{ f.name }} {{ f.op }}= __koru_par_caps{{ __site }}[__koru_par_c].{{ c.name }}.{{ f.name }};
+                {% endif %}{% endif %}{% endfor %}{% endfor %}
+            }
+        }
+        {% endif %}
+    }
+    {% else %}for ({{ expr }}) |__koru_item{{ __site }}| {
+        {% if keep != "" %}if (!({{ keep }})) break;
+        {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+        {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
+    }
+    {% endif %}{{ continuations["done"].continue }}
+}

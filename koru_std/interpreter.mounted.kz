@@ -1,0 +1,510 @@
+// Koru Standard Library: the `mounted` part of interpreter — the
+// runtime-installed scope lane. Joined via `~part mounted` in
+// interpreter.kz; merged into the interpreter module at load.
+//
+// A scope mounted by `std/bridge:mount` is a `.dylib` whose
+// `koru_module_init` handed the host a ScopeRuntime — the same vtable a
+// register block emits at compile time. Every check a run performs on a
+// verb then answers to the installed scope SET (bound first, then
+// mounted), not the bound scope alone: this part holds the channel the
+// set rides in on, the host-service ABI a module stores at init, the
+// owner resolution every check consults, and the checks themselves —
+// held-possession, the dispatch fallback, the arm-word walk, obligation
+// bookkeeping, and the sweep's discharge-owner search — each moved here
+// because each now resolves an owner the bound scope may not be.
+
+const ScopeRuntime = @import("root").koru_std.koru_runtime.ScopeRuntime;
+
+/// The untyped spelling of resolveDispatchResource — the form a mounted
+/// scope's dispatcher can call across the module boundary, where the
+/// resource type is declared on the module's side and the host cannot
+/// name it. Same channel, same liveness rule; the cast is the module's
+/// own act.
+pub fn resolveDispatchResourceAny(token: []const u8) ?*anyopaque {
+    const pool = __dispatch_pool orelse return null;
+    return pool.resolveResource(token);
+}
+
+// ============================================================================
+// THE RUN-MOUNTED CHANNEL - the installed scope set, threadlocal per run
+// ============================================================================
+//
+// A `.dylib` scope mounted by std/bridge travels to the run the way the
+// dispatch pool travels to a dispatcher: a threadlocal the caller sets
+// for the call's duration, because the tor decl grammar has no optional
+// slice. The bridge sets it around `std/runtime:run`; the interpreter
+// reads it when building the context, and the same slice reaches the
+// arg-check, the held-check, the dispatch fallback, and the sweep.
+threadlocal var __run_mounted_scopes: []const ScopeRuntime = &.{};
+
+pub fn setRunMountedScopes(scopes: []const ScopeRuntime) void {
+    __run_mounted_scopes = scopes;
+}
+
+pub fn clearRunMountedScopes() void {
+    __run_mounted_scopes = &.{};
+}
+
+pub fn runMountedScopes() ?[]const ScopeRuntime {
+    if (__run_mounted_scopes.len == 0) return null;
+    return __run_mounted_scopes;
+}
+
+// ============================================================================
+// MOUNTED HOST SERVICES - the ABI a .dylib scope is handed at init
+// ============================================================================
+//
+// A mounted scope's dispatcher is generated code that cannot be linked
+// against this process — the same problem generated dispatchers already
+// have with the pool and the detail slot, answered the same way: a table
+// of host-side entry points the module stores at init. The channels above
+// are the host end of the table; the module's dispatchers call these
+// pointers exactly as in-binary dispatchers call the functions.
+//
+// The version field is the whole compatibility story for now: a module
+// must be built by the same toolchain as the host it mounts into (the
+// struct layouts it reads — Invocation, DispatchResult, the spec records —
+// are compiled, not serialized). A frozen C ABI is a later ruling, not a
+// silent drift today.
+
+pub const KORU_MOUNTED_ABI_VERSION: u32 = 1;
+
+pub const MountedHostServices = struct {
+    abi_version: u32,
+    set_dispatch_detail: *const fn ([]const u8) void,
+    register_dispatch_resource: *const fn ([]const u8, *anyopaque) []const u8,
+    resolve_dispatch_resource: *const fn ([]const u8) ?*anyopaque,
+};
+
+pub fn mountedHostServices() MountedHostServices {
+    return .{
+        .abi_version = KORU_MOUNTED_ABI_VERSION,
+        .set_dispatch_detail = &setDispatchDetail,
+        .register_dispatch_resource = &registerDispatchResource,
+        .resolve_dispatch_resource = &resolveDispatchResourceAny,
+    };
+}
+
+// ============================================================================
+// OWNER RESOLUTION - which scope answers for a verb name
+// ============================================================================
+//
+// Bound scope first, so a mounted owner answers only for names the bound
+// scope does not declare. Membership answers come from `input_fn`/`events_fn`
+// — the same tables the prompt and the gate read, so dispatch cannot see a
+// verb the vocabulary hid. Mount refuses name collisions with the bound
+// scope (std/bridge:mount), which is what makes "bound claims it" and
+// "mounted claims it" exclusive.
+
+fn mountedScopeFor(ctx: *const InterpreterContext, event_name: []const u8) ?*const ScopeRuntime {
+    if (ctx.input_fn) |f| {
+        if (f(event_name) != null) return null;
+    }
+    const ms = ctx.mounted orelse return null;
+    for (ms) |*m| {
+        const ef = m.events_fn orelse continue;
+        for (ef()) |en| {
+            if (std.mem.eql(u8, en, event_name)) return m;
+        }
+    }
+    return null;
+}
+
+/// Every lookup a run does on a verb, resolved against its owner: the
+/// mounted scope's own fns when a module owns the name, the bound
+/// scope's (ctx) otherwise. `.mounted` names the owning module, so the
+/// dispatch path can skip the bound dispatcher's EventDenied round-trip.
+pub const ResolvedOwner = struct {
+    mounted: ?*const ScopeRuntime = null,
+    cost_fn: ?CostFn = null,
+    input_fn: ?InputLookupFn = null,
+    creates_spec_fn: ?CreatesSpecFn = null,
+    discharges_spec_fn: ?DischargesSpecFn = null,
+    discharge_event_fn: ?DischargeEventFn = null,
+    creates_obligations_fn: ?ObligationsArrayFn = null,
+    discharges_obligations_fn: ?ObligationsArrayFn = null,
+};
+
+pub fn resolveOwner(ctx: *const InterpreterContext, event_name: []const u8) ResolvedOwner {
+    if (mountedScopeFor(ctx, event_name)) |o| return .{
+        .mounted = o,
+        .cost_fn = o.cost_fn,
+        .input_fn = o.input_fn,
+        .creates_spec_fn = o.creates_spec_fn,
+        .discharges_spec_fn = o.discharges_spec_fn,
+        .discharge_event_fn = o.discharge_event_fn,
+        .creates_obligations_fn = o.creates_obligations_fn,
+        .discharges_obligations_fn = o.discharges_obligations_fn,
+    };
+    return .{
+        .cost_fn = ctx.cost_fn,
+        .input_fn = ctx.input_fn,
+        .creates_spec_fn = ctx.creates_spec_fn,
+        .discharges_spec_fn = ctx.discharges_spec_fn,
+        .discharge_event_fn = ctx.discharge_event_fn,
+        .creates_obligations_fn = ctx.creates_obligations_fn,
+        .discharges_obligations_fn = ctx.discharges_obligations_fn,
+    };
+}
+
+/// The input vocabulary for `name`, bound scope first then each mounted
+/// scope's own table — the gate, the arg-check, and the prompt all read
+/// whichever owner answers. A verb no scope declares keeps its null:
+/// membership stays a dispatch question, not a validation one.
+pub fn ownerInputSpec(
+    bound_input: ?InputLookupFn,
+    mounted: ?[]const ScopeRuntime,
+    name: []const u8,
+) ?[]const InputFieldSpec {
+    if (bound_input) |f| {
+        if (f(name)) |spec| return spec;
+    }
+    const ms = mounted orelse return null;
+    for (ms) |*m| {
+        if (m.input_fn) |f| {
+            if (f(name)) |spec| return spec;
+        }
+    }
+    return null;
+}
+
+fn mountedBranches(mounted: ?[]const ScopeRuntime, event_name: []const u8) ?[]const BranchSpec {
+    const ms = mounted orelse return null;
+    for (ms) |*m| {
+        if (m.branches_fn) |f| {
+            const ef = m.events_fn orelse continue;
+            for (ef()) |en| {
+                if (std.mem.eql(u8, en, event_name)) return f(event_name);
+            }
+        }
+    }
+    return null;
+}
+
+const MountedDischargeOwner = struct { arg_name: []const u8, dispatcher: DispatchFn };
+
+/// The discharge verb a handle retires through may live on a mounted
+/// scope — the sweep asks each mounted descriptor's discharges table the
+/// same spec question it asked the bound scope's, and dispatches through
+/// ITS dispatcher. Mounted handles release on the same sweep; a scope's
+/// module does not outrank its own custody.
+pub fn mountedDischargeOwner(
+    mounted: ?[]const ScopeRuntime,
+    discharge_event: []const u8,
+    obligation_module: []const u8,
+    obligation_name: []const u8,
+) ?MountedDischargeOwner {
+    const ms = mounted orelse return null;
+    for (ms) |*m| {
+        const mspec_fn = m.discharges_spec_fn orelse continue;
+        for (mspec_fn(discharge_event)) |spec| {
+            if (std.mem.eql(u8, spec.obligation_module, obligation_module) and
+                std.mem.eql(u8, spec.obligation_name, obligation_name)) {
+                return .{ .arg_name = spec.arg_name, .dispatcher = m.dispatcher };
+            }
+        }
+    }
+    return null;
+}
+
+/// Dispatch through the verb's owner: a mounted scope's own dispatcher
+/// when the module owns the name (the bound dispatcher would only deny
+/// it), else the bound dispatcher — whose EventDenied then falls to the
+/// host verbs (vocabulary, grammar — granted by the host, not the
+/// register block). No owner and no grant: EventDenied propagates.
+fn dispatchThroughOwner(
+    ctx: *InterpreterContext,
+    own: ResolvedOwner,
+    event_name: []const u8,
+    evaluated_inv: *const ast.Invocation,
+    dispatch_result: *DispatchResult,
+) !void {
+    if (own.mounted) |mo| {
+        mo.dispatcher(evaluated_inv, dispatch_result) catch |merr| {
+            if (takeDispatchDetail()) |det| ctx.error_detail = det;
+            return merr;
+        };
+        return;
+    }
+    const bound = ctx.dispatcher orelse return error.NoDispatcher;
+    bound(evaluated_inv, dispatch_result) catch |derr| {
+        // A dispatcher that fails on typed args reports through the
+        // detail slot — fold it into the teaching channel.
+        if (takeDispatchDetail()) |det| ctx.error_detail = det;
+        if (derr != error.EventDenied) return derr;
+        const hd = ctx.host_dispatch orelse return derr;
+        const view = HostView{
+            .scope_name = ctx.scope_name,
+            .defined = ctx.defined,
+            .allocator = ctx.allocator,
+            .error_detail = &ctx.error_detail,
+            .session_env = ctx.session_env,
+            .mounted = ctx.mounted,
+            .custody_ctx = if (ctx.handle_pool) |p| p.custody_ctx else null,
+        };
+        try hd(event_name, evaluated_inv, &view, dispatch_result);
+    };
+}
+
+/// Refuse a discharge tor that names a handle the pool does not hold —
+/// now answered against the verb's owner: a mounted verb's possession
+/// grammar lives on ITS descriptor.
+///
+/// The handle name IS the capability: a run may act on what it was handed and
+/// on nothing else. Called BEFORE the dispatcher, because the discharge proc is
+/// the irreversible half — releasing a resource you were never given cannot be
+/// walked back by observing afterwards that no obligation was retired.
+///
+/// `error.HandleNotHeld` surfaces as `dispatch-error` carrying that name, the
+/// same channel `EventDenied` uses for a verb the scope refuses.
+fn assertHandlesHeld(
+    ctx: *InterpreterContext,
+    pool: *HandlePool,
+    event_name: []const u8,
+    args: []const ast.Arg,
+) !void {
+    const own = resolveOwner(ctx, event_name);
+    if (own.discharges_spec_fn) |spec_fn| {
+        for (spec_fn(event_name)) |spec| {
+            for (args) |arg| {
+                if (!std.mem.eql(u8, arg.name, spec.arg_name)) continue;
+                // SPEND possession — `field: T<!state>` must name a live
+                // handle carrying EXACTLY that obligation, the same gate the
+                // borrow pass below enforces for `T<state>`. An existence-only
+                // check let a live-but-wrong-tag arg reach the spend proc —
+                // a <found> in `confirm(held:)` booked the search JSON
+                // env-side, and the discharge machinery would have retired
+                // the <found>. Measured on kopium's airline-native scope.
+                const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
+                    // "names nothing" vs "was already spent": the pool keeps
+                    // discharged handles, so a raw scan tells a spent rN
+                    // from a literal that never was one.
+                    var spent = false;
+                    for (pool.handles.items) |*x| {
+                        if (x.discharged and
+                            std.mem.eql(u8, x.scope_name, ctx.scope_name) and
+                            std.mem.eql(u8, x.handle_id, arg.value)) {
+                            spent = true;
+                            break;
+                        }
+                    }
+                    const clause: []const u8 = if (spent)
+                        "was already spent — an obligation discharges once" else
+                        "names nothing the session holds";
+                    ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                        "'{s}' wants a live <{s}> to spend — '{s}' {s}. Mint one through a verb whose signature ends '-> <{s}!>'",
+                        .{ spec.arg_name, spec.obligation_name, arg.value, clause, spec.obligation_name }) catch null;
+                    return error.HandleNotHeld;
+                };
+                if (!std.mem.eql(u8, h.obligation_name, spec.obligation_name)) {
+                    ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                        "'{s}' wants a <{s}> to spend — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
+                        .{ spec.arg_name, spec.obligation_name, arg.value, h.obligation_name, spec.obligation_name }) catch null;
+                    return error.HandleNotHeld;
+                }
+                break;
+            }
+        }
+    } else if (own.discharges_obligations_fn) |discharges_fn| {
+        if (discharges_fn(event_name).len != 0 and args.len > 0 and
+            pool.findByHandleIdAnyScope(args[0].value) == null)
+        {
+            return error.HandleNotHeld;
+        }
+    }
+
+    // BORROW possession — `field: T<state>` (no `!`) must name a live handle
+    // carrying that obligation. Consumes are covered by the spec pass above;
+    // a borrow proves the session holds the value without spending it — the
+    // arg IS the capability either way. A literal in this position is a
+    // forgery the wire cannot express any other way.
+    const input_fn = own.input_fn orelse return;
+    const fields = input_fn(event_name) orelse return;
+    for (fields) |field| {
+        const p = field.phantom orelse continue;
+        if (p.len == 0 or p[0] == '!' or p[p.len - 1] == '!') continue;
+        const state = if (std.mem.lastIndexOfScalar(u8, p, ':')) |c| p[c + 1 ..] else p;
+        for (args) |arg| {
+            if (!std.mem.eql(u8, arg.name, field.name)) continue;
+            const h = pool.findByHandleId(arg.value, ctx.scope_name) orelse {
+                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                    "'{s}' wants a live <{s}> — '{s}' names nothing the session holds. Mint one through a verb whose signature ends '-> <{s}!>'",
+                    .{ field.name, state, arg.value, state }) catch null;
+                return error.HandleNotHeld;
+            };
+            if (!std.mem.eql(u8, h.obligation_name, state)) {
+                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                    "'{s}' wants a live <{s}> — '{s}' is a <{s}>. Mint one through a verb whose signature ends '-> <{s}!>'",
+                    .{ field.name, state, arg.value, h.obligation_name, state }) catch null;
+                return error.HandleNotHeld;
+            }
+            // Witness the exercise — a `use` line on a dead handle can
+            // then only mean this gate regressed.
+            pool.noteUse(h, event_name);
+            break;
+        }
+    }
+}
+
+/// ARM VOCABULARY — an arm word the verb cannot issue is dead by
+/// construction: it never fires, and without this check it fails only
+/// downstream (unbound name) or silently (name never read). Judged while
+/// the outcome list is still in context, so the refusal names the legal
+/// arms — read from whichever scope owns the verb, mounted tables
+/// answering for mounted verbs. Empty = the anonymous `ok`, the only arm
+/// word the verb knows. Catchalls (`|*`) always pass.
+fn checkArmWords(
+    input_fn: ?InputLookupFn,
+    branches_fn: ?BranchesLookupFn,
+    mounted: ?[]const ScopeRuntime,
+    event_name: []const u8,
+    cont: *const ast.Continuation,
+    allocator: std.mem.Allocator,
+) ?ValidationError {
+    const bound_claims = if (input_fn) |f| f(event_name) != null else false;
+    const outcomes: ?[]const BranchSpec = if (bound_claims)
+        (if (branches_fn) |bf| bf(event_name) else null)
+    else
+        mountedBranches(mounted, event_name);
+    const o = outcomes orelse return null;
+    for (cont.continuations) |*arm| {
+        if (arm.is_catchall or arm.kind != .terminal) continue;
+        var legal = o.len == 0 and std.mem.eql(u8, arm.branch, "ok");
+        for (o) |outcome| {
+            if (std.mem.eql(u8, outcome.name, arm.branch)) {
+                legal = true;
+                break;
+            }
+        }
+        if (!legal) {
+            var names = std.ArrayList(u8){};
+            defer names.deinit(allocator);
+            if (o.len == 0) {
+                names.appendSlice(allocator, "ok") catch {};
+            } else for (o, 0..) |outcome, i| {
+                if (i > 0) names.appendSlice(allocator, " | ") catch {};
+                names.appendSlice(allocator, outcome.name) catch {};
+            }
+            return .{
+                .message = std.fmt.allocPrint(allocator, "'{s}' is not an outcome of '{s}' — it issues {s}; arm words are those names", .{ arm.branch, event_name, names.items }) catch "arm word matches no outcome",
+                .binding_name = arm.binding orelse arm.branch,
+            };
+        }
+    }
+    return null;
+}
+
+/// Book a dispatch into the ledger — every obligation the verb mints
+/// lands on the pool with its discharge path and dependency edges; every
+/// obligation it spends is retired. The spec fns come from the scope
+/// that answered dispatch: a mounted verb's creates/discharges live on
+/// ITS descriptor, so the ledger the bridge sweeps at hang-up is one
+/// table regardless of which scope wrote to it.
+fn recordDispatchObligations(
+    ctx: *InterpreterContext,
+    own: ResolvedOwner,
+    event_name: []const u8,
+    evaluated_inv: *const ast.Invocation,
+    dispatch_result: *const DispatchResult,
+) !void {
+    const pool = ctx.handle_pool orelse return;
+    if (own.creates_spec_fn) |spec_fn| {
+        const specs = spec_fn(event_name);
+        for (specs) |spec| {
+            // A branch-scoped spec acquires only on the outcome that carried it.
+            if (spec.branch) |sb| { if (!namesEql(sb, dispatch_result.branch)) continue; }
+            // Find the discharge tor — scope-local obligation name.
+            const discharge_event = if (own.discharge_event_fn) |discharge_fn|
+                discharge_fn(spec.obligation_name) orelse "unknown"
+            else
+                "unknown";
+            // Extract handle_id from dispatch result using spec.field_name
+            // Handle IDs must be strings - skip if not found or wrong type
+            var handle_id: ?[]const u8 = null;
+            for (dispatch_result.fields) |field| {
+                if (std.mem.eql(u8, field.name, spec.field_name)) {
+                    handle_id = switch (field.value) {
+                        .string_val => |s| s,
+                        else => null,  // Only strings are valid handle IDs
+                    };
+                    break;
+                }
+            }
+            // A spec that mints nothing is a broken contract —
+            // the tor declared `<x!>` on this branch and its
+            // result carried no holdable field under that name.
+            // Refuse loudly; skipping would mint a silent lie.
+            const hid = handle_id orelse {
+                ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
+                    "tor '{s}' owes <{s}:{s}> on field '{s}' but its '{s}' result carried no string token",
+                    .{ event_name, spec.obligation_module, spec.obligation_name, spec.field_name, dispatch_result.branch }) catch null;
+                return error.ObligationUnfulfilled;
+            };
+            {
+                // Guarded withdrawal (derived, never authored):
+                // any input arg that names a currently-held handle
+                // in this pool makes the new handle a dependent of
+                // that provider. The provider must outlive it —
+                // release order follows (dependents first).
+                var dep_ids: [4]u32 = .{0} ** 4;
+                var dep_len: usize = 0;
+                for (evaluated_inv.args) |arg| {
+                    if (dep_len >= dep_ids.len) break;
+                    if (pool.findByHandleId(arg.value, ctx.scope_name)) |provider| {
+                        dep_ids[dep_len] = provider.id;
+                        dep_len += 1;
+                    }
+                }
+                // Custody subject: the verb's own args — the
+                // why of the possess, witnessed at the mint.
+                var subject_buf: [192]u8 = undefined;
+                _ = pool.acquire(hid, spec.obligation_module, spec.obligation_name, discharge_event,
+                    event_name, spec.resource_type, ctx.scope_name, dep_ids[0..dep_len],
+                    custodySubject(&subject_buf, evaluated_inv.args)) catch {};
+            }
+        }
+    } else if (own.creates_obligations_fn) |creates_fn| {
+        // Fallback to legacy API
+        const obligations = creates_fn(event_name);
+        for (obligations, 0..) |obligation, i| {
+            const discharge_event = if (own.discharge_event_fn) |discharge_fn|
+                discharge_fn(obligation) orelse "unknown"
+            else
+                "unknown";
+            var binding_buf: [64]u8 = undefined;
+            const binding_name = if (obligations.len > 1)
+                std.fmt.bufPrint(&binding_buf, "result.{s}.{d}", .{dispatch_result.branch, i}) catch "result"
+            else
+                std.fmt.bufPrint(&binding_buf, "result.{s}", .{dispatch_result.branch}) catch "result";
+            var subject_buf: [192]u8 = undefined;
+            _ = pool.acquire(binding_name, "unknown", obligation, discharge_event,
+                event_name, "unknown", ctx.scope_name, &.{},
+                custodySubject(&subject_buf, evaluated_inv.args)) catch {};
+        }
+    }
+
+    // Check if this tor discharges obligations - prefer new spec API
+    if (own.discharges_spec_fn) |spec_fn| {
+        const specs = spec_fn(event_name);
+        for (specs) |spec| {
+            // Extract handle_id from args using spec.arg_name
+            for (evaluated_inv.args) |arg| {
+                if (std.mem.eql(u8, arg.name, spec.arg_name)) {
+                    // Scope-aware lookup prevents cross-scope discharge
+                    if (pool.findByHandleId(arg.value, ctx.scope_name)) |handle| {
+                        pool.dischargeById(handle.id);
+                    }
+                    break;
+                }
+            }
+        }
+    } else if (own.discharges_obligations_fn) |discharges_fn| {
+        // Fallback to legacy API
+        const obligations = discharges_fn(event_name);
+        if (obligations.len > 0) {
+            if (evaluated_inv.args.len > 0) {
+                pool.discharge(evaluated_inv.args[0].value);
+            }
+        }
+    }
+}

@@ -1,6 +1,6 @@
 ~proc scan-pairs|cs {
-    pair((a: 1L, b: 2L));
-    pair((a: 3L, b: 4L));
-    pair((a: 5L, b: 6L));
+    pair(new pair_payload { a = 1L, b = 2L });
+    pair(new pair_payload { a = 3L, b = 4L });
+    pair(new pair_payload { a = 5L, b = 6L });
     return new Output { tag = "done" };
 }

@@ -303,6 +303,32 @@ fn expectEventDeclSkipped(input_fields: []ast.Field) !void {
     try testing.expectEqual(@as(usize, 0), code_emitter.getOutput().len);
 }
 
+fn emitEmptyBranchEvent(buffer: []u8, segments: []const []const u8) ![]const u8 {
+    var code_emitter = emitter.CodeEmitter.init(buffer);
+
+    var input_fields = [_]ast.Field{};
+    var output_fields = [_]ast.Field{};
+    const input_shape = ast.Shape{ .fields = &input_fields };
+    const output_shape = ast.Shape{ .fields = &output_fields };
+    var branches = [_]ast.Branch{
+        .{ .name = "done", .payload = output_shape, .is_optional = false },
+    };
+
+    const event = ast.EventDecl{
+        .path = .{ .module_qualifier = null, .segments = @constCast(segments) },
+        .input = input_shape,
+        .branches = &branches,
+        .is_public = true,
+        .is_implicit_flow = false,
+        .annotations = @constCast(&[_][]const u8{}),
+        .location = .{ .line = 1, .column = 0, .file = "test.kz" },
+        .module = "test",
+    };
+
+    try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
+    return code_emitter.getOutput();
+}
+
 fn markerField(name: []const u8, field_type: []const u8, is_source: bool) ast.Field {
     return .{ .name = name, .type = field_type, .is_file = false, .is_embed_file = false, .is_source = is_source, .phantom = null, .expression = null, .expression_str = null, .owns_expression = false };
 }
@@ -325,30 +351,7 @@ test "skip events with Program parameters" {
 test "event name becomes snake_case with _event suffix" {
     // Convention: ~event hello becomes hello_event
     var buffer: [4096]u8 = undefined;
-    var code_emitter = emitter.CodeEmitter.init(&buffer);
-
-    var input_fields = [_]ast.Field{};
-    var output_fields = [_]ast.Field{};
-    const input_shape = ast.Shape{ .fields = &input_fields };
-    const output_shape = ast.Shape{ .fields = &output_fields };
-    var branches = [_]ast.Branch{
-        .{ .name = "done", .payload = output_shape, .is_optional = false },
-    };
-
-    const event = ast.EventDecl{
-        .path = .{ .module_qualifier = null, .segments = @constCast(&[_][]const u8{"hello"}) },
-        .input = input_shape,
-        .branches = &branches,
-        .is_public = true,
-        .is_implicit_flow = false,
-        .annotations = @constCast(&[_][]const u8{}),
-        .location = .{ .line = 1, .column = 0, .file = "test.kz" },
-        .module = "test",
-    };
-
-    try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
-
-    const output = code_emitter.getOutput();
+    const output = try emitEmptyBranchEvent(&buffer, &[_][]const u8{"hello"});
 
     // Should be named hello_event
     try testing.expect(std.mem.indexOf(u8, output, "pub const hello_event = struct {") != null);
@@ -422,30 +425,7 @@ test "empty branch payload generates empty struct" {
 test "handler always takes __koru_event_input parameter" {
     // Convention from line ~2150 of compiler_bootstrap
     var buffer: [4096]u8 = undefined;
-    var code_emitter = emitter.CodeEmitter.init(&buffer);
-
-    var input_fields = [_]ast.Field{};
-    var output_fields = [_]ast.Field{};
-    const input_shape = ast.Shape{ .fields = &input_fields };
-    const output_shape = ast.Shape{ .fields = &output_fields };
-    var branches = [_]ast.Branch{
-        .{ .name = "done", .payload = output_shape, .is_optional = false },
-    };
-
-    const event = ast.EventDecl{
-        .path = .{ .module_qualifier = null, .segments = @constCast(&[_][]const u8{"test"}) },
-        .input = input_shape,
-        .branches = &branches,
-        .is_public = true,
-        .is_implicit_flow = false,
-        .annotations = @constCast(&[_][]const u8{}),
-        .location = .{ .line = 1, .column = 0, .file = "test.kz" },
-        .module = "test",
-    };
-
-    try emitter.emitEventDeclInMainModule(&code_emitter, &event, &[_]ast.Item{});
-
-    const output = code_emitter.getOutput();
+    const output = try emitEmptyBranchEvent(&buffer, &[_][]const u8{"test"});
 
     // Handler signature must use __koru_event_input
     try testing.expect(std.mem.indexOf(u8, output, "pub fn handler(__koru_event_input: Input) Output {") != null);

@@ -121,6 +121,7 @@ pub const ErrorCode = enum(u16) {
     KORU124, // Transform invoked in continuation position via the whole-program escape — the real nested invocation is never rewritten (frontier: 210_024_source_scope_capture)
     KORU125, // `{% if %}` / `{% unless %}` condition outside the engine's grammar — an unparseable condition is never silently false
     KORU126, // `--lang=<tag>` names no emitter and no proc variant the program declares — a tag that selects nothing compiles nothing
+    KORU127, // A kernel scope admits exactly one `std/kernel:step` — a second step invocation would silently replace the earlier range (emitted by koru_std/kernel.kz)
 
     // Presence errors (optional effect arms — `if(arm)` / `when arm`)
     KORU130, // Value-resuming optional arm fired without a dominating presence test
@@ -155,10 +156,15 @@ pub const ErrorCode = enum(u16) {
     KORU177, // A call-site `|variant` names no declared proc target — the emitter would write a handler__<variant> call that resolves to nothing and surface it as a Zig backend 'no member' error. Emitted by src/flow_checker.zig (370_015).
     KORU178, // A std/json:parse call site is malformed — missing input, a branch outside ok/malformed, an empty or untypeable schema, an unsupported field type, or a destructure annotation a parse does not implement. One code for the class; the message names the fault. Emitted by koru_std/json.parse.kz — reserved in scripts/registry_reserved.txt.
     KORU179, // A std/panic:catch declaration is malformed — a missing site pattern, a non-`!` arm, no `!` arms, a pattern that grafts nothing, two catches claiming one site+branch, or an absorb arm grafted into a producing flow that ends without a verdict. One code for the class; the message names the fault. Emitted by koru_std/panic.kz — reserved in scripts/registry_reserved.txt.
-    KORU180, // A pass-graph contract edge is malformed or unresolvable — a `contract:requires` naming no decl, an ambiguous bare name, a non-transform target, a `contract:preserves`/`contract:obliges` on a non-transform decl, a preserves bound naming an unknown item kind or mixing bare/`!` modes, an obliges naming an unknown predicate, or a requires cycle with no lawful ordering. One code for the class; the message names the fault. Emitted by src/pass_graph.zig.
-    KORU181, // A transform's write-back exceeds its declared `contract:preserves` bound — an item kind the bound holds invariant was removed, added, or appended. The bound is the blast radius; exceeding it refuses rather than recording. Emitted by src/transform_pass_runner.zig (and mirrored by koru_std/compiler.kz's contract-check arm).
-    KORU182, // A transform violated its declared `contract:obliges` obligation — `kind-stable` requires the write-back's collateral removals and additions carry identical kind multisets; `matched-only` requires every removal contain an invocation the transform fires on. A claim that fails is a contract broken. Emitted by src/transform_pass_runner.zig.
-    KORU183, // A transform's write-back dropped a named input arm without carrying it into the result's continuations or declaring it in `consumed_arms` — named arms on a transform site are obligations, and an unclaimed drop evaporates a verdict the site's user wrote. Emitted by src/transform_pass_runner.zig's arm-accounting audit (220_046).
+    KORU180, // A std/fmt call site is malformed — a fmt.blk or ln site with no `: name` bind. The `| formatted` / `| line` branch spelling was removed from the grammar, so an unbound result has no consumer and would reach Zig codegen as a dead tagged union (the 620_020 raw-Zig-leak class). Emitted by koru_std/fmt.kz and koru_std/fmt.lnzig.kz — reserved in scripts/registry_reserved.txt.
+    KORU181, // An unspaced `-` joined identifiers into one kebab name that binds nothing, while every `-`-segment resolves — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
+    KORU182, // A `-`-joined member name (`p.x-c`) names no field of the receiver's statically-known record, while the first `-`-segment IS a field and the rest resolve as names — the author almost surely wrote subtraction. Emitted by src/flow_checker.zig.
+    KORU183, // A std/cli call site or declaration is malformed — a `| arm` that is neither a command nor `usage`/`help`, a destructure field that is neither a declared flag nor a positional, an unsupported positional/flag type, or a nested `std/cli()` site (the dispatch is a top-level item). One code for the class; the message names the fault. Emitted by koru_std/cli.kz — reserved in scripts/registry_reserved.txt.
+    KORU184, // A std/tree declaration or call site is malformed — a non-identifier node name, a field that is neither `name: Type` nor `name: ?Type`, a field type that is neither payload material nor a node-registered edge, a mint missing a required field or spelling an undeclared one, a null on a required edge, or a dispose whose binding's node type can't be resolved. One code for the class; the message names the fault. Emitted by koru_std/tree.kz — reserved in scripts/registry_reserved.txt.
+    KORU185, // A pass-graph contract edge is malformed or unresolvable — a `contract:requires` naming no decl, an ambiguous bare name, a non-transform target, a `contract:preserves`/`contract:obliges` on a non-transform decl, a preserves bound naming an unknown item kind or mixing bare/`!` modes, an obliges naming an unknown predicate, or a requires cycle with no lawful ordering. One code for the class; the message names the fault. Emitted by src/pass_graph.zig. (Numbered 185, not 180 — the merge gave 180-184 to fmt/kebab/cli/tree, which claimed them upstream first.)
+    KORU186, // A transform's write-back exceeds its declared `contract:preserves` bound — an item kind the bound holds invariant was removed, added, or appended. The bound is the blast radius; exceeding it refuses rather than recording. Emitted by src/transform_pass_runner.zig (and mirrored by koru_std/compiler.kz's contract-check arm).
+    KORU187, // A transform violated its declared `contract:obliges` obligation — `kind-stable` requires the write-back's collateral removals and additions carry identical kind multisets; `matched-only` requires every removal contain an invocation the transform fires on. A claim that fails is a contract broken. Emitted by src/transform_pass_runner.zig.
+    KORU188, // A transform's write-back dropped a named input arm without carrying it into the result's continuations or declaring it in `consumed_arms` — named arms on a transform site are obligations, and an unclaimed drop evaporates a verdict the site's user wrote. Emitted by src/transform_pass_runner.zig's arm-accounting audit (220_046).
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)
@@ -168,9 +174,11 @@ pub const ErrorCode = enum(u16) {
     KORU204, // part declared inside a part file — parts are flat; promote to a directory module when a part outgrows its file (140_028)
     KORU205, // std/refine refusal — malformed field line, non-int bound, or a meet that lands empty (671_*)
     KORU206, // A `#L` fold where every terminal arm re-dispatches `@L` can never exit — statically infinite (an external fuzzer watched `| done` re-fire 14.5M times; the corpus exit is `->` produce or a `|>` continuation)
-    KORU207, // A `!` arm at an impl flow's head references the implementing tor's params — the arm lowers to a context-free `Handlers_*` fn that sees module scope only, so the reference dies in emitted Zig ('x' not accessible from inner function). Emitted by src/flow_checker.zig.
+    KORU207, // --deep-check witness: output_emitted.zig does not parse as Zig (emitted text is not the verdict; emitted *valid* text is). Printed by the validate-emitted tor in koru_std/compiler.materialize.kz (510_126). Formerly the flow_checker `!` arm param refusal — that site retired when Handlers_* fns learned to capture (400_208).
     KORU208, // `mod/path:default(...)` spelled explicitly — the default door is invoked by the bare module path `mod/path(...)`; the `:default` segment is compiler-manufactured, never source. Emitted by src/import_pipeline.zig.
-    KORU209, // A witness-check refusal — pass-witness-check (koru_std/compiler.witness.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict. (Numbered 209, not 179 — the merge gave 179 to std/panic:catch, which claimed it upstream first.)
+    KORU209, // `dir:` relocates the emitted artifact while the program declares build:requires — generated build_output.zig stages output_emitted.zig in cwd. Printed by the host-build-zig tor in koru_std/compiler.materialize.kz.
+    KORU210, // A std/build:app declaration is malformed — the Source block did not parse as `name: "…", id: "…"` plus optional `version: "…"`, `icon: "…"`, or carried a key the collector does not know. An identity is whole or refused; never defaulted. Emitted by src/compiler_requires.zig at requirement collection.
+    KORU212, // A witness-check refusal — pass-witness-check (koru_std/compiler.witness.kz) rejected a program whose prepared witnesses do not meet the contract it declared: under [strict] + std/witness:enforce, a stored write whose stored-write-numeric witness is rounds or deferred. One code for the witness-check family; the message names the site, the kind and the verdict. (Numbered 212 — the merge gave 209-210 to materialize checks upstream, and main's src/main.zig already names 211 for unresolvable qualified calls.)
 };
 
 pub const SourceLocation = struct {
@@ -223,6 +231,54 @@ pub const ParseError = struct {
 /// diagnostic-free internal errors). One compilation per backend process, so
 /// a plain global is the whole mechanism.
 pub var diagnostics_were_printed = false;
+
+/// Process-global diagnostic sinks — the diagnostics bus. The generated
+/// backend collects `std/compiler(diagnostic)` joins from the seed AST and
+/// registers each `!` arm's consumer here; every `addError*` variant then
+/// dispatches the stored ParseError to all of them, synchronously, at append
+/// time. Reporters are per-file but a compile is one process, so a plain
+/// global is the whole mechanism — same shape as `diagnostics_were_printed`
+/// above. Empty by default: a binary that never registers pays one slice
+/// bounds-check per error and nothing else.
+pub const DiagSink = struct {
+    ctx: *anyopaque,
+    /// Called once per stored diagnostic inside `addError*`. A sink must not
+    /// report back through the reporter — re-entrant dispatch is dropped by
+    /// `in_diag_dispatch`, not relayed.
+    emit: *const fn (ctx: *anyopaque, err: *const ParseError) void,
+    /// Called once at pipeline end — the batched-write side of a `flush:
+    /// false` config (COMMIT of an open transaction, close of a handle). A
+    /// sink with nothing to tear down leaves it null.
+    finish: ?*const fn (ctx: *anyopaque) void = null,
+};
+
+var diag_sinks: std.ArrayList(DiagSink) = .empty;
+var in_diag_dispatch = false;
+
+/// Register a diagnostic consumer for the rest of the process. The backend
+/// calls this once per collected join arm, before the pipeline runs.
+/// Single-threaded by the same argument as `diagnostics_were_printed`.
+pub fn registerDiagSink(allocator: std.mem.Allocator, sink: DiagSink) !void {
+    try diag_sinks.append(allocator, sink);
+}
+
+/// Pipeline-end drain: let sinks commit/close whatever `emit` batched. The
+/// emitted backend defers this right after sink registration so every return
+/// path out of `main` flushes what was buffered.
+pub fn finishDiagSinks() void {
+    for (diag_sinks.items) |sink| {
+        if (sink.finish) |f| f(sink.ctx);
+    }
+}
+
+fn dispatchDiag(err: *const ParseError) void {
+    if (in_diag_dispatch) return;
+    in_diag_dispatch = true;
+    defer in_diag_dispatch = false;
+    for (diag_sinks.items) |sink| {
+        sink.emit(sink.ctx, err);
+    }
+}
 
 pub const ErrorReporter = struct {
     allocator: std.mem.Allocator,
@@ -371,6 +427,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addError, but uses the full SourceLocation (including file) from the caller
@@ -397,6 +454,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = is_bootstrap,
             .bootstrap_line = bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addErrorAtLocation, but with a teaching hint. Use when errors can
@@ -421,6 +479,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = is_bootstrap,
             .bootstrap_line = bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     pub fn addErrorWithHint(self: *ErrorReporter, code: ErrorCode, line: usize, column: usize, comptime fmt: []const u8, args: anytype, comptime hint_fmt: []const u8, hint_args: anytype) !void {
@@ -439,6 +498,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Like addErrorWithHint, but lets the caller declare how many characters
@@ -472,6 +532,7 @@ pub const ErrorReporter = struct {
             .is_bootstrap = cls.is_bootstrap,
             .bootstrap_line = cls.bootstrap_line,
         });
+        dispatchDiag(&self.errors.items[self.errors.items.len - 1]);
     }
 
     /// Renders only the errors not already emitted by an earlier call — see

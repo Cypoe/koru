@@ -342,31 +342,6 @@
     const field_owned_info = allocator.alloc(?OwnedCol, cell_fields.len + synth_count) catch unreachable;
     for (field_owned_info) |*oi| oi.* = null;
     // module logical name (slash or dot) -> Zig host namespace: each '.'/'/'
-    // segment gets a `koru_` prefix. Mirrors codegen_utils.buildKoruModulePath /
-    // continuation_codegen.buildEventPath — the ONE convention for naming any
-    // module's emitted handler; the store reuses it instead of hardcoding.
-    const HostPath = struct {
-        fn build(alloc: std.mem.Allocator, logical: []const u8) []const u8 {
-            var buf = std.ArrayList(u8).initCapacity(alloc, 32) catch unreachable;
-            var first = true;
-            var it = std.mem.splitAny(u8, logical, "./");
-            while (it.next()) |seg| {
-                if (seg.len == 0) continue;
-                if (!first) buf.append(alloc, '.') catch unreachable;
-                buf.appendSlice(alloc, "koru_") catch unreachable;
-                buf.appendSlice(alloc, seg) catch unreachable;
-                first = false;
-            }
-            return buf.toOwnedSlice(alloc) catch unreachable;
-        }
-        fn toDot(alloc: std.mem.Allocator, logical: []const u8) []const u8 {
-            const out = alloc.dupe(u8, logical) catch unreachable;
-            for (out) |*c| {
-                if (c.* == '/') c.* = '.';
-            }
-            return out;
-        }
-    };
     for (cell_fields, 0..) |cf, i| {
         if (is_tree and std.mem.eql(u8, cf.name, "parent")) {
             return .{ .transformed = .{ .replacement = ast.refusal(allocator, reporter, .KORU161, flow.location, flow.module, "std/store:new({s}): [tree] synthesizes the `parent` column itself (TT1, invisible) - drop the explicit `parent` declaration", .{store_name}) } };
@@ -1583,6 +1558,7 @@
                     break :blk_wpx px;
                 },
             };
+
             for (pwatch_arms.items) |*wa| HomeScan.storeRefsContH(allocator, program, &wa.cont, wscope, pstore_identity.items, &[_][]const u8{});
         }
 
@@ -1718,35 +1694,6 @@
         // generation-0 handles equal the dense indices the store used to hand
         // out, and a program that never removes prints the same numbers.
         var __brand_names = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
-        const Brand = struct {
-            fn add(alloc: std.mem.Allocator, names: *std.ArrayList([]const u8), n: []const u8) void {
-                for (names.items) |e| if (std.mem.eql(u8, e, n)) return;
-                names.append(alloc, n) catch unreachable;
-            }
-            // The ordinal is COORDINATION order, not item position: a
-            // coordinated store's apply event lands at the program's tail, so
-            // positions shuffle as stores coordinate (measured — the second
-            // store's walk saw itself first). What is stable: at this store's
-            // transform, exactly the stores coordinated BEFORE it carry a
-            // `__store_apply_` event, and coordination runs in program order.
-            // So this store's ordinal = the count of sibling apply events.
-            // Recurses into module decls (690_079/080 — a module can own a
-            // store); dedupe by name keeps a store at one ordinal no matter
-            // how many faces of it the walk meets.
-            fn collect(alloc: std.mem.Allocator, items: []const ast.Item, names: *std.ArrayList([]const u8)) void {
-                for (items) |*pi| {
-                    switch (pi.*) {
-                        .event_decl => |*ed2| {
-                            if (ed2.path.segments.len == 1 and std.mem.startsWith(u8, ed2.path.segments[0], "__store_apply_")) {
-                                add(alloc, names, ed2.path.segments[0]["__store_apply_".len..]);
-                            }
-                        },
-                        .module_decl => |*md2| collect(alloc, md2.items, names),
-                        else => {},
-                    }
-                }
-            }
-        };
         Brand.collect(allocator, program.items, &__brand_names);
         // The brand is the store's ordinal PLUS ONE, and the +1 is the whole
         // guard. A handle packs `slot | (brand << 24)`, and `__koru_resolve`
@@ -2524,7 +2471,7 @@
                     var rb = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
                     for (ins_names, 0..) |fname, fi| {
                         if (fi > 0) rb.appendSlice(allocator, ", ") catch unreachable;
-                        rb.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, fname, f_full_pf.len)) catch unreachable;
+                        rb.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, fname)) catch unreachable;
                     }
                     const payload = HS.branchRec(allocator, host_target, "full", rb.toOwnedSlice(allocator) catch unreachable, f_full_pf.len);
                     fb.appendSlice(allocator, std.fmt.allocPrint(allocator, "if (__koru_store_{s}.len >= {d}) return {s};\n", .{ store_name, CAP, payload }) catch unreachable) catch unreachable;
@@ -3974,7 +3921,7 @@
                 var ib = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
                 for (field_names) |fname| {
                     if (ib.items.len > 0) ib.appendSlice(allocator, ", ") catch unreachable;
-                    ib.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_out_{s}", .{fname}) catch unreachable, item_pf.len)) catch unreachable;
+                    ib.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_out_{s}", .{fname}) catch unreachable)) catch unreachable;
                 }
                 const o = std.fmt.allocPrint(allocator, "return {s};", .{HS.branchRec(allocator, host_target, "item", ib.items, item_pf.len)}) catch unreachable;
                 tb.appendSlice(allocator, o) catch unreachable;
@@ -3997,73 +3944,13 @@
         // own target) but keeps non-store body references (e.g. an interpolated
         // sibling-store read) coherent, matching watch-body treatment.
         {
-            // Interceptor payload types: inserted/removed bind ROW FIELDS by
-            // name — each gets its column's type. updated binds {old, new} —
-            // the written field's images; its bind form is walled to
-            // uniform-typed containers above, so the shared column type is
-            // exact (the discard form has no payload to type).
-            const colTypes = struct {
-                fn call(alloc: std.mem.Allocator, names: []const []const u8, types: []const []const u8, wanted: []const []const u8) []const []const u8 {
-                    const out = alloc.alloc([]const u8, wanted.len) catch unreachable;
-                    for (wanted, 0..) |w, i| {
-                        out[i] = blk: {
-                            for (names, types) |n, t| {
-                                if (std.mem.eql(u8, n, w)) break :blk t;
-                            }
-                            unreachable; // arm fields were validated against field_names at collection
-                        };
-                    }
-                    return out;
-                }
-            }.call;
-            // Parallel of colTypes: the OwnedCol info per arm field (null for
-            // scalar/char), so the reactive arm binds an owned column as a bare
-            // borrow (690_061). Non-owned stores get all-null — a no-op.
-            const colOwned = struct {
-                fn call(alloc: std.mem.Allocator, names: []const []const u8, owned: []const ?OwnedCol, wanted: []const []const u8) []const ?OwnedCol {
-                    const out = alloc.alloc(?OwnedCol, wanted.len) catch unreachable;
-                    for (wanted, 0..) |w, i| {
-                        out[i] = blk: {
-                            for (names, owned) |n, o| {
-                                if (std.mem.eql(u8, n, w)) break :blk o;
-                            }
-                            break :blk null;
-                        };
-                    }
-                    return out;
-                }
-            }.call;
-            // A `[id]` request rides the arm's input as one more field. It has
-            // no column to resolve against, so its type is stated here (a
-            // handle is i64, the type `| row` mints) and its ownedness is
-            // null — a handle is a value, never a resource the arm borrows.
-            const withIds = struct {
-                fn names(alloc: std.mem.Allocator, cols: []const []const u8, ids: []const []const u8) []const []const u8 {
-                    const out = alloc.alloc([]const u8, cols.len + ids.len) catch unreachable;
-                    for (cols, 0..) |c, i| out[i] = c;
-                    for (ids, 0..) |d, i| out[cols.len + i] = d;
-                    return out;
-                }
-                fn types(alloc: std.mem.Allocator, cols: []const []const u8, n_ids: usize) []const []const u8 {
-                    const out = alloc.alloc([]const u8, cols.len + n_ids) catch unreachable;
-                    for (cols, 0..) |c, i| out[i] = c;
-                    for (0..n_ids) |i| out[cols.len + i] = "i64";
-                    return out;
-                }
-                fn owned(alloc: std.mem.Allocator, cols: []const ?OwnedCol, n_ids: usize) []const ?OwnedCol {
-                    const out = alloc.alloc(?OwnedCol, cols.len + n_ids) catch unreachable;
-                    for (cols, 0..) |c, i| out[i] = c;
-                    for (0..n_ids) |i| out[cols.len + i] = null;
-                    return out;
-                }
-            };
             for (inserted_arms.items, 0..) |*arm, ai| {
                 const ev_name = std.fmt.allocPrint(allocator, "__store_inserted_{s}_{d}", .{ store_name, ai }) catch unreachable;
-                LC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, withIds.names(allocator, arm.fields, arm.id_requests), withIds.types(allocator, colTypes(allocator, field_names, field_types, arm.fields), arm.id_requests.len), withIds.owned(allocator, colOwned(allocator, field_names, field_owned_info, arm.fields), arm.id_requests.len), &arm.body, program, pstore_names.items, pstore_identity.items);
+                StoreLC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, withIds.names(allocator, arm.fields, arm.id_requests), withIds.types(allocator, colTypes(allocator, field_names, field_types, arm.fields), arm.id_requests.len), withIds.owned(allocator, colOwned(allocator, field_names, field_owned_info, arm.fields), arm.id_requests.len), &arm.body, program, pstore_names.items, pstore_identity.items);
             }
             for (removed_arms.items, 0..) |*arm, ai| {
                 const ev_name = std.fmt.allocPrint(allocator, "__store_removed_{s}_{d}", .{ store_name, ai }) catch unreachable;
-                LC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, withIds.names(allocator, arm.fields, arm.id_requests), withIds.types(allocator, colTypes(allocator, field_names, field_types, arm.fields), arm.id_requests.len), withIds.owned(allocator, colOwned(allocator, field_names, field_owned_info, arm.fields), arm.id_requests.len), &arm.body, program, pstore_names.items, pstore_identity.items);
+                StoreLC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, withIds.names(allocator, arm.fields, arm.id_requests), withIds.types(allocator, colTypes(allocator, field_names, field_types, arm.fields), arm.id_requests.len), withIds.owned(allocator, colOwned(allocator, field_names, field_owned_info, arm.fields), arm.id_requests.len), &arm.body, program, pstore_names.items, pstore_identity.items);
             }
             // `cleared` binds only a count, so its type is stated rather
             // than looked up — there is no column behind it.
@@ -4073,13 +3960,13 @@
                 for (ctypes) |*ct| ct.* = "i64";
                 const cowned = allocator.alloc(?OwnedCol, arm.fields.len) catch unreachable;
                 for (cowned) |*co| co.* = null;
-                LC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, arm.fields, ctypes, cowned, &arm.body, program, pstore_names.items, pstore_identity.items);
+                StoreLC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, arm.fields, ctypes, cowned, &arm.body, program, pstore_names.items, pstore_identity.items);
             }
             for (updated_arms.items, 0..) |*arm, ai| {
                 const ev_name = std.fmt.allocPrint(allocator, "__store_updated_{s}_{d}", .{ store_name, ai }) catch unreachable;
                 const utypes = allocator.alloc([]const u8, arm.fields.len) catch unreachable;
                 for (utypes) |*ut| ut.* = if (field_types.len > 0) field_types[0] else "i64";
-                LC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, arm.fields, utypes, colOwned(allocator, field_names, field_owned_info, arm.fields), &arm.body, program, pstore_names.items, pstore_identity.items);
+                StoreLC.emit(allocator, &appended_items, flow.module, flow.location, ev_name, arm.fields, utypes, colOwned(allocator, field_names, field_owned_info, arm.fields), &arm.body, program, pstore_names.items, pstore_identity.items);
             }
         }
 
@@ -4399,9 +4286,9 @@
                     var db = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
                     for (field_names) |fname| {
                         if (db.items.len > 0) db.appendSlice(allocator, ", ") catch unreachable;
-                        db.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_i]", .{ store_name, fname }) catch unreachable, field_names.len)) catch unreachable;
+                        db.appendSlice(allocator, HS.payloadPair(allocator, host_target, fname, std.fmt.allocPrint(allocator, "__koru_store_{s}.{s}[__koru_i]", .{ store_name, fname }) catch unreachable)) catch unreachable;
                     }
-                    const p = std.fmt.allocPrint(allocator, "    discharge({s});\n", .{HS.armPayload(allocator, host_target, db.items, field_names.len)}) catch unreachable;
+                    const p = std.fmt.allocPrint(allocator, "    discharge({s});\n", .{HS.armPayload(allocator, host_target, "discharge", db.items, field_names.len)}) catch unreachable;
                     td.appendSlice(allocator, p) catch unreachable;
                 }
             } else {
@@ -4484,6 +4371,7 @@
                         switch (pi.*) {
                             // Must use `&pi.flow` — `|*f|` on a switched copy
                             // mutates a temporary and the live AST stays raw.
+
                             .flow => HomeScan.storeRefsFlowH(alloc, prog, &pi.flow, scope, ident),
                             .module_decl => items(alloc, prog, @constCast(pi.module_decl.items), scope, ident),
                             else => {},
@@ -5143,48 +5031,6 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     };
     var foreign_guards = std.ArrayList(ForeignGuard).initCapacity(allocator, 2) catch unreachable;
     {
-        const FG = struct {
-            fn fieldOrderOf(alloc: std.mem.Allocator, prog: *const ast.Program, store: []const u8) ?[]const []const u8 {
-                const struct_literal2 = @import("struct_literal");
-                // Already-coordinated stores: read the apply event's branches.
-                const apply_name2 = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
-                for (flatItems(alloc, prog.items)) |pi2| {
-                    if (pi2.* != .event_decl) continue;
-                    const ed2 = &pi2.event_decl;
-                    if (ed2.path.segments.len == 1 and std.mem.eql(u8, ed2.path.segments[0], apply_name2)) {
-                        const names2b = alloc.alloc([]const u8, ed2.branches.len) catch unreachable;
-                        for (ed2.branches, 0..) |b2, bi2| names2b[bi2] = b2.name;
-                        return names2b;
-                    }
-                }
-                for (flatItems(alloc, prog.items)) |pi2| {
-                    if (pi2.* != .flow) continue;
-                    const f2 = &pi2.flow;
-                    const inv2 = f2.inv();
-                    if (inv2.path.segments.len != 1 or !std.mem.eql(u8, inv2.path.segments[0], "new")) continue;
-                    const mq2 = inv2.path.module_qualifier orelse continue;
-                    if (!std.mem.eql(u8, mq2, "std.store")) continue;
-                    var matches2 = false;
-                    var seed3: ?[]const u8 = null;
-                    for (inv2.args) |a2| {
-                        if (std.mem.eql(u8, a2.name, "expr")) {
-                            var v2 = a2.value;
-                            if (v2.len >= 2 and v2[0] == '"') v2 = v2[1 .. v2.len - 1];
-                            matches2 = std.mem.eql(u8, v2, store);
-                        } else if (std.mem.eql(u8, a2.name, "source")) {
-                            seed3 = a2.value;
-                        }
-                    }
-                    if (!matches2 or seed3 == null) continue;
-                    const braced3 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed3.?}) catch unreachable;
-                    const cf3 = struct_literal2.parseFields(alloc, braced3) catch continue;
-                    const names3 = alloc.alloc([]const u8, cf3.len) catch unreachable;
-                    for (cf3, 0..) |c3, ci3| names3[ci3] = c3.name;
-                    return names3;
-                }
-                return null;
-            }
-        };
         for (flatItems(allocator, program.items)) |pi| {
             if (pi.* != .flow) continue;
             const wfg = &pi.flow;
@@ -5194,7 +5040,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
                 if (std.mem.eql(u8, a.name, "expr")) target_store = HomeScan.stripQuotes(a.value);
             }
             if (target_store.len == 0 or std.mem.eql(u8, target_store, store_name)) continue;
-            const t_order = FG.fieldOrderOf(allocator, program, target_store) orelse continue;
+            const t_order = fieldOrderOfStore(allocator, program, target_store) orelse continue;
             for (wfg.body.continuations) |*wcg| {
                 const cond = wcg.condition orelse continue;
                 // Which of OUR fields does the guard read (`<store>.<field>`)?
@@ -5242,46 +5088,7 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     // The subset that names ONE column and no field — referenced BARE.
     var store_idents = std.ArrayList([]const u8).initCapacity(allocator, 4) catch unreachable;
     {
-        const Collect = struct {
-            fn go(alloc: std.mem.Allocator, its: []const ast.Item, out: *std.ArrayList([]const u8), ident_out: *std.ArrayList([]const u8)) void {
-                for (its) |*pi| {
-                    switch (pi.*) {
-                        .flow => |*f| {
-                            if (HomeScan.isStoreInv(f, "new", null)) {
-                                var nm: ?[]const u8 = null;
-                                var seed: ?[]const u8 = null;
-                                for (f.inv().args) |a| {
-                                    if (std.mem.eql(u8, a.name, "expr")) nm = HomeScan.stripQuotes(a.value);
-                                    if (std.mem.eql(u8, a.name, "source")) seed = a.value;
-                                }
-                                if (nm) |n| {
-                                    out.append(alloc, n) catch unreachable;
-                                    // Read the seed exactly as the declaration
-                                    // does, so "is this identity-shaped" has ONE
-                                    // answer wherever it is asked.
-                                    if (seed) |sd| {
-                                        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{sd}) catch unreachable;
-                                        if (struct_literal.isIdentityBlock(braced)) ident_out.append(alloc, n) catch unreachable;
-                                    }
-                                }
-                            }
-                        },
-                        .event_decl => |*ed| {
-                            if (ed.path.segments.len == 1 and std.mem.startsWith(u8, ed.path.segments[0], "__store_apply_")) {
-                                const n = ed.path.segments[0]["__store_apply_".len..];
-                                out.append(alloc, n) catch unreachable;
-                                if (ed.branches.len == 1 and std.mem.eql(u8, ed.branches[0].name, ast.STORE_IDENTITY_COLUMN)) {
-                                    ident_out.append(alloc, n) catch unreachable;
-                                }
-                            }
-                        },
-                        .module_decl => |*md| go(alloc, md.items, out, ident_out),
-                        else => {},
-                    }
-                }
-            }
-        };
-        Collect.go(allocator, program.items, &store_names, &store_idents);
+        StoreNameScan.go(allocator, program.items, &store_names, &store_idents);
     }
 
     // Transplanted arms are spliced INTO the declaring module's generated
@@ -5553,15 +5360,15 @@ capply.appendSlice(allocator, std.fmt.allocPrint(allocator, "default: __koru_unr
     } else if (host_is_cs) {
         // Same switch as the JS arm — cs reads it natively. The produced
         // value is the event's `Output` struct (tag + per-branch member —
-        // `__type_ref` payloads keep their declared type on the member, the
-        // old/new pair lands in a `dynamic` anonymous object). Member names
-        // are binding-mangled the way the emitter's writeBinding spells them.
+        // `__type_ref` payloads keep their declared type; the old/new pair
+        // lands in the `<field>_payload` struct via HostShape.branchRec).
+        // Member names are binding-mangled as writeBinding spells them.
         pb.appendSlice(allocator, "switch (field) {\n") catch unreachable;
         for (field_names, 0..) |fname, i| {
             const fm = codegen_utils_store.HostShape.csMember(allocator, fname);
             const pm = codegen_utils_store.HostShape.csPayloadMember(allocator, fname);
             const arm = if (old_new_mode)
-                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}var __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; return new Output {{ tag = \"{s}\", {s} = (old: __old, @new: value) }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fm, store_name, fm, fname, pm }) catch unreachable
+                std.fmt.allocPrint(allocator, "  case {d}: {{ {s}var __old = __koru_store_{s}.{s}; __koru_store_{s}.{s} = value; return {s}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fm, store_name, fm, codegen_utils_store.HostShape.branchRec(allocator, .cs, fname, "old = __old, @new = value", 2) }) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "  case {d}: {{ {s}__koru_store_{s}.{s} = value; return new Output {{ tag = \"{s}\", {s} = value }}; }}\n", .{ i, StoreRefHome.call(allocator, cell_fields, i, store_name, "value"), store_name, fm, fname, pm }) catch unreachable;
             pb.appendSlice(allocator, arm) catch unreachable;

@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -104,7 +104,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 6,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -117,7 +117,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 15,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -136,7 +136,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 18,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -149,7 +149,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 21,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -158,7 +158,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 22,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -167,7 +167,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 23,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -183,7 +183,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                                 "line": 25,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -200,7 +200,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                                 "line": 25,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -224,7 +224,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                         "line": 25,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "terminal"
@@ -239,7 +239,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 24,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -248,7 +248,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 27,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -271,7 +271,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                         "line": 28,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -286,7 +286,7 @@
                                         "location": {
                                             "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                                             "line": 29,
-                                            "col": 0
+                                            "col": 1
                                         },
                                         "scope": {
                                             "bindings": [
@@ -303,7 +303,7 @@
                                         "location": {
                                             "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                                             "line": 29,
-                                            "col": 0
+                                            "col": 1
                                         },
                                         "scope": {
                                             "bindings": [
@@ -328,7 +328,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                                 "line": 29,
-                                "col": 0
+                                "col": 1
                             },
                             "step":                             {
                                 "type": "terminal"
@@ -345,7 +345,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_054_inline_source_block_args/input.kz",
                 "line": 28,
-                "col": 0
+                "col": 1
             }
         }
     ]

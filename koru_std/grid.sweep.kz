@@ -43,9 +43,8 @@
         // knows whether it produced an lvalue or an rvalue, which is the point.
         //
         // The bounds check this reintroduces is the one `__koru_at` performs
-        // against a comptime-known size, on an index the loop constructed from
-        // `0..size`. That is the case the declaration's header calls a floor
-        // rather than a tax — provable in range, and the optimizer deletes it.
+        // against a comptime-known size on an index the loop built from
+        // `0..size` — provable in range, so `lower` now sees it TRUSTED.
         fn cells(alloc: std.mem.Allocator, text: []const u8, bind: []const u8, ns: []const u8, grid: []const u8, cur: []const u8) []const u8 {
             _ = ns;
             const prefix = std.fmt.allocPrint(alloc, "{s}.", .{bind}) catch unreachable;
@@ -151,7 +150,7 @@
     // as `__koru_size` on the cell type — so the loop header names that rather
     // than re-deriving it, and a grid whose size changes cannot leave a stale
     // bound behind in a sweep.
-    const cur = std.fmt.allocPrint(allocator, "__koru_gi_L{d}", .{flow.location.line}) catch unreachable;
+    const cur = grid_cursor.mint(allocator, grid_name, flow.location.line);
     if (ast.refuseUncrossable(allocator, reporter, "grid:sweep", grid_name, "sweep", arm, flow.module)) |r| return .{ .transformed = r };
     const body = ast_functional.cloneContinuation(allocator, arm) catch unreachable;
     var mutable_body = body;
@@ -163,7 +162,8 @@
     // visited, and without this its cell addresses reach the host verbatim.
     // std/grid sites inside it are skipped by the walker, which is what leaves
     // a nested `stored`'s target in source form for `stored` to parse.
-    grid_read.lowerCont(allocator, &mutable_body, swept.items);
+    // The cursor rides TRUSTED — this transform owns its 0..size proof.
+    grid_readwalk.lowerContTrusted(allocator, &mutable_body, swept.items, .{ .name = cur, .grid = grid_name });
 
     // The body becomes an EVENT with the loop index as its only input, and an
     // impl flow carrying the (already-rewritten) continuation. The loop is a
@@ -265,28 +265,12 @@
         .module = allocator.dupe(u8, flow.module) catch unreachable,
     } }) catch unreachable;
 
-    // A `for (0..N)` with a comptime-known N: the trip count is known before the
-    // loop begins, which is the whole reason a grid sweep vectorises where a
-    // store sweep had to earn it.
-    const guard_line = if (mutable_body.condition) |c|
-        std.fmt.allocPrint(allocator, "    if (!({s})) continue;\n", .{c}) catch unreachable
-    else
-        "";
-    // Same loop, each host's own spelling: Zig's `for (0..N)` hands the
-    // optimizer a known trip count; JS gets the plain counted `for`, its
-    // tors dispatched through the flat `main_module` object (the JS emitter
-    // flattens every module's tors into it — store.kz:100's rule).
+    // A `for (0..N)` with a comptime-known N is why a grid sweep vectorises where a store sweep had to earn it.
+    const guard_line = if (mutable_body.condition) |c| std.fmt.allocPrint(allocator, "    if (!({s})) continue;\n", .{c}) catch unreachable else "";
+    // Same loop, each host's own spelling (JS tors flatten into `main_module` — store.kz:100's rule).
     const sweep_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
     const sweep_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
-    // The C handler name is the emitter's mangle of the event path:
-    // module qualifier char-for-char (non-alnum → `_`) + '_' + segments.
-    const c_body_fn = blk_cfn: {
-        var cn = std.ArrayList(u8).initCapacity(allocator, 64) catch unreachable;
-        for (home_ns) |ch| cn.append(allocator, if (std.ascii.isAlphanumeric(ch) or ch == '_') ch else '_') catch unreachable;
-        cn.append(allocator, '_') catch unreachable;
-        cn.appendSlice(allocator, body_name) catch unreachable;
-        break :blk_cfn cn.toOwnedSlice(allocator) catch unreachable;
-    };
+    const c_body_fn = GridC.fnName(allocator, home_ns, body_name);
     const loop = if (sweep_is_c)
         std.fmt.allocPrint(allocator, "for (long long {s} = 0; {s} < __koru_grid_{s}_size; {s}++) {{\n{s}    {s}((struct {s}_in){{ .{s} = {s} }});\n}}\nreturn;", .{ cur, cur, grid_name, cur, guard_line, c_body_fn, c_body_fn, cur, cur }) catch unreachable
     else if (sweep_is_js)
@@ -303,8 +287,6 @@
     } }) catch unreachable;
 
     const call = ast.Invocation{ .path = mk.path(allocator, home_ns, sweep_name), .args = &[_]ast.Arg{} };
-    // The `! sweep` arm was compiled into the appended sweep unit — it leaves
-    // the site's own write-back.
     return .{ .transformed = .{
         .replacement = ast.Item{ .flow = ast.Flow{
             .body = ast.rootSite(call, &[_]ast.Continuation{}, flow.location),
@@ -315,6 +297,6 @@
             .module = allocator.dupe(u8, flow.module) catch unreachable,
         } },
         .appended = appended.toOwnedSlice(allocator) catch unreachable,
-        .consumed_arms = &.{"sweep"},
+        .consumed_arms = &.{"sweep"}, // `! sweep` compiled into the appended unit — it leaves the site's write-back
     } };
 }

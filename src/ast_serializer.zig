@@ -1120,6 +1120,8 @@ pub const AstSerializer = struct {
             if (i > 0) try self.write(", ");
             try self.write(".{ .name = ");
             try self.writeString(f.name);
+            try self.write(", .path = ");
+            try self.writeString(f.path);
             if (f.type_text) |t| {
                 try self.write(", .type_text = ");
                 try self.writeString(t);
@@ -1133,10 +1135,6 @@ pub const AstSerializer = struct {
                     try self.writeString(a);
                 }
                 try self.write(" }");
-            }
-            if (f.sub.len > 0) {
-                try self.write(", .sub = ");
-                try self.serializeDestructure(f.sub);
             }
             try self.write(" }");
         }
@@ -1232,6 +1230,20 @@ pub const AstSerializer = struct {
         try self.writeIndent();
         try self.write(".condition = ");
         try self.writeOptString(cont.condition);
+        try self.write(",\n");
+
+        // Produce stage `! each i { f, g: e }` (omit when empty — defaults to &.{})
+        if (cont.produce.len > 0) {
+            try self.writeIndent();
+            try self.write(".produce = ");
+            try self.serializeDestructure(cont.produce);
+            try self.write(",\n");
+        }
+
+        // Post-produce `when` (`{ f } when f > 0`) — guards the produced scope
+        try self.writeIndent();
+        try self.write(".post_condition = ");
+        try self.writeOptString(cont.post_condition);
         try self.write(",\n");
 
         // Condition expression (parsed where clause - for now just null)

@@ -1,0 +1,9 @@
+name: contract
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `design` — declare that name. Auto-registered when
+      190e679df declared `Signal: contract` for "plugins configure through a
+      module-targeted directive" — a design decision sealed in the commit,
+      which is exactly what `design` names. (orphan drained 2026-10-21)

@@ -1,0 +1,162 @@
+// Koru Standard Library: the `slice` part of grid.kz.
+// Joined via `~part slice` in grid.kz; merged into the grid module at load.
+//
+//   std/grid:slice(name) { grid.field }
+//
+// Borrows a column-layout grid's field array as a raw slice:
+// `const name = __koru_grid_<g>.<f>[0..]` lands next to the grid in the
+// module, so `name[i]` reads splice verbatim through generic indexing and
+// `stored { name[i]: v }` writes lower to a direct `name[i] = v` — the
+// write unit threads the slice through as an argument, the way every
+// write threads its target. THE BORROW IS THE CONTRACT: the grid's
+// per-access __koru_at floor is the thing the program is declining — a
+// raw view buys vectorization-shaped code with the program's own index
+// obligation, and Zig's own slice bounds check still runs in Debug.
+// Pools are refused: a pool column is a heap slice whose extent arrives
+// at alloc — the borrow would only shadow what is already raw.
+
+~[keyword|declaration]pub tor slice { expr: Expression, source: Source }
+
+~[template]proc slice|zig {
+const {{ expr }} = __koru_grid_{{ source }}[0..];
+}
+
+~[template]proc slice|js {
+const {{ expr }} = __koru_grid_{{ source }};
+}
+
+const grid_slice = struct {
+
+    // A declared borrow: the name, the borrowed column's declared element
+    // type (recovered by the same columnType every write consults).
+    const SliceRef = struct { name: []const u8, ty: []const u8 };
+
+    // A `name[idx]` write target whose name is a registered borrow — the
+    // field-less spelling parseTarget refuses because it needs `.field`.
+    const SliceTarget = struct { name: []const u8, x: []const u8, ty: []const u8 };
+
+    // RUNTIME registrations — borrows minted by a transform, not by a
+    // `slice` decl (walk cursors). The registering transform runs before
+    // the body's own sites lower, so a plain buffer suffices.
+    var regbuf: [64]SliceRef = undefined;
+    var regn: usize = 0;
+    pub fn register(name: []const u8, ty: []const u8) void {
+        for (regbuf[0..regn]) |r| {
+            if (std.mem.eql(u8, r.name, name)) return;
+        }
+        regbuf[regn] = .{ .name = name, .ty = ty };
+        regn += 1;
+    }
+    pub fn registered() []const SliceRef {
+        return regbuf[0..regn];
+    }
+
+
+    // Scan `its` for `std/grid:slice(name) { g.f }` declarations — the same
+    // walk grid_read.collectIn makes over flows and modules.
+    fn collectIn(alloc: std.mem.Allocator, prog: *const ast_grid.Program, its: []const ast_grid.Item, out: *std.ArrayList(SliceRef)) void {
+        for (its) |pi| {
+            switch (pi) {
+                .flow => |f| {
+                    const inv = f.inv();
+                    if (inv.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.grid") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "slice")) {
+                            var sname: []const u8 = "";
+                            var src: []const u8 = "";
+                            for (inv.args) |a| {
+                                if (std.mem.eql(u8, a.name, "expr")) {
+                                    sname = std.mem.trim(u8, a.value, " \"");
+                                } else if (std.mem.eql(u8, a.name, "source")) src = a.value;
+                            }
+                            const col = std.mem.trim(u8, src, " ");
+                            const dot = std.mem.indexOfScalar(u8, col, '.') orelse continue;
+                            const ty = grid_read.columnType(alloc, prog.items, col[0..dot], std.mem.trim(u8, col[dot + 1 ..], " ")) orelse continue;
+                            if (sname.len > 0) out.append(alloc, SliceRef{ .name = sname, .ty = ty }) catch unreachable;
+                        }
+                        // `std/grid:walk { s: g.f, n, ... }` cursors borrow
+                        // columns the same way — the label IS the slice name,
+                        // so `stored { s[k]: v }` in an each/tail body resolves
+                        // through the same path.
+                        if (std.mem.eql(u8, mq, "std.grid") and inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "walk")) {
+                            for (inv.args) |a| {
+                                if (!std.mem.eql(u8, a.name, "source")) continue;
+                                var k: usize = 0;
+                                while (k <= a.value.len) {
+                                    var depth: usize = 0;
+                                    var j = k;
+                                    while (j < a.value.len and !(a.value[j] == ',' and depth == 0)) : (j += 1) {
+                                        const ch = a.value[j];
+                                        if (ch == '(' or ch == '[' or ch == '{') depth += 1;
+                                        if (ch == ')' or ch == ']' or ch == '}') depth -= 1;
+                                    }
+                                    const piece = std.mem.trim(u8, a.value[k..@min(j, a.value.len)], " ");
+                                    k = j + 1;
+                                    if (std.mem.indexOfScalar(u8, piece, ':')) |colon| {
+                                        const col = std.mem.trim(u8, piece[colon + 1 ..], " ");
+                                        if (std.mem.indexOfScalar(u8, col, '.')) |dot| {
+                                            if (grid_read.columnType(alloc, prog.items, std.mem.trim(u8, col[0..dot], " "), std.mem.trim(u8, col[dot + 1 ..], " "))) |ty| {
+                                                out.append(alloc, SliceRef{ .name = std.mem.trim(u8, piece[0..colon], " "), .ty = ty }) catch unreachable;
+                                            }
+                                        }
+                                    }
+                                    if (k > a.value.len) break;
+                                }
+                            }
+                        }
+                    }
+                },
+                .module_decl => |m| collectIn(alloc, prog, m.items, out),
+                else => {},
+            }
+        }
+    }
+
+    // `name[idx]` — name must be a collected borrow and the bracketed index
+    // must be the whole text (`s[i]` parses; `s[i].f` and `s[i] + 1` do
+    // not — those keep whatever floor their real target has).
+    fn target(text: []const u8, slices: []const SliceRef) ?SliceTarget {
+        var e: usize = 0;
+        while (e < text.len and ast_grid.isKebabIdentChar(text[e])) e += 1;
+        if (e == 0 or e >= text.len or text[e] != '[') return null;
+        const nm = text[0..e];
+        var ty: ?[]const u8 = null;
+        for (slices) |s| {
+            if (std.mem.eql(u8, s.name, nm)) ty = s.ty;
+        }
+        if (ty == null) return null;
+        var depth: usize = 0;
+        var j = e;
+        while (j < text.len) {
+            if (text[j] == '[') depth += 1;
+            if (text[j] == ']') {
+                depth -= 1;
+                if (depth == 0) break;
+            }
+            j += 1;
+        }
+        if (j >= text.len or j + 1 != text.len) return null;
+        return SliceTarget{ .name = nm, .x = std.mem.trim(u8, text[e + 1 .. j], " "), .ty = ty.? };
+    }
+
+    // The stored-side write `s[i]: v` — the borrow declined the floor, so no
+    // __koru_at and no field. Returns false when `raw_target` is not a slice target.
+    fn appendWrite(alloc: std.mem.Allocator, raw_target: []const u8, slices: []const SliceRef, names: []const grid_read.GridRef, n: usize, value: []const u8, inputs: *std.ArrayList(ast_grid.Field), args: *std.ArrayList(ast_grid.Arg), body: *std.ArrayList(u8)) bool {
+        const st = target(raw_target, slices) orelse return false;
+        const sn = std.fmt.allocPrint(alloc, "__koru_gs{d}", .{n}) catch unreachable;
+        const xn = std.fmt.allocPrint(alloc, "__koru_gwx{d}", .{n}) catch unreachable;
+        const vn = std.fmt.allocPrint(alloc, "__koru_gwv{d}", .{n}) catch unreachable;
+        inputs.append(alloc, ast_grid.Field{ .name = sn, .type = std.fmt.allocPrint(alloc, "[]{s}", .{st.ty}) catch unreachable }) catch unreachable;
+        args.append(alloc, ast_grid.Arg{ .name = sn, .value = alloc.dupe(u8, st.name) catch unreachable }) catch unreachable;
+        inputs.append(alloc, ast_grid.Field{ .name = xn, .type = alloc.dupe(u8, "i64") catch unreachable }) catch unreachable;
+        const is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+        const x = grid_read.lower(alloc, st.x, names);
+        args.append(alloc, ast_grid.Arg{ .name = xn, .value = if (is_c) x else std.fmt.allocPrint(alloc, "@as(i64, @intCast({s}))", .{x}) catch unreachable }) catch unreachable;
+        inputs.append(alloc, ast_grid.Field{ .name = vn, .type = alloc.dupe(u8, st.ty) catch unreachable }) catch unreachable;
+        args.append(alloc, ast_grid.Arg{ .name = vn, .value = grid_read.lower(alloc, value, names) }) catch unreachable;
+        if (is_c)
+            body.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}.ptr[{s}] = {s};\n", .{ sn, xn, vn }) catch unreachable) catch unreachable
+        else
+            body.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}[@as(usize, @intCast({s}))] = {s};\n", .{ sn, xn, vn }) catch unreachable) catch unreachable;
+        return true;
+    }
+};

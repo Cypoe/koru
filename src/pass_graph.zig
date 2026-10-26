@@ -36,7 +36,7 @@
 //! bit-identical across the transform's write-backs (LLVM
 //! PreservedAnalyses semantics). The frontend validates the atoms against
 //! the Item union vocabulary; the runner enforces the bound on
-//! whole_program/appended write-backs (KORU181). `contract:preserves` on a
+//! whole_program/appended write-backs (KORU186). `contract:preserves` on a
 //! non-transform decl refuses — a bound with no write-back to constrain is
 //! a dead assertion. `contract:obliges` is the same claim for obligation
 //! predicates the runner can decide.
@@ -223,7 +223,7 @@ fn collectItems(allocator: std.mem.Allocator, g: *Graph, items: []const ast.Item
                     if (try annotation_parser.getCall(allocator, decl.annotations, legacy)) |call| {
                         var c = call;
                         defer c.deinit(allocator);
-                        std.debug.print("error[KORU180]: `{s}` declares `{s}(...)`, which no longer names a contract — the declared-claim vocabulary is namespaced\n  {s}:{d}: spell it `contract:{s}(...)`\n", .{ name, legacy, decl.location.file, decl.location.line, legacy });
+                        std.debug.print("error[KORU185]: `{s}` declares `{s}(...)`, which no longer names a contract — the declared-claim vocabulary is namespaced\n  {s}:{d}: spell it `contract:{s}(...)`\n", .{ name, legacy, decl.location.file, decl.location.line, legacy });
                         std.process.exit(1);
                     }
                 }
@@ -306,7 +306,7 @@ fn checkDag(g: *const Graph, decl_by_name: std.StringHashMapUnmanaged(usize)) !v
                         try msg.appendSlice(self.g.allocator, " requires ");
                     }
                     try msg.appendSlice(self.g.allocator, self.g.decls.items[j].name);
-                    std.debug.print("error[KORU180]: pass-graph cycle — {s}\n  the declared edges admit no ordering; a chain satisfying one arm violates the other\n  fix: break the cycle — one of these `contract:requires` is not an ordering fact but a coincidence of current order\n", .{msg.items});
+                    std.debug.print("error[KORU185]: pass-graph cycle — {s}\n  the declared edges admit no ordering; a chain satisfying one arm violates the other\n  fix: break the cycle — one of these `contract:requires` is not an ordering fact but a coincidence of current order\n", .{msg.items});
                     std.process.exit(1);
                 }
                 if (self.color[j] == 0) try self.dfs(j, trail);
@@ -399,7 +399,7 @@ fn resolveTransform(g: *const Graph, req: []const u8) ?*const TransformDecl {
         count += 1;
     }
     if (count > 1 and req_qual.len == 0) {
-        std.debug.print("error[KORU180]: `contract:requires` argument `{s}` names {d} different transforms — a bare name cannot pick between them\n  fix: qualify the edge (module:name) so the contract names exactly one transform\n", .{ req, count });
+        std.debug.print("error[KORU185]: `contract:requires` argument `{s}` names {d} different transforms — a bare name cannot pick between them\n  fix: qualify the edge (module:name) so the contract names exactly one transform\n", .{ req, count });
         std.process.exit(1);
     }
     return found;
@@ -447,7 +447,7 @@ pub const Summary = struct {
     orders: []const ObservedOrder = &.{},
 };
 
-/// Entry point. Walks the parsed program; refuses via KORU180 on
+/// Entry point. Walks the parsed program; refuses via KORU185 on
 /// unresolvable edges, cycles, or order violations. Returns what it
 /// checked — the witness payload the backend commits under enforce.
 pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary {
@@ -476,7 +476,7 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
         for (d.requires) |req| {
             const req_last = if (std.mem.indexOfScalar(u8, req, ':')) |ci| req[ci + 1 ..] else req;
             if (!all_names.contains(req_last) and !flow_names.contains(req_last)) {
-                std.debug.print("error[KORU180]: pass `{s}` requires `{s}`, but no tor or pipeline segment named `{s}` exists in this program\n  {s}:{d}: the edge names a pass identity, not an intention — the check refuses rather than guess which decl was meant\n  fix: fix the spelling, or declare the pass — a `contract:requires` that names nothing is a dead assertion\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: pass `{s}` requires `{s}`, but no tor or pipeline segment named `{s}` exists in this program\n  {s}:{d}: the edge names a pass identity, not an intention — the check refuses rather than guess which decl was meant\n  fix: fix the spelling, or declare the pass — a `contract:requires` that names nothing is a dead assertion\n", .{ d.name, req, req_last, d.location.file, d.location.line });
                 std.process.exit(1);
             }
         }
@@ -493,11 +493,11 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
     for (g.decls.items) |*d| {
         if (!d.is_transform) {
             if (d.preserves.len > 0) {
-                std.debug.print("error[KORU180]: `{s}` declares `contract:preserves`, but it is not a [transform] decl\n  {s}:{d}: contract:preserves bounds a transform's write-back blast radius — on a pipeline pass there is no write-back for it to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: `{s}` declares `contract:preserves`, but it is not a [transform] decl\n  {s}:{d}: contract:preserves bounds a transform's write-back blast radius — on a pipeline pass there is no write-back for it to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
                 std.process.exit(1);
             }
             if (d.obliges.len > 0) {
-                std.debug.print("error[KORU180]: `{s}` declares `contract:obliges`, but it is not a [transform] decl\n  {s}:{d}: contract:obliges are claims about a transform's write-back — on a pipeline pass there is no write-back for them to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: `{s}` declares `contract:obliges`, but it is not a [transform] decl\n  {s}:{d}: contract:obliges are claims about a transform's write-back — on a pipeline pass there is no write-back for them to constrain\n  fix: drop the annotation, or move it to the transform decl it belongs to\n", .{ d.name, d.location.file, d.location.line });
                 std.process.exit(1);
             }
             // The converse edge is refused too: a pipeline tor requiring a
@@ -512,7 +512,7 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                     !nontransform_names.contains(req_last) and
                     !flow_names.contains(req_last))
                 {
-                    std.debug.print("error[KORU180]: pass `{s}` requires `{s}`, but `{s}` is a transform, not a pipeline pass\n  {s}:{d}: pipeline `contract:requires` edges are intra-pipeline — a transform never runs as a chain step; ordering against one is declared by the transform's stage, not by naming it here\n  fix: name the pass this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                    std.debug.print("error[KORU185]: pass `{s}` requires `{s}`, but `{s}` is a transform, not a pipeline pass\n  {s}:{d}: pipeline `contract:requires` edges are intra-pipeline — a transform never runs as a chain step; ordering against one is declared by the transform's stage, not by naming it here\n  fix: name the pass this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
                     std.process.exit(1);
                 }
             }
@@ -528,12 +528,12 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                 if (std.mem.eql(u8, body, k)) known = true;
             }
             if (!known or body.len == 0) {
-                std.debug.print("error[KORU180]: transform `{s}` preserves `{s}`, which names no top-level item kind\n  {s}:{d}: a bound spelled with an unknown atom constrains nothing — refusing rather than letting a typo stand as a contract\n  known kinds: module_decl event_decl proc_decl flow event_tap label_decl immediate_impl import_decl host_line host_type_decl parse_error native_loop fused_event inlined_event inline_code facet_decl\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: transform `{s}` preserves `{s}`, which names no top-level item kind\n  {s}:{d}: a bound spelled with an unknown atom constrains nothing — refusing rather than letting a typo stand as a contract\n  known kinds: module_decl event_decl proc_decl flow event_tap label_decl immediate_impl import_decl host_line host_type_decl parse_error native_loop fused_event inlined_event inline_code facet_decl\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
                 std.process.exit(1);
             }
         }
         if (saw_bare and saw_except) {
-            std.debug.print("error[KORU180]: transform `{s}` mixes bare and `!` atoms in `contract:preserves` — the bound's mode is ambiguous\n  {s}:{d}: bare atoms mean \"preserve exactly these kinds\"; `!` atoms mean \"preserve all EXCEPT these\" — one declaration cannot mean both\n  fix: pick one mode — enumerate the preserved kinds, or list the exceptions as `!kind`\n", .{ d.name, d.location.file, d.location.line });
+            std.debug.print("error[KORU185]: transform `{s}` mixes bare and `!` atoms in `contract:preserves` — the bound's mode is ambiguous\n  {s}:{d}: bare atoms mean \"preserve exactly these kinds\"; `!` atoms mean \"preserve all EXCEPT these\" — one declaration cannot mean both\n  fix: pick one mode — enumerate the preserved kinds, or list the exceptions as `!kind`\n", .{ d.name, d.location.file, d.location.line });
             std.process.exit(1);
         }
         for (d.obliges) |atom| {
@@ -542,7 +542,7 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                 if (std.mem.eql(u8, atom, o)) known = true;
             }
             if (!known) {
-                std.debug.print("error[KORU180]: transform `{s}` obliges `{s}`, which names no known obligation predicate\n  {s}:{d}: an obligation the runner cannot decide is a claim checked by nobody — refusing rather than letting the word stand as a contract\n  known obligations: kind-stable matched-only\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: transform `{s}` obliges `{s}`, which names no known obligation predicate\n  {s}:{d}: an obligation the runner cannot decide is a claim checked by nobody — refusing rather than letting the word stand as a contract\n  known obligations: kind-stable matched-only\n  fix: fix the spelling, or widen the vocabulary deliberately\n", .{ d.name, atom, d.location.file, d.location.line });
                 std.process.exit(1);
             }
         }
@@ -551,14 +551,14 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                 const req_last = if (std.mem.indexOfScalar(u8, req, ':')) |ci| req[ci + 1 ..] else req;
                 const exists = all_names.contains(req_last) or flow_names.contains(req_last);
                 if (exists) {
-                    std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but `{s}` is not a transform\n  {s}:{d}: transform `contract:requires` edges are intra-transform — ordering against pipeline passes is declared by the transform's stage ([transform|pre]/[transform|post]), not by naming a pipeline step\n  fix: name the transform this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                    std.debug.print("error[KORU185]: transform `{s}` requires `{s}`, but `{s}` is not a transform\n  {s}:{d}: transform `contract:requires` edges are intra-transform — ordering against pipeline passes is declared by the transform's stage ([transform|pre]/[transform|post]), not by naming a pipeline step\n  fix: name the transform this one depends on, or drop the edge\n", .{ d.name, req, req_last, d.location.file, d.location.line });
                 } else {
-                    std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but no transform named `{s}` exists in this program\n  {s}:{d}: the edge names a transform identity, not an intention — the check refuses rather than guess which decl was meant\n  fix: fix the spelling, or declare the transform — a `contract:requires` that names nothing is a dead assertion\n", .{ d.name, req, req_last, d.location.file, d.location.line });
+                    std.debug.print("error[KORU185]: transform `{s}` requires `{s}`, but no transform named `{s}` exists in this program\n  {s}:{d}: the edge names a transform identity, not an intention — the check refuses rather than guess which decl was meant\n  fix: fix the spelling, or declare the transform — a `contract:requires` that names nothing is a dead assertion\n", .{ d.name, req, req_last, d.location.file, d.location.line });
                 }
                 std.process.exit(1);
             };
             if (@intFromEnum(target.stage) >= @intFromEnum(d.stage)) {
-                std.debug.print("error[KORU180]: transform `{s}` requires `{s}`, but `{s}` runs in the {s} stage — not before `{s}`'s {s} stage\n  {s}:{d}: within a stage the fixed point applies transforms in first-found walk order — same-stage ordering is not a declarable contract, and a later stage never ran earlier\n  fix: move the producer to an earlier stage, or drop the edge\n", .{ d.name, req, req, @tagName(target.stage), d.name, @tagName(d.stage), d.location.file, d.location.line });
+                std.debug.print("error[KORU185]: transform `{s}` requires `{s}`, but `{s}` runs in the {s} stage — not before `{s}`'s {s} stage\n  {s}:{d}: within a stage the fixed point applies transforms in first-found walk order — same-stage ordering is not a declarable contract, and a later stage never ran earlier\n  fix: move the producer to an earlier stage, or drop the edge\n", .{ d.name, req, req, @tagName(target.stage), d.name, @tagName(d.stage), d.location.file, d.location.line });
                 std.process.exit(1);
             }
         }
@@ -617,11 +617,11 @@ pub fn validate(allocator: std.mem.Allocator, items: []const ast.Item) !Summary 
                     }
                     if (last_req_pos) |p| {
                         if (p >= i) {
-                            std.debug.print("error[KORU180]: `{s}` requires `{s}`, but the resolved chain runs `{s}` only at a later position\n  chain: {s}\n  the annotation is the contract and the chain is the observation — disagreement is a refusal, not a reorder\n  fix: move `{s}` earlier in the chain, or correct the declared edge\n", .{ d.name, req, req, chainRepr(allocator, steps.items) catch "?", req });
+                            std.debug.print("error[KORU185]: `{s}` requires `{s}`, but the resolved chain runs `{s}` only at a later position\n  chain: {s}\n  the annotation is the contract and the chain is the observation — disagreement is a refusal, not a reorder\n  fix: move `{s}` earlier in the chain, or correct the declared edge\n", .{ d.name, req, req, chainRepr(allocator, steps.items) catch "?", req });
                             std.process.exit(1);
                         }
                     } else if (root) {
-                        std.debug.print("error[KORU180]: `{s}` requires `{s}`, but the root pipeline never runs `{s}`\n  a `contract:requires` that its own pipeline cannot satisfy is a dead edge — the check refuses rather than let it stand unverifiable\n  fix: run `{s}` before `{s}` in the chain, or drop the declared edge\n", .{ d.name, req, req, req, d.name });
+                        std.debug.print("error[KORU185]: `{s}` requires `{s}`, but the root pipeline never runs `{s}`\n  a `contract:requires` that its own pipeline cannot satisfy is a dead edge — the check refuses rather than let it stand unverifiable\n  fix: run `{s}` before `{s}` in the chain, or drop the declared edge\n", .{ d.name, req, req, req, d.name });
                         std.process.exit(1);
                     }
                 }

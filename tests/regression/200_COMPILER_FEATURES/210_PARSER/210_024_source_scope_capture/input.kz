@@ -25,7 +25,7 @@ const std = @import("std");
 // Event that takes Source[HTML] parameter for template rendering
 // [comptime|transform] annotation marks this as compile-time transformation
 // Transform events receive: source (user args), invocation (for type resolution), program (AST), allocator (memory)
-~[comptime|transform]tor renderHTML { source: Source<HTML>, invocation: *const Invocation, program: *const Program, allocator: std.mem.Allocator }
+~[comptime|transform]tor renderHTML { source: Source[HTML], invocation: *const Invocation, program: *const Program, allocator: std.mem.Allocator }
 | transformed *const Program
 | failed string
 
@@ -501,7 +501,7 @@ const std = @import("std");
 // THE BREAKTHROUGH TEST: Continuation binding + Source block
 // The 'u' from | data u |> should be captured in source.scope.bindings!
 ~getUserData()
-| data u |> renderHTML [HTML]{
+| data u |> renderHTML {
         <h1>$[u.name]</h1>
         <p>Age: $[u.age]</p>
     }

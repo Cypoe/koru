@@ -62,7 +62,7 @@ say-round = digits(n): L
 
 std/fs:read-lines(path: "tests/regression/810_AOC_2015/810_101_day10_part1/input.txt")
 ! line l |> std/string:from-page(text: l)
-    | ok h |> std/string:parse-int(s: h)
+    | ok h |> std/string:parse-int(s: h.data)
         | ok n0 |> std/string:free(s: h)
             |> say-round(n: n0): a
             |> say-round(n: a): b

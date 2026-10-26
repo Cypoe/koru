@@ -1,0 +1,16 @@
+name: dedup
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Fires when duplicated code is folded into a single canonical home —
+  lift then delete (concepts/frag-dedup-is-lift-then-delete.md). The
+  tell is a verbatim or shape-for-shape twin retiring into a shared
+  import, usually surfaced by the deslop census's sampled roll.
+
+  Witnessed 2026-10-23: emitter_helpers' private containsToken had a
+  verbatim port (`containsTokenLocal`) in continuation_codegen;
+  canonical home is codegen_utils, the leaf both modules already
+  import — six call sites retargeted, census back under pin.
+route: surface

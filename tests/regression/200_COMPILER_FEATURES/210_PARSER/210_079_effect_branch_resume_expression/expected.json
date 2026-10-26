@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -45,7 +45,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -54,7 +54,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -116,7 +116,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -142,7 +142,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                         "line": 12,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "expression",
@@ -162,7 +162,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                         "line": 13,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "terminal"
@@ -177,7 +177,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_079_effect_branch_resume_expression/input.kz",
                 "line": 11,
-                "col": 0
+                "col": 1
             }
         }
     ]

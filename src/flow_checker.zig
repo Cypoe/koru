@@ -216,14 +216,33 @@ pub const FlowChecker = struct {
             defer ref_scope.deinit(self.allocator);
             // Impl flows see their event's input fields everywhere — `n` in
             // `load = if(n < 0) | then …` is a param, never an arm's binding.
+            var member_ctx = MemberCtx{};
             if (flow.impl_of) |*iop| {
                 if (self.findEventDecl(iop)) |decl| {
+                    member_ctx.decl = decl;
                     for (decl.input.fields) |f| {
                         if (f.name.len > 0 and f.name[0] != '_') try ref_scope.append(self.allocator, f.name);
                     }
                 }
             }
-            try self.checkUnboundReferences(&flow.body, &ref_scope, &bound);
+            // Kernel DSL: inside `std/kernel:init(T)` / `pairwise(T)` flows,
+            // `| computed` and `| kernel` branch bindings carry T receivers —
+            // `c[i].x-c` in their bodies needs T's field set to teach.
+            if (flow.body.node) |*head_node| {
+                if (head_node.* == .invocation) {
+                    const head = &head_node.invocation;
+                    if (head.path.module_qualifier) |mq| {
+                        if (std.mem.eql(u8, mq, "std.kernel") and head.path.segments.len == 1 and
+                            (std.mem.eql(u8, head.path.segments[0], "init") or std.mem.eql(u8, head.path.segments[0], "pairwise")))
+                        {
+                            if (head.args.len > 0) {
+                                member_ctx.kernel_shape = std.mem.trim(u8, head.args[0].value, "\" ");
+                            }
+                        }
+                    }
+                }
+            }
+            try self.checkUnboundReferences(&flow.body, &ref_scope, &bound, &member_ctx);
         }
 
         // KORU207 used to live here: a `!` arm on an impl flow's head
@@ -501,6 +520,25 @@ pub const FlowChecker = struct {
         // A `~[prototype]` module opts out of branch-shape strictness the same
         // way it opts out of terminal coverage.
         if (self.prototype_mode) return;
+
+        // Impl produce text gets the same name-resolution scan flow bodies
+        // do — immediate impls never entered checkUnboundReferences, so the
+        // kebab traps (KORU181 name position, KORU182 member position) sat
+        // unguarded in `tor -> a-b` / `-> p.x-c` until the host's own error.
+        var impl_scope: std.ArrayList([]const u8) = .empty;
+        defer impl_scope.deinit(self.allocator);
+        for (decl.input.fields) |f| {
+            if (f.name.len > 0 and f.name[0] != '_') try impl_scope.append(self.allocator, f.name);
+        }
+        var impl_bound = std.StringHashMap(BindSite).init(self.allocator);
+        defer impl_bound.deinit();
+        const member_ctx = MemberCtx{ .decl = decl };
+        if (ii.value.plain_value) |pv|
+            try self.checkNameTokenScan(pv, ii.location, impl_scope.items, &impl_bound, &member_ctx);
+        for (ii.value.fields) |field| {
+            if (field.expression_str) |expr|
+                try self.checkNameTokenScan(expr, ii.location, impl_scope.items, &impl_bound, &member_ctx);
+        }
 
         const name = if (ii.event_path.segments.len > 0)
             ii.event_path.segments[ii.event_path.segments.len - 1]
@@ -1294,13 +1332,11 @@ pub const FlowChecker = struct {
                     .{},
                 );
             }
-            if (f.sub.len > 0) try self.refuseIgnoredDestructureAnnotations(cont, f.sub);
         }
     }
 
-    /// KORU100 for destructured fields: every named leaf must be used in
-    /// the continuation's body. Nested sub-shapes recurse; only LEAF names
-    /// are bindings (an intermediate field with a sub-shape binds nothing).
+    /// KORU100 for destructured fields: every bound name must be used in
+    /// the continuation's body. Paths are flat — every entry is a leaf.
     /// Bind-position destructure usage check (`~f(): { name, age } |> ...`).
     /// Unlike a branch payload, the destructure DECLARATION lives on the same
     /// node whose result flows downstream, so usage must be searched in the
@@ -1308,11 +1344,8 @@ pub const FlowChecker = struct {
     /// declaration itself as a use (a self-reference false positive that let an
     /// unused field slip through).
     fn validateReturnDestructureUsage(self: *FlowChecker, cont: *const ast.Continuation, fields: []const ast.DestructureField) anyerror!void {
+        if (cont.destructure_named) return; // declared shape, not projection
         for (fields) |f| {
-            if (f.sub.len > 0) {
-                try self.validateReturnDestructureUsage(cont, f.sub);
-                continue;
-            }
             if (std.mem.startsWith(u8, f.name, "_")) continue;
             var used = false;
             for (cont.continuations) |*c| {
@@ -1336,11 +1369,8 @@ pub const FlowChecker = struct {
     }
 
     fn validateDestructureUsage(self: *FlowChecker, cont: *const ast.Continuation, fields: []const ast.DestructureField) anyerror!void {
+        if (cont.destructure_named) return; // declared shape, not projection
         for (fields) |f| {
-            if (f.sub.len > 0) {
-                try self.validateDestructureUsage(cont, f.sub);
-                continue;
-            }
             if (std.mem.startsWith(u8, f.name, "_")) continue;
             if (!self.isBindingUsed(cont, f.name)) {
                 try self.reporter.addErrorWithHint(
@@ -1487,10 +1517,6 @@ pub const FlowChecker = struct {
     }
 
     fn noteDestructure(self: *FlowChecker, scope: *std.ArrayList(ScopedBind), f: ast.DestructureField, location: errors.SourceLocation) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.noteDestructure(scope, sub, location);
-            return;
-        }
         try self.noteBind(scope, f.name, location);
     }
 
@@ -1568,10 +1594,6 @@ pub const FlowChecker = struct {
     }
 
     fn noteBorrowDestructure(self: *FlowChecker, scope: *std.ArrayList(BorrowScopeBind), f: ast.DestructureField) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.noteBorrowDestructure(scope, sub);
-            return;
-        }
         try scope.append(self.allocator, .{ .name = f.name, .mutable = hasMutableAnnotation(f.annotations) });
     }
 
@@ -1659,6 +1681,257 @@ pub const FlowChecker = struct {
     /// `: {name}` for a call-site bind (glyph ':').
     const BindSite = struct { glyph: u8, branch: []const u8, name: []const u8 };
 
+    /// Which member-access receivers the KORU182 check can enumerate a
+    /// field set for. `decl` covers an impl flow's input params and
+    /// `| branch` payload bindings; `kernel_shape` covers `| computed` /
+    /// `| kernel` branch bindings inside a `kernel:init(T)` /
+    /// `kernel:pairwise(T)` flow (both carry T receivers). Receivers
+    /// outside these keep the host's `no member` check — conservative.
+    const MemberCtx = struct {
+        decl: ?*const ast.EventDecl = null,
+        kernel_shape: ?[]const u8 = null,
+    };
+
+    /// A member access receiver extracted from expression text: `p.` gives
+    /// root `p`; `a.b[i].` gives root `a` with path `[b]` (indexers peel to
+    /// the element type later, in fieldsOfTypeText). `start` is the byte
+    /// offset where the receiver text begins, for the diagnostic message.
+    const MemberReceiver = struct {
+        root: []const u8,
+        start: usize,
+    };
+
+    /// Walk left from the '.' at `dot_pos` to find the receiver's root
+    /// name and intermediate member segments (pushed right-to-left into
+    /// `member_path` — callers iterate it backwards). Indexers `expr[i]`
+    /// peel past the brackets. Receivers that are not name-shaped —
+    /// calls `f().x-c`, parens, literals, `..` ranges — return null.
+    fn memberReceiver(allocator: std.mem.Allocator, v: []const u8, dot_pos: usize, member_path: *std.ArrayList([]const u8)) !?MemberReceiver {
+        var j = dot_pos;
+        while (j > 0) {
+            var e = j;
+            while (e > 0 and v[e - 1] == ']') {
+                e -= 1;
+                var depth: usize = 1;
+                while (e > 0) {
+                    e -= 1;
+                    if (v[e] == ']') depth += 1;
+                    if (v[e] == '[') {
+                        depth -= 1;
+                        if (depth == 0) break;
+                    }
+                }
+                if (depth != 0) return null;
+            }
+            var s = e;
+            while (s > 0 and ast.isKebabIdentChar(v[s - 1])) s -= 1;
+            if (s == e) return null;
+            const ident = v[s..e];
+            if (s > 0 and v[s - 1] == '.') {
+                if (s >= 2 and v[s - 2] == '.') return null;
+                try member_path.append(allocator, ident);
+                j = s - 1;
+                continue;
+            }
+            return .{ .root = ident, .start = s };
+        }
+        return null;
+    }
+
+    /// `member_path` arrives right-to-left; this walks it reversed so
+    /// `a.b[i].x-c` descends root `a` → field `b` → its element fields.
+    fn memberFieldNames(self: *FlowChecker, root: []const u8, member_path: []const []const u8, ctx: *const MemberCtx, bound: *const std.StringHashMap(BindSite)) anyerror!?std.ArrayList(ast.Field) {
+        var fields: ?std.ArrayList(ast.Field) = null;
+        if (ctx.decl) |decl| {
+            for (decl.input.fields) |f| {
+                if (std.mem.eql(u8, f.name, root)) {
+                    fields = try self.fieldsOfTypeText(f.type);
+                    break;
+                }
+            }
+        }
+        if (fields == null) {
+            if (bound.get(root)) |site| {
+                if (ctx.kernel_shape) |shape_name| {
+                    // `| computed c` binds the kernel's element slice and
+                    // `| kernel k` the element — both carry T's field set.
+                    if (std.mem.eql(u8, site.branch, "computed") or std.mem.eql(u8, site.branch, "kernel"))
+                        fields = try self.fieldsOfTypeText(shape_name);
+                }
+                if (fields == null) {
+                    if (ctx.decl) |decl| {
+                        for (decl.branches) |*b| {
+                            if (std.mem.eql(u8, b.name, site.branch)) {
+                                fields = if (b.payload.fields.len == 1)
+                                    try self.fieldsOfTypeText(b.payload.fields[0].type)
+                                else if (b.payload.fields.len > 1)
+                                    try self.dupFieldList(b.payload.fields)
+                                else
+                                    null;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        var cur = fields orelse return null;
+        var i = member_path.len;
+        while (i > 0) {
+            i -= 1;
+            const seg = member_path[i];
+            var next: ?ast.Field = null;
+            for (cur.items) |f| {
+                if (std.mem.eql(u8, f.name, seg)) {
+                    next = f;
+                    break;
+                }
+            }
+            const f = next orelse {
+                cur.deinit(self.allocator);
+                return null;
+            };
+            const next_fields = (try self.fieldsOfTypeText(f.type)) orelse {
+                cur.deinit(self.allocator);
+                return null;
+            };
+            cur.deinit(self.allocator);
+            cur = next_fields;
+        }
+        return cur;
+    }
+
+    /// Type text → field set, when the text statically names a record.
+    /// Peels `? * [] [N] const` to the payload — `[]Body` receivers answer
+    /// with Body's fields, which is what `c[i].x-c` needs. Inline
+    /// `{ a: T, b: U }` parses directly; a bare name resolves through
+    /// host_type_decl / kernel:shape declarations. Anything else —
+    /// scalars, generics, host types — declines and keeps the host check.
+    fn fieldsOfTypeText(self: *FlowChecker, ty_in: []const u8) anyerror!?std.ArrayList(ast.Field) {
+        var t = std.mem.trim(u8, ty_in, " \t");
+        while (t.len > 0) {
+            if (t[0] == '?' or t[0] == '*') {
+                t = std.mem.trim(u8, t[1..], " \t");
+                continue;
+            }
+            if (t[0] == '[') {
+                const close = std.mem.indexOfScalar(u8, t, ']') orelse break;
+                t = std.mem.trim(u8, t[close + 1 ..], " \t");
+                continue;
+            }
+            if (std.mem.startsWith(u8, t, "const ")) {
+                t = std.mem.trim(u8, t[6..], " \t");
+                continue;
+            }
+            break;
+        }
+        if (t.len == 0) return null;
+        if (t[0] == '{') return self.recordFieldHeads(t);
+        for (t) |ch| {
+            if (!ast.isKebabIdentChar(ch)) return null;
+        }
+        return self.namedTypeFields(t);
+    }
+
+    /// `{ x: i64, y: i64 }` and bare `x: i64, y: i64,` (kernel:shape
+    /// source arg) → the field heads. Commas nested inside a field's type
+    /// (`f: { a: i64, b: i64 }`) are depth-tracked; quoted text is skipped.
+    fn recordFieldHeads(self: *FlowChecker, text_in: []const u8) anyerror!?std.ArrayList(ast.Field) {
+        var t = std.mem.trim(u8, text_in, " \t\n");
+        if (t.len >= 2 and t[0] == '{' and t[t.len - 1] == '}') {
+            t = std.mem.trim(u8, t[1 .. t.len - 1], " \t\n");
+        }
+        var out: std.ArrayList(ast.Field) = .empty;
+        errdefer out.deinit(self.allocator);
+        var depth: usize = 0;
+        var in_string = false;
+        var start: usize = 0;
+        var i: usize = 0;
+        while (i <= t.len) : (i += 1) {
+            if (i == t.len or (t[i] == ',' and depth == 0 and !in_string)) {
+                const part = std.mem.trim(u8, t[start..i], " \t\n");
+                if (part.len > 0) {
+                    if (std.mem.indexOfScalar(u8, part, ':')) |colon| {
+                        const fname = std.mem.trim(u8, part[0..colon], " \t\n");
+                        const ftype = std.mem.trim(u8, part[colon + 1 ..], " \t\n");
+                        if (fname.len > 0) try out.append(self.allocator, .{ .name = fname, .type = ftype });
+                    }
+                }
+                start = i + 1;
+            } else if (t[i] == '"' or t[i] == '\'') {
+                in_string = !in_string;
+            } else if (!in_string) {
+                if (t[i] == '{' or t[i] == '(' or t[i] == '[') depth += 1;
+                if (t[i] == '}' or t[i] == ')' or t[i] == ']') {
+                    if (depth == 0) return null;
+                    depth -= 1;
+                }
+            }
+        }
+        return out;
+    }
+
+    fn dupFieldList(self: *FlowChecker, fields: []const ast.Field) anyerror!std.ArrayList(ast.Field) {
+        var out: std.ArrayList(ast.Field) = .empty;
+        for (fields) |f| try out.append(self.allocator, f);
+        return out;
+    }
+
+    /// Named record lookup across two declaration families: `.kz`
+    /// `host_type_decl` (`pub const Body = struct …`) and the kernel DSL's
+    /// `std/kernel:shape(T)` flows, whose field heads live in the `source`
+    /// arg text. Mirrors findEventDecl's search shape (top items plus
+    /// module_decl items, recursed).
+    fn namedTypeFields(self: *FlowChecker, type_name: []const u8) anyerror!?std.ArrayList(ast.Field) {
+        const items = self.ast_items orelse return null;
+        return self.namedTypeFieldsIn(items, type_name);
+    }
+
+    fn namedTypeFieldsIn(self: *FlowChecker, items: []const ast.Item, type_name: []const u8) anyerror!?std.ArrayList(ast.Field) {
+        for (items) |*item| {
+            switch (item.*) {
+                .host_type_decl => |*htd| {
+                    if (std.mem.eql(u8, htd.name, type_name))
+                        return try self.dupFieldList(htd.shape.fields);
+                },
+                .flow => |*fl| {
+                    if (kernelShapeSourceText(fl)) |pair| {
+                        if (std.mem.eql(u8, pair.name, type_name))
+                            return try self.recordFieldHeads(pair.source);
+                    }
+                },
+                .module_decl => |*m| {
+                    if (try self.namedTypeFieldsIn(m.items, type_name)) |f| return f;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    /// `std/kernel:shape(T)` head → { T-name, source field text }.
+    fn kernelShapeSourceText(fl: *const ast.Flow) ?struct { name: []const u8, source: []const u8 } {
+        const node = fl.body.node orelse return null;
+        const inv = switch (node) {
+            .invocation => |*i| i,
+            else => return null,
+        };
+        const mq = inv.path.module_qualifier orelse return null;
+        if (!std.mem.eql(u8, mq, "std.kernel")) return null;
+        if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "shape")) return null;
+        var shape_name: ?[]const u8 = null;
+        var source: ?[]const u8 = null;
+        for (inv.args) |arg| {
+            if (std.mem.eql(u8, arg.name, "expr"))
+                shape_name = std.mem.trim(u8, arg.value, "\" ");
+            if (std.mem.eql(u8, arg.name, "source"))
+                source = arg.value;
+        }
+        const n = shape_name orelse return null;
+        const s = source orelse return null;
+        return .{ .name = n, .source = s };
+    }
+
     /// THE name-introducing fields on a continuation — arm-position binds,
     /// live when the continuation's own node runs: `| img t` binds `t`, and
     /// the arm-level destructure `! query { [row]s, [ordinal]o }` binds each
@@ -1705,10 +1978,6 @@ pub const FlowChecker = struct {
     }
 
     fn appendDestructureSites(self: *FlowChecker, out: *std.ArrayList(BindSite), f: ast.DestructureField, glyph: u8, branch: []const u8) anyerror!void {
-        if (f.sub.len > 0) {
-            for (f.sub) |sub| try self.appendDestructureSites(out, sub, glyph, branch);
-            return;
-        }
         if (f.name.len > 0 and f.name[0] != '_') try out.append(self.allocator, .{ .glyph = glyph, .branch = branch, .name = f.name });
     }
 
@@ -1741,7 +2010,7 @@ pub const FlowChecker = struct {
     /// continuation's own node runs (pushed before the arg scan); node binds
     /// scope downstream only (pushed after it) — the same ordering
     /// checkMutableBorrows documents.
-    fn checkUnboundReferences(self: *FlowChecker, cont: *const ast.Continuation, scope: *std.ArrayList([]const u8), bound: *const std.StringHashMap(BindSite)) anyerror!void {
+    fn checkUnboundReferences(self: *FlowChecker, cont: *const ast.Continuation, scope: *std.ArrayList([]const u8), bound: *const std.StringHashMap(BindSite), member_ctx: *const MemberCtx) anyerror!void {
         if (cont.is_transformed_subtree) return;
 
         const depth = scope.items.len;
@@ -1754,9 +2023,31 @@ pub const FlowChecker = struct {
 
         if (cont.node) |node| {
             switch (node) {
-                .invocation => |*inv| try self.checkUnboundReferenceArgs(inv, inv.args, cont.location, scope.items, bound),
-                .label_with_invocation => |*lwi| try self.checkUnboundReferenceArgs(&lwi.invocation, lwi.invocation.args, cont.location, scope.items, bound),
-                .label_jump => |*lj| try self.checkUnboundReferenceArgs(null, lj.args, cont.location, scope.items, bound),
+                .invocation => |*inv| try self.checkUnboundReferenceArgs(inv, inv.args, cont.location, scope.items, bound, member_ctx),
+                .label_with_invocation => |*lwi| try self.checkUnboundReferenceArgs(&lwi.invocation, lwi.invocation.args, cont.location, scope.items, bound, member_ctx),
+                .label_jump => |*lj| try self.checkUnboundReferenceArgs(null, lj.args, cont.location, scope.items, bound, member_ctx),
+                else => {},
+            }
+            if (cont.condition) |cond| try self.checkNameTokenScan(cond, cont.location, scope.items, bound, member_ctx);
+            switch (node) {
+                .expression => |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound, member_ctx),
+                .branch_constructor => |*bc| {
+                    if (bc.plain_value) |pv| try self.checkNameTokenScan(pv, cont.location, scope.items, bound, member_ctx);
+                    for (bc.fields) |field| {
+                        if (field.expression_str) |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound, member_ctx);
+                    }
+                },
+                .assignment => |*asgn| {
+                    for (asgn.fields) |field| {
+                        if (field.expression_str) |expr| try self.checkNameTokenScan(expr, cont.location, scope.items, bound, member_ctx);
+                    }
+                },
+                .conditional => |*cond| try self.checkNameTokenScan(cond.condition, cont.location, scope.items, bound, member_ctx),
+                .switch_result => |*sw| try self.checkNameTokenScan(sw.expression, cont.location, scope.items, bound, member_ctx),
+                .foreach => |*fe| try self.checkNameTokenScan(fe.iterable, cont.location, scope.items, bound, member_ctx),
+                .conditional_block => |*cb| {
+                    if (cb.condition) |c| try self.checkNameTokenScan(c, cont.location, scope.items, bound, member_ctx);
+                },
                 else => {},
             }
             sites.clearRetainingCapacity();
@@ -1764,8 +2055,29 @@ pub const FlowChecker = struct {
             for (sites.items) |site| try scope.append(self.allocator, site.name);
         }
 
+        // NamedBranch bodies hang inside the NODE, not cont.continuations —
+        // without this descent `if(x) | then -> q-b` arm bodies go unscanned
+        // and the kebab trap slips through verbatim (validateBindingUsage
+        // walks the same branches for the same reason).
+        if (cont.node) |node| {
+            const branch_bodies: []const ast.NamedBranch = switch (node) {
+                .foreach => |*fe| fe.branches,
+                .conditional => |*cd| cd.branches,
+                .switch_result => |*sw| sw.branches,
+                else => &.{},
+            };
+            for (branch_bodies) |*branch| {
+                const branch_depth = scope.items.len;
+                if (branch.binding) |b| try scope.append(self.allocator, b);
+                for (branch.body) |*body_cont| {
+                    try self.checkUnboundReferences(body_cont, scope, bound, member_ctx);
+                }
+                scope.shrinkRetainingCapacity(branch_depth);
+            }
+        }
+
         for (cont.continuations) |*child| {
-            try self.checkUnboundReferences(child, scope, bound);
+            try self.checkUnboundReferences(child, scope, bound, member_ctx);
         }
     }
 
@@ -1777,7 +2089,7 @@ pub const FlowChecker = struct {
     /// invocations (taps, template-proc splices) carry temporaries, not
     /// author text. `inv` is null for label-jump args, which carry no such
     /// marks. First offender per invocation only.
-    fn checkUnboundReferenceArgs(self: *FlowChecker, inv: ?*const ast.Invocation, args: []const ast.Arg, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite)) anyerror!void {
+    fn checkUnboundReferenceArgs(self: *FlowChecker, inv: ?*const ast.Invocation, args: []const ast.Arg, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite), member_ctx: *const MemberCtx) anyerror!void {
         if (inv) |i| {
             if (i.inserted_by_tap or i.from_opaque_tap or
                 self.invocationResolvesToTemplateProc(&i.path) or
@@ -1785,67 +2097,201 @@ pub const FlowChecker = struct {
         }
         for (args) |arg| {
             if (arg.source_value != null or arg.expression_value != null) continue;
-            const v = arg.value;
-            var in_string = false;
-            var quote: u8 = 0;
-            var i: usize = 0;
-            while (i < v.len) {
-                const ch = v[i];
-                if (in_string) {
-                    if (ch == '\\') {
-                        i += 1;
-                    } else if (ch == quote) {
-                        in_string = false;
+            try self.checkNameTokenScan(arg.value, location, scope, bound, member_ctx);
+        }
+    }
+
+    /// Scan one expression text for references: string literals are skipped
+    /// whole, `.`-led member names and `@`-led builtins are not references.
+    /// KORU108 fires on a name bound SOMEWHERE in the flow but not in scope
+    /// here; KORU181 fires on an unspaced `-` that joined two bound names
+    /// into one undeclared kebab identifier; KORU182 fires the same trap in
+    /// member position (`p.x-c` reads as the field name `x-c`) when the
+    /// receiver's field set is statically enumerable.
+    fn checkNameTokenScan(self: *FlowChecker, v: []const u8, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite), member_ctx: *const MemberCtx) anyerror!void {
+        var in_string = false;
+        var quote: u8 = 0;
+        var i: usize = 0;
+        while (i < v.len) {
+            const ch = v[i];
+            if (in_string) {
+                if (ch == '\\') {
+                    i += 1;
+                } else if (ch == quote) {
+                    in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+            if (ch == '"' or ch == '\'') {
+                in_string = true;
+                quote = ch;
+                i += 1;
+                continue;
+            }
+            const is_start = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
+            if (!is_start) {
+                i += 1;
+                continue;
+            }
+            var end = i + 1;
+            while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
+            const name = v[i..end];
+            const member_dot = ast.precededByMemberDot(v, i);
+            const is_ref = name[0] != '_' and !(i > 0 and v[i - 1] == '@') and !member_dot;
+            if (member_dot and std.mem.indexOfScalar(u8, name, '-') != null) {
+                try self.checkMemberKebab(v, i, name, location, scope, bound, member_ctx);
+            }
+            if (is_ref) {
+                if (bound.get(name)) |site| {
+                    var in_scope = false;
+                    for (scope) |s| {
+                        if (std.mem.eql(u8, s, name)) {
+                            in_scope = true;
+                            break;
+                        }
                     }
-                    i += 1;
-                    continue;
-                }
-                if (ch == '"' or ch == '\'') {
-                    in_string = true;
-                    quote = ch;
-                    i += 1;
-                    continue;
-                }
-                const is_start = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_';
-                if (!is_start) {
-                    i += 1;
-                    continue;
-                }
-                var end = i + 1;
-                while (end < v.len and ast.isKebabIdentChar(v[end])) end += 1;
-                const name = v[i..end];
-                const is_ref = name[0] != '_' and !(i > 0 and v[i - 1] == '@') and !ast.precededByMemberDot(v, i);
-                if (is_ref) {
-                    if (bound.get(name)) |site| {
-                        var in_scope = false;
-                        for (scope) |s| {
-                            if (std.mem.eql(u8, s, name)) {
-                                in_scope = true;
+                    if (!in_scope) {
+                        const bindtext = if (site.glyph == ':')
+                            try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
+                        else
+                            try std.fmt.allocPrint(self.allocator, "{c} {s} {s}", .{ site.glyph, site.branch, site.name });
+                        defer self.allocator.free(bindtext);
+                        try self.reporter.addErrorWithHint(
+                            .KORU108,
+                            location.line,
+                            location.column,
+                            "'{s}' is not in scope here — it is bound by '{s}', and an arm's bindings end with that arm",
+                            .{ name, bindtext },
+                            "move this step into the arm body",
+                            .{},
+                        );
+                        return;
+                    }
+                } else if (std.mem.indexOfScalar(u8, name, '-') != null) {
+                    // `-` is a name glyph, so `a-b` is one identifier, not
+                    // subtraction. When the whole name binds nothing but
+                    // every `-`-segment resolves, the author almost surely
+                    // meant `a - b`. `{ a-b: v }` field-name positions (and
+                    // `a-b:` named args) are declarations, not references.
+                    var k = end;
+                    while (k < v.len and (v[k] == ' ' or v[k] == '\t')) k += 1;
+                    const name_position = k < v.len and v[k] == ':';
+                    var in_scope = false;
+                    for (scope) |s| {
+                        if (std.mem.eql(u8, s, name)) {
+                            in_scope = true;
+                            break;
+                        }
+                    }
+                    if (!name_position and !in_scope) {
+                        var all_resolved = true;
+                        var segs = std.mem.splitScalar(u8, name, '-');
+                        while (segs.next()) |seg| {
+                            if (seg.len == 0) {
+                                all_resolved = false;
                                 break;
                             }
+                            if (!bound.contains(seg)) {
+                                var seg_in_scope = false;
+                                for (scope) |s| {
+                                    if (std.mem.eql(u8, s, seg)) {
+                                        seg_in_scope = true;
+                                        break;
+                                    }
+                                }
+                                if (!seg_in_scope) {
+                                    all_resolved = false;
+                                    break;
+                                }
+                            }
                         }
-                        if (!in_scope) {
-                            const bindtext = if (site.glyph == ':')
-                                try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
-                            else
-                                try std.fmt.allocPrint(self.allocator, "{c} {s} {s}", .{ site.glyph, site.branch, site.name });
-                            defer self.allocator.free(bindtext);
+                        if (all_resolved) {
+                            const spaced = try std.mem.join(self.allocator, " - ", blk: {
+                                var parts: std.ArrayList([]const u8) = .empty;
+                                var segs2 = std.mem.splitScalar(u8, name, '-');
+                                while (segs2.next()) |seg| try parts.append(self.allocator, seg);
+                                break :blk parts.items;
+                            });
+                            defer self.allocator.free(spaced);
                             try self.reporter.addErrorWithHint(
-                                .KORU108,
+                                .KORU181,
                                 location.line,
                                 location.column,
-                                "'{s}' is not in scope here — it is bound by '{s}', and an arm's bindings end with that arm",
-                                .{ name, bindtext },
-                                "move this step into the arm body",
-                                .{},
+                                "'{s}' reads as one name, not subtraction — `-` joins identifiers (kebab), and no '{s}' is declared",
+                                .{ name, name },
+                                "write '{s}' for subtraction",
+                                .{spaced},
                             );
                             return;
                         }
                     }
                 }
-                i = end;
+            }
+            i = end;
+        }
+    }
+
+    /// KORU182 — the `-` trap in member position. `p.x-c` resolves as the
+    /// field NAME `x-c` under the same uniform ruling as name position:
+    /// member tokens were never subtraction either. When the receiver's
+    /// record fields are statically enumerable (impl input params, branch
+    /// payload bindings, kernel `| computed`/`| kernel` bindings) and the
+    /// set holds `x` while `c` resolves as a name — but `x-c` itself is no
+    /// field — the author almost surely wrote `p.x - c` unspaced, and the
+    /// emitted `x_3`-shaped member lookup dies in the host as
+    /// `no field named`. First `x-c` is diagnosed, never guessed at: a
+    /// declared kebab field name stays a legal member spelling.
+    fn checkMemberKebab(self: *FlowChecker, v: []const u8, name_start: usize, name: []const u8, location: errors.SourceLocation, scope: []const []const u8, bound: *const std.StringHashMap(BindSite), member_ctx: *const MemberCtx) anyerror!void {
+        var member_path: std.ArrayList([]const u8) = .empty;
+        defer member_path.deinit(self.allocator);
+        const recv = (try memberReceiver(self.allocator, v, name_start - 1, &member_path)) orelse return;
+        var fields = (try self.memberFieldNames(recv.root, member_path.items, member_ctx, bound)) orelse return;
+        defer fields.deinit(self.allocator);
+
+        for (fields.items) |f| {
+            if (std.mem.eql(u8, f.name, name)) return;
+        }
+
+        var segs = std.mem.splitScalar(u8, name, '-');
+        const first = segs.next() orelse return;
+        if (first.len == 0) return;
+        var first_is_field = false;
+        for (fields.items) |f| {
+            if (std.mem.eql(u8, f.name, first)) {
+                first_is_field = true;
+                break;
             }
         }
+        if (!first_is_field) return;
+        var rest: std.ArrayList([]const u8) = .empty;
+        defer rest.deinit(self.allocator);
+        while (segs.next()) |seg| {
+            if (seg.len == 0) return;
+            var resolves = bound.contains(seg);
+            if (!resolves) {
+                for (scope) |s| {
+                    if (std.mem.eql(u8, s, seg)) {
+                        resolves = true;
+                        break;
+                    }
+                }
+            }
+            if (!resolves) return;
+            try rest.append(self.allocator, seg);
+        }
+        const rest_joined = try std.mem.join(self.allocator, " - ", rest.items);
+        defer self.allocator.free(rest_joined);
+        const recv_text = v[recv.start .. name_start - 1];
+        try self.reporter.addErrorWithHint(
+            .KORU182,
+            location.line,
+            location.column,
+            "'{s}.{s}' reads as the field name '{s}', not subtraction — `-` joins identifiers (kebab), and '{s}' has no field '{s}'",
+            .{ recv_text, name, name, recv_text, name },
+            "for subtraction write the segments spaced: '{s} - {s}'",
+            .{ first, rest_joined },
+        );
     }
 
     /// True when the invocation's event is declared `[transform]` — its arg

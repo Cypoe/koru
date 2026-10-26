@@ -382,7 +382,7 @@
                 std.debug.print("  Fetching {s}...\n", .{zdep.name});
                 const fetch_result = std.process.Child.run(.{
                     .allocator = allocator,
-                    .argv = &[_][]const u8{ "zig", "fetch", zdep.url },
+                    .argv = &[_][]const u8{ @import("emitter_helpers").zigExe(), "fetch", zdep.url },
                 }) catch {
                     std.debug.print("    \x1b[31m✗\x1b[0m failed to run zig fetch\n", .{});
                     continue;

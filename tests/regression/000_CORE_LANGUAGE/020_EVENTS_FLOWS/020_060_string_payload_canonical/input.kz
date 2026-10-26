@@ -15,6 +15,6 @@
 }
 
 ~fetch(id: 1)
-| found { name, age: i64 } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
+| found { name, age } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
 | found { name } |> std/io:print.ln("younger {{ name:s }}")
 | missing |> std/io:print.ln("nope")

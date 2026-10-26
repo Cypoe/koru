@@ -26,62 +26,15 @@
 ~proc vocabulary|zig {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena_state.allocator();
-    const text = renderVocabulary(allocator, br.scope, br.defined, br.introspection, br.session_env)
+    const text = renderVocabulary(allocator, br.scope, br.defined, br.introspection, br.session_env, br.mounted_scopes.items)
         orelse return .{ .not_found = br.scope };
     return .{ .ok = text };
 }
 
-// The render both surfaces share — the `vocabulary` tor for host callers and
-// the `vocabulary()` wire verb agree byte-for-byte: compiled scope, the
-// granted host verbs (so the session's answer is self-describing), then the
-// session's own inventions, one line each: `name(param: type<!phantom>, ...)`.
-fn renderVocabulary(allocator: std.mem.Allocator, scope: []const u8, defined: ?*DefinedFlows, introspection: bool, session_env: ?*Environment) ?[]const u8 {
-    const rt = @import("root").koru_std.koru_runtime;
-    var out = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
-
-    switch (rt.scope_vocabulary_event.handler(.{ .name = scope })) {
-        .ok => |v| out.appendSlice(allocator, v) catch unreachable,
-        .not_found => return null,
-    }
-
-    if (introspection) {
-        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-        out.appendSlice(allocator, introspection_verbs) catch unreachable;
-    }
-    appendDefinedLines(&out, allocator, defined);
-    appendBoundLines(&out, allocator, session_env);
-
-    return out.toOwnedSlice(allocator) catch unreachable;
-}
-
-// Bound session values — the names a turn may reference. One line each:
-// `r3 {user_id, name}` — the binding and the fields it carries, so the
-// agent sees both that `r3` exists and what `r3.<field>` may name.
-fn appendBoundLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, session_env: ?*Environment) void {
-    const se = session_env orelse return;
-    var it = se.bindings.iterator();
-    while (it.next()) |entry| {
-        if (out.items.len > 0) out.append(allocator, '\n') catch unreachable;
-        out.appendSlice(allocator, entry.key_ptr.*) catch unreachable;
-        const fields = entry.value_ptr.fields;
-        if (fields.len == 0) continue;
-        // `__type_ref` is the datum itself — list only the addressable fields.
-        var listed = false;
-        for (fields) |f| {
-            if (std.mem.eql(u8, f.name, "__type_ref")) continue;
-            if (!listed) {
-                out.appendSlice(allocator, " {") catch unreachable;
-                listed = true;
-            } else out.appendSlice(allocator, ", ") catch unreachable;
-            out.appendSlice(allocator, f.name) catch unreachable;
-        }
-        if (listed) out.append(allocator, '}') catch unreachable;
-    }
-}
-
-// `appendDefinedLines` — the invented-verbs render, with each flow's
-// declared outcome contract — lives in bridge.deflines.kz (the `deflines`
-// part), shared with the affordances render.
+// `renderVocabulary` and `renderGrammar` — the surfaces both the tors and
+// the wire verbs draw — moved to the `render` part, beside
+// `appendBoundLines`/`appendDefinedLines`. Mounted scopes render through
+// the same line emitters the compiled scope uses.
 
 // ============================================================================
 // GRAMMAR - the derived prompt, complete: the wire's rules + the session's
@@ -104,12 +57,12 @@ fn appendBoundLines(out: *std.ArrayList(u8), allocator: std.mem.Allocator, sessi
 ~proc grammar|zig {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena_state.allocator();
-    const text = renderGrammar(allocator, br.scope, br.defined, br.introspection)
+    const text = renderGrammar(allocator, br.scope, br.defined, br.introspection, br.mounted_scopes.items)
         orelse return .{ .not_found = br.scope };
     return .{ .ok = text };
 }
 
-// renderGrammar moved to the `grammar` part — the verb's render beside
+// renderGrammar lives in the `render` part — the verb's render beside
 // the vocabulary it composes.
 
 // ============================================================================
@@ -147,9 +100,9 @@ pub fn hostDispatch(
     }
     if (is_custody) return hostCustody(view, out);
     const text = (if (is_vocab)
-        renderVocabulary(view.allocator, view.scope_name, view.defined, true, view.session_env)
+        renderVocabulary(view.allocator, view.scope_name, view.defined, true, view.session_env, view.mounted)
     else
-        renderGrammar(view.allocator, view.scope_name, view.defined, true)) orelse {
+        renderGrammar(view.allocator, view.scope_name, view.defined, true, view.mounted)) orelse {
             view.error_detail.* = "host verb on a scope the registry does not know";
             return error.DispatchFailed;
         };

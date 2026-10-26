@@ -1,0 +1,37 @@
+// Koru Standard Library: the minted-cursor convention of grid.kz — the
+// name a grid-owned loop gives the index it has already proven. Joined
+// via `~part cursor` in grid.kz; merged into the grid module at load.
+
+const grid_cursor = struct {
+    // No imports: parts merge into the one `koru_grid` namespace, so bare
+    // `std`/`ast_grid` here resolve to grid.read.kz's file-scope imports.
+    // A MINTED LOOP CURSOR SPELLS ITS PROOF in the name:
+    // `__koru_gi_<grid>_L<line>` — the grid the site's range was checked
+    // against (kebab `-` flattened to `_`, the emitter's own identifier
+    // rule, so the name is Zig-legal wherever it lands) and the line that
+    // minted it. Embedding the grid is not decoration: a `stored` write
+    // addressed by the cursor meets the name as raw text and must know
+    // WHICH grid the proof covers — `dst[i]` inside a loop proven on
+    // `cells` keeps its floor.
+    fn mint(alloc: std.mem.Allocator, grid: []const u8, line: usize) []const u8 {
+        const flat = std.mem.replaceOwned(u8, alloc, grid, "-", "_") catch unreachable;
+        return std.fmt.allocPrint(alloc, "__koru_gi_{s}_L{d}", .{ flat, line }) catch unreachable;
+    }
+    // The inverse: which grid a minted cursor name was proven against, in
+    // SOURCE spelling — the flattened `_`s were `-`s, and a bare `_` cannot
+    // occur in a Koru name (rejectSnakeName reserves it), so the recovery is
+    // unambiguous. Not a minted cursor at all → null. The tail is `_L<line>`:
+    // trailing digits, then `L`, then the separator.
+    fn gridOf(alloc: std.mem.Allocator, text: []const u8) ?[]const u8 {
+        const prefix = "__koru_gi_";
+        if (!std.mem.startsWith(u8, text, prefix)) return null;
+        const rest = text[prefix.len..];
+        var e = rest.len;
+        while (e > 0 and rest[e - 1] >= '0' and rest[e - 1] <= '9') e -= 1;
+        if (e == rest.len or e < 2) return null;
+        if (rest[e - 1] != 'L' or rest[e - 2] != '_') return null;
+        const flat = rest[0 .. e - 2];
+        if (flat.len == 0) return null;
+        return std.mem.replaceOwned(u8, alloc, flat, "_", "-") catch unreachable;
+    }
+};

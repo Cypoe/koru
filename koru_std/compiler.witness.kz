@@ -208,10 +208,10 @@ fn witnessCheckCollectItems(
             if (std.mem.eql(u8, wm.verdict, "rounds")) {
                 const lit_src = wm.arrow[arrow_dest_end + 2 ..];
                 const lit_text = if (std.mem.startsWith(u8, lit_src, "literal:")) lit_src["literal:".len..] else lit_src;
-                reporter.addError(.KORU209, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from literal {s}, which rounds in {s}", .{ wm.site, dest, lit_text, dest }) catch {};
+                reporter.addError(.KORU212, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from literal {s}, which rounds in {s}", .{ wm.site, dest, lit_text, dest }) catch {};
                 refused = true;
             } else if (std.mem.eql(u8, wm.verdict, "deferred")) {
-                reporter.addError(.KORU209, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from an unproven value (deferred)", .{ wm.site, dest }) catch {};
+                reporter.addError(.KORU212, wm.line, wm.column, "std/witness: [strict] requires every stored write to be proven lossless — '{s}' ({s}) is written from an unproven value (deferred)", .{ wm.site, dest }) catch {};
                 refused = true;
             }
         }

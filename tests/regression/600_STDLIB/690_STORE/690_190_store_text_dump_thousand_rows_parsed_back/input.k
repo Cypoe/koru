@@ -63,7 +63,7 @@ std/store:query(buf)
     {{ b.text:S }}
 }: dump |> std/string:split(s: dump, sep: " ")
     ! piece tok |> std/string:from-page(text: tok)
-        | ok h |> std/string:parse-int(s: h)
+        | ok h |> std/string:parse-int(s: h.data)
             | ok n |> if(pstate.have == 0)
                 | then |> std/store:stored { pstate.pid: n, pstate.have: 1 }
                 | else |> echo(v: pstate.pid): pv |> std/store:insert(dst) { id: pv, hp: n }

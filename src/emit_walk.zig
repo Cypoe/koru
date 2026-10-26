@@ -306,6 +306,21 @@ pub fn declShape(event: *const ast.EventDecl) DeclShape {
     return .plain;
 }
 
+/// Transform-minted pool glue (`__grid_pool*` units) — small statement
+/// blocks that exist only to carry a lowered operation across the tor
+/// boundary; any optimizing compiler inlines them. Marking them
+/// `always_inline` is honest C (CompCert accepts the attribute) and
+/// keeps the verifier's per-function check local: a caller chaining
+/// pool-alloc → write → pool-free over a malloc'd global is a call-chain
+/// composition alive-tv cannot close inside its timeout (measured on a
+/// minimal repro — the same region verifies inlined), while the
+/// un-inlined form's timeout is unverifiable, not incorrect.
+pub fn alwaysInline(event: *const ast.EventDecl) bool {
+    const segs = event.path.segments;
+    if (segs.len == 0) return false;
+    return std.mem.startsWith(u8, segs[segs.len - 1], "__grid_pool");
+}
+
 /// The spelling questions a C write path asks — narrow answers only.
 /// The walk owns sequencing and grammar; the lane answers names and
 /// types. Member/tag spellings (`cMemberName`, `cResTagConst`,
@@ -518,7 +533,7 @@ pub fn writeEventDef(
         w.typeOf(w.ctx, rt) orelse return error.UnsupportedConstruct
     else
         "void";
-    try out.print(allocator, "static {s} {s}(", .{ ret, name });
+    try out.print(allocator, "static {s}{s} {s}(", .{ if (alwaysInline(event)) "__attribute__((always_inline)) " else "", ret, name });
     try writeInParam(out, allocator, w, event, name);
     try out.appendSlice(allocator, ") {\n");
     try writeFieldBindings(out, allocator, w, event);
@@ -627,7 +642,7 @@ pub fn writeEventDecl(
                 w.typeOf(w.ctx, rt) orelse return error.UnsupportedConstruct
             else
                 "void";
-            try out.print(allocator, "static {s} {s}(", .{ ret, name });
+            try out.print(allocator, "static {s}{s} {s}(", .{ if (alwaysInline(event)) "__attribute__((always_inline)) " else "", ret, name });
             try writeInParam(out, allocator, w, event, name);
             try out.appendSlice(allocator, ");\n");
         },

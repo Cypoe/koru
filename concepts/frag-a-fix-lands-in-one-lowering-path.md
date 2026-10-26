@@ -964,3 +964,46 @@ store — the first cell to combine the two.
   `[id]` existed as a request before it existed as a cell; the first
   program to run it on the C lane named the gap. Demand-driven machinery
   tests itself only when the demand shows up.
+## Seventh instance — the member list is enumerated once per WALK, and the pin sat on the quiet sibling (2026-10-21)
+
+The sixth tell says the whole-program walk is an enumerated member list
+whose prongs arrive one per incident. It undersells the shape: there is not
+one list, there is **one list per walk**, and the store alone has two —
+`Rewrite.rewriteNode` for the identity path, `storeRefsContH` for the
+plural path — each accumulating the same positions independently. The
+`.expression` prong (a produce arm `| then -> s[h].f`) landed in the
+identity walk at 110_022. Fourteen months later the plural walk still
+carried `.invocation`, `.inline_code`, and `.branch_constructor` — which it
+had received at *its* incident, 690_256 — and nothing else. The two
+enumerations were each "complete" and they disagreed by exactly one arm.
+
+The corpus's green was honest and the gap was still invisible — the file's
+own cross-product section, fired verbatim: `690_078` pins a read in a
+produce arm and passed the whole time, because its store is a singleton.
+The plural store — the common one, the one with `capacity:` — had no pin in
+that position, and "produce arms work" was what the board reported.
+
+The instance also crossed a construct boundary for the first time. `grid`'s
+`lowerCont` carries the same switch for the same reason — `g[i].v` in a
+produce arm went to the host verbatim on exactly the same axis. Two
+different stdlib constructs, two walk functions, one missing prong each —
+the language-limitation misreading served twice in one probe: the LangArena
+binarytrees port compiled `| then -> arena[i].item + 1` and got
+`use of undeclared identifier 'arena'` out of Zig.
+
+- **When a member list has a sibling, the incident fix is a candidate for
+  transplant, not a done fix.** 690_256's `.branch_constructor` prong went
+  into the plural walk alone; nobody diffed the identity walk's list
+  against it. The cheap question at any member-list fix is "which other
+  switch over the same node kinds exists, and does it carry this prong" —
+  one grep for `=> {}` siblings, or for the prong's name.
+- **A green pin on the uncommon path reads as coverage of the common one.**
+  690_078's store has no `capacity:`, so it exercises the identity walk —
+  the rarer path in real programs. The pin taught "produce arms are
+  covered" while meaning "produce arms are covered on the walk this author
+  happened to declare."
+
+Pinned at 690_376 (plural store: `| then -> arena[h].item + 1` inside a
+tor called from a `| row` arm) and 697_017 (grid twin, same position).
+294/295 on the 690+695+697 slice; the one red is a ledger-known prior
+regression.

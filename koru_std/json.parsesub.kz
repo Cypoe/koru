@@ -1,0 +1,34 @@
+// Koru Standard Library: JSON parse — sub-entry expansion. Joined via
+// `~part sub` in json.parse.kz; merged into the json.parse module at load.
+// A `{...}` spec written inline in a plain-brace schema arrives as spec
+// text, not a sub-destructure; expanding it here binds the object's
+// LEAVES (`addr:{ city }` binds `city`, not `addr`) — the same shape the
+// sub-destructure form produces.
+
+const SubH = struct {
+    const std2 = @import("std");
+    const ast2 = @import("ast");
+
+    fn expand(ctx: *ParseH.Ctx, nf: *ast2.DestructureField, ty: *const ParseH.JTy) void {
+        var subs = std2.ArrayList(ast2.DestructureField){};
+        for (ctx.shapes.items[ty.obj]) |jf|
+            subs.append(ctx.a, mkSub(ctx, jf)) catch unreachable;
+        nf.sub = subs.toOwnedSlice(ctx.a) catch unreachable;
+        nf.type_text = null;
+    }
+
+    /// A parsed JField back into a DestructureField leaf — name binds the
+    /// payload member, sub-objects recurse. The emit splices `.parent.child`.
+    fn mkSub(ctx: *ParseH.Ctx, jf: ParseH.JField) ast2.DestructureField {
+        var sf = ast2.DestructureField{ .name = jf.name, .path = jf.name };
+        if (jf.ty.* == .obj) {
+            var subs = std2.ArrayList(ast2.DestructureField){};
+            for (ctx.shapes.items[jf.ty.obj]) |c|
+                subs.append(ctx.a, mkSub(ctx, c)) catch unreachable;
+            sf.sub = subs.toOwnedSlice(ctx.a) catch unreachable;
+        } else {
+            sf.type_text = ParseH.zigTy(ctx, jf.ty);
+        }
+        return sf;
+    }
+};

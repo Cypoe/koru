@@ -18,13 +18,14 @@ import std/node
 import std/cell
 import std/proto
 import std/runtime
+import std/interpreter
 
 std/proto(room_state) {
     visits: u32
 }
 
 pub tor greet { name: string } -> string
-greet -> "hello {{ name:s }}"
+greet -> name
 
 std/runtime:register(scope: "cell") {
     greet(5)
@@ -46,7 +47,7 @@ std/node(node)
 // member lookup → borrowed cell → cell:run dispatch
 std/node(node.room-42)
 | cell b |> std/cell:run(c: b, source: "greet(name: \"room-42\")")
-  | result r |> std/io:print.ln("cell said: {{ r.bound:s }}")
+  | result r |> std/interpreter:value.stringify(r.value): j |> std/io:print.ln("cell said: {{ j:s }}")
   | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
 | held-by o |> std/io:print.ln("held by {{ o:s }}")
 | not-found |> std/io:print.ln("room-42 missing")

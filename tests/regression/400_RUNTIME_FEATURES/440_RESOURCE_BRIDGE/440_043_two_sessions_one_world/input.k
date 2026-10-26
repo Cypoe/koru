@@ -65,8 +65,8 @@ turn = std/io:print.ln("  agent> {{ source:s }}")
 | unhandled-branch _ |> std/io:print.ln("  world< unhandled")
 
 [with]std/bridge:create(id: "a", scope: "sandbox", introspection: true, world: "tests/regression/400_RUNTIME_FEATURES/440_RESOURCE_BRIDGE/440_043_two_sessions_one_world/world"): a
-|> turn(br: a, source: "read(path: \"hello.txt\") | ok t |> write(path: \"backup.txt\", text: t)")
-|> turn(br: a, source: "tor backup { src: string, dst: string }\nbackup = read(path: src) | ok t |> write(path: dst, text: t)")
+|> turn(br: a, source: "read(path: \"hello.txt\")\n| ok t |> write(path: \"backup.txt\", text: t)")
+|> turn(br: a, source: "tor backup { src: string, dst: string }\nbackup = read(path: src)\n| ok t |> write(path: dst, text: t)")
 |> turn(br: a, source: "backup(src: \"hello.txt\", dst: \"again.txt\")")
 |> turn(br: a, source: "open(path: \"hello.txt\")")
 |> turn(br: a, source: "poke(conn: \"conn_1\")")

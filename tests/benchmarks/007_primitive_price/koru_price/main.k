@@ -262,7 +262,7 @@ tor take-value { a: string }
 take-value = if(cfg.which == 1)
 | then |> set-scenario(a)
 | else |> std/string:from-page(text: a)
-    | ok h |> std/string:parse-int(s: h)
+    | ok h |> std/string:parse-int(s: h.data)
         | ok v |> store-num(v)
         | err _ |> _
     | err _ |> _

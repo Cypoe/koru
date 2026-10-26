@@ -110,6 +110,7 @@ node_modules/
 # (2026-08, 74c9fd1d carried the 641_020 build artifacts); a staging dir is
 # never a home for backend.zig / *.err / FAILURE runtime state.
 .orphan-staging/
+.staging/
 
 # ============================================================================
 # Executables (Anywhere in Project)

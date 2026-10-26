@@ -1,0 +1,53 @@
+// Koru Standard Library: the `norm` part of regex.kz.
+// Joined via `~part norm` in regex.kz; merged into the regex module at
+// load. Reads the `:` spec on delivery-arm destructures and normalizes
+// it out of the emission path — `{ l: i64 }` carries the conversion
+// spec in the `:` slot: ident-shaped RHS lands on `path` (the parser
+// can't tell `i64` from a field name), sigil-shaped RHS on `type_text`.
+// Either way it is THIS tor's spec — and the emitted binding must read
+// the payload by capture name (`dst.l`), never `dst.i64`.
+
+const SpecH = struct {
+    const std2 = @import("std");
+    const ast2 = @import("ast");
+
+    /// The `:` spec on a destructure field: type_text, or path when the
+    /// parser left an ident-shaped RHS there. Null for a bare pun.
+    fn specOf(f: ast2.DestructureField) ?[]const u8 {
+        return f.type_text orelse (if (!std2.mem.eql(u8, f.path, f.name)) f.path else null);
+    }
+
+    /// Integer-class spec text — `i64`, `u8`, `isize`, `usize`, …
+    fn specIsInt(t0: []const u8) bool {
+        const t = std2.mem.trim(u8, t0, " \t");
+        if (std2.mem.eql(u8, t, "isize") or std2.mem.eql(u8, t, "usize")) return true;
+        if (t.len >= 2 and (t[0] == 'i' or t[0] == 'u')) {
+            for (t[1..]) |ch| {
+                if (ch < '0' or ch > '9') return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// Clone `conts` with every destructure field's `path` reset to its
+    /// field name — the spec was consumed as conversion text, so the
+    /// emitted binding reads the payload by name, not by spec text.
+    fn normSpecPaths(allocator: std2.mem.Allocator, conts: []const ast2.Continuation) []ast2.Continuation {
+        const norm = allocator.alloc(ast2.Continuation, conts.len) catch unreachable;
+        for (conts, 0..) |c, ci| {
+            var oc = c;
+            if (c.destructure.len > 0) {
+                const nd = allocator.alloc(ast2.DestructureField, c.destructure.len) catch unreachable;
+                for (c.destructure, 0..) |f, fi| {
+                    var nf = f;
+                    nf.path = f.name;
+                    nd[fi] = nf;
+                }
+                oc.destructure = nd;
+            }
+            norm[ci] = oc;
+        }
+        return norm;
+    }
+};

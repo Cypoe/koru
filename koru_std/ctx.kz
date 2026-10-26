@@ -52,6 +52,7 @@
 // Promoted from the libs/ctx experiment (koru-libs commit 60b20a3).
 
 const std = @import("std");
+const ast = @import("ast");
 
 ~[keyword|comptime|transform|pre_late]pub tor default {
     expr: Expression,
@@ -61,553 +62,602 @@ const std = @import("std");
     allocator: std.mem.Allocator
 } -> SiteResult
 
+// A scope is a store name plus an optional bare-identifier subscript:
+// `world` → {store=world, sub=null}; `themes[i]` → {store=themes,
+// sub="i"}. Anything else provides no fields.
+const Scope = struct {
+    store: []const u8,
+    expr: []const u8, // emit text — `themes[i]`; in clones `themes[__ctxarg0]`
+    sub: ?[]const u8, // the subscript ident, when bare
+};
+
+// A CloneReq records that a callee was invoked under `stack` and its
+// body consumes the scope — so a specialized decl+impl pair gets
+// synthesized: the clone's input is the original's plus one
+// `__ctxargN` per lifted subscript binding, and its body is the
+// original's rewritten under the lifted stack.
+const CloneReq = struct {
+    orig_last: []const u8,
+    orig_mq: ?[]const u8,
+    key: []const u8,
+    clone_seg: []const u8,
+    stack: []const Scope, // LIFTED — exprs read `store[__ctxargN]`
+    lift: []const []const u8, // original binding names, per __ctxargN
+};
+
+const Ctx = struct {
+    a: std.mem.Allocator,
+    prog: *const ast.Program,
+    changed: *bool,
+    clones: *std.ArrayList(CloneReq),
+    memo: *std.StringHashMap(bool),
+    visiting: *std.StringHashMap(void),
+
+    // `themes[i]` → {themes, expr, sub=i}; `world` → {world, expr, null}
+    fn parseScope(v: []const u8) Scope {
+        if (std.mem.indexOfScalar(u8, v, '[')) |bp| {
+            const close = std.mem.indexOfScalarPos(u8, v, bp, ']') orelse v.len;
+            const sv = v[bp + 1 .. close];
+            var bare = sv.len > 0;
+            for (sv) |ch| {
+                if (!(std.ascii.isAlphanumeric(ch) or ch == '_')) bare = false;
+            }
+            if (bare) return .{ .store = v[0..bp], .expr = v, .sub = sv };
+        }
+        var end: usize = 0;
+        while (end < v.len) : (end += 1) {
+            const ch = v[end];
+            if (ch == '[' or ch == '.' or ch == ' ' or ch == '\t' or ch == '(') break;
+        }
+        return .{ .store = v[0..end], .expr = v, .sub = null };
+    }
+
+    // A column of the injectable surface: presented name + canonical
+    // type. Matching is name AND type — a same-named column whose type
+    // cannot serve the callee's param is skipped, so an outer scope's
+    // compatible field answers through a mistyped inner shadow.
+    const Col = struct { name: []const u8, type: []const u8 };
+
+    // Canonical column type from a seed field's rhs: `9[i64]` peels to
+    // `i64` (struct_literal.peelBaseType's rule, mirrored — transform
+    // code cannot import it), otherwise the rhs IS the type spelling.
+    // `<...>` phantom state is stripped, matching Field.type's canonical
+    // form ("phantom states/tags stripped"). A rhs that is a bare
+    // literal (`0`, `"x"`, `true`) carries no readable type — returns ""
+    // and matches by name alone, preserving name-only behavior for
+    // seeds whose type is inferred downstream.
+    fn canonColType(self: *const @This(), rhs0: []const u8) []const u8 {
+        var rhs = std.mem.trim(u8, rhs0, " \t");
+        if (rhs.len >= 3 and rhs[rhs.len - 1] == ']') {
+            if (std.mem.lastIndexOfScalar(u8, rhs, '[')) |lb| {
+                const inner = rhs[lb + 1 .. rhs.len - 1];
+                const base_types = [_][]const u8{
+                    "i8",  "i16", "i32",   "i64",   "u8",   "u16", "u32",
+                    "u64", "usize", "isize", "f16",  "f32",  "f64", "bool",
+                };
+                for (base_types) |t| {
+                    if (std.mem.eql(u8, inner, t)) {
+                        rhs = inner;
+                        break;
+                    }
+                }
+            }
+        }
+        if (rhs.len == 0) return "";
+        const c0 = rhs[0];
+        if ((c0 >= '0' and c0 <= '9') or c0 == '-' or c0 == '+' or c0 == '"' or c0 == '\'') return "";
+        if (std.mem.eql(u8, rhs, "true") or std.mem.eql(u8, rhs, "false")) return "";
+        if (std.mem.indexOfScalar(u8, rhs, '<')) |lt| rhs = std.mem.trim(u8, rhs[0..lt], " \t");
+        return self.a.dupe(u8, rhs) catch unreachable;
+    }
+
+    // Exact canonical-string match: column type vs the callee's declared
+    // field type. A module-qualified column `*app/lib/pend:Pending` also
+    // accepts `module_path:type` reconstruction — f.type for `*Pending`
+    // carries its qualifier in f.module_path. An unreadable column type
+    // (bare-literal seed, "") is a wildcard: name-only, as before.
+    fn typeFits(self: *const @This(), colty: []const u8, f: *const ast.Field) bool {
+        if (colty.len == 0) return true;
+        if (std.mem.eql(u8, colty, f.type)) return true;
+        const mp = f.module_path orelse return false;
+        var ty = f.type;
+        var ptr = false;
+        if (ty.len > 0 and ty[0] == '*') {
+            ptr = true;
+            ty = ty[1..];
+        }
+        const qualified = std.fmt.allocPrint(self.a, "{s}{s}:{s}", .{ if (ptr) "*" else "", mp, ty }) catch unreachable;
+        if (std.mem.eql(u8, colty, qualified)) return true;
+        // Separators differ between the two spellings — module_path is
+        // dotted (`test_lib.user`), seeds are slashed (`app/lib/pend`).
+        const alt = self.a.dupe(u8, qualified) catch unreachable;
+        for (alt) |*ch| {
+            if (ch.* == '/') ch.* = '.' else if (ch.* == '.') ch.* = '/';
+        }
+        return std.mem.eql(u8, colty, alt);
+    }
+
+    // First column of `cols` that can serve decl field `f` — same name
+    // AND a fitting type — or null.
+    fn matchingCol(self: *const @This(), cols: []const Col, f: *const ast.Field) ?[]const u8 {
+        for (cols) |c| {
+            if (std.mem.eql(u8, c.name, f.name) and self.typeFits(c.type, f)) return c.name;
+        }
+        return null;
+    }
+
+    // Columns of a store — the injectable surface of a scope that
+    // names it. Read off the `std/store:new` seed block. A store
+    // declared inside a module still scopes module-resident flows —
+    // the walk recurses module_decl items the way findDecl does.
+    fn scopeFields(self: *const @This(), store: []const u8) []const Col {
+        return self.scopeFieldsIn(self.prog.items, store) orelse &[_]Col{};
+    }
+
+    fn scopeFieldsIn(self: *const @This(), items: []const ast.Item, store: []const u8) ?[]const Col {
+        for (items) |*pi| {
+            if (pi.* == .module_decl) {
+                if (self.scopeFieldsIn(pi.module_decl.items, store)) |cols| return cols;
+                continue;
+            }
+            if (pi.* != .flow) continue;
+            const inv = pi.flow.inv();
+            if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
+            const mq = inv.path.module_qualifier orelse continue;
+            if (!std.mem.eql(u8, mq, "std.store")) continue;
+            var named = false;
+            var seed: ?[]const u8 = null;
+            for (inv.args) |arg| {
+                if (std.mem.eql(u8, arg.name, "expr")) {
+                    var v = arg.value;
+                    if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v = v[1 .. v.len - 1];
+                    named = std.mem.eql(u8, v, store);
+                } else if (std.mem.eql(u8, arg.name, "source")) {
+                    seed = if (arg.source_value) |sv| sv.text else arg.value;
+                }
+            }
+            if (!named or seed == null) continue;
+            var cols = std.ArrayList(Col).initCapacity(self.a, 8) catch unreachable;
+            var tok = std.mem.tokenizeAny(u8, seed.?, ",\n\r\t");
+            while (tok.next()) |raw| {
+                const f = std.mem.trim(u8, raw, " \t");
+                if (f.len == 0) continue;
+                const cp = std.mem.indexOfScalar(u8, f, ':') orelse continue;
+                const nm = std.mem.trim(u8, f[0..cp], " \t");
+                if (nm.len == 0) continue;
+                cols.append(self.a, .{
+                    .name = self.a.dupe(u8, nm) catch unreachable,
+                    .type = self.canonColType(f[cp + 1 ..]),
+                }) catch unreachable;
+            }
+            return cols.toOwnedSlice(self.a) catch unreachable;
+        }
+        return null;
+    }
+
+    // Find the event_decl whose path matches an invocation — the input
+    // shape lookup AND the clone template share this walk. Pointer-
+    // recursive: the returned EventDecl must point into the real items
+    // array, never a copy.
+    fn declOf(self: *const @This(), inv: *const ast.Invocation) ?*const ast.EventDecl {
+        const segs = inv.path.segments;
+        if (segs.len == 0) return null;
+        return self.findDecl(self.prog.items, segs[segs.len - 1], inv.path.module_qualifier);
+    }
+
+    fn findDecl(self: *const @This(), items: []const ast.Item, want: []const u8, mq: ?[]const u8) ?*const ast.EventDecl {
+        for (items) |*pi| {
+            switch (pi.*) {
+                .module_decl => |*md| {
+                    if (self.findDecl(md.items, want, mq)) |d| return d;
+                },
+                .event_decl => |*e| {
+                    const ds = e.path.segments;
+                    if (ds.len == 0 or !std.mem.eql(u8, ds[ds.len - 1], want)) continue;
+                    if (mq) |m| {
+                        const dq = e.path.module_qualifier orelse continue;
+                        if (!std.mem.eql(u8, m, dq)) continue;
+                    }
+                    return e;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    // The impl flow for an invocation's callee — the `.flow` item whose
+    // `impl_of` names it. Null = host-proc or decl-only tor: no koru
+    // body, nothing to clone. Recurses module_decl items — a module's
+    // tors live there, not at program top level.
+    fn implOf(self: *const @This(), inv: *const ast.Invocation) ?*const ast.Flow {
+        const segs = inv.path.segments;
+        if (segs.len == 0) return null;
+        return self.implOfIn(self.prog.items, segs[segs.len - 1], inv.path.module_qualifier);
+    }
+
+    fn implOfIn(self: *const @This(), items: []const ast.Item, want: []const u8, iq: ?[]const u8) ?*const ast.Flow {
+        for (items) |*pi| {
+            switch (pi.*) {
+                .module_decl => |*md| {
+                    if (self.implOfIn(md.items, want, iq)) |f| return f;
+                },
+                .flow => |*f| {
+                    const io_ = f.impl_of orelse continue;
+                    const ds = io_.segments;
+                    if (ds.len == 0 or !std.mem.eql(u8, ds[ds.len - 1], want)) continue;
+                    const oq = io_.module_qualifier;
+                    if ((oq == null) != (iq == null)) continue;
+                    if (oq != null and !std.mem.eql(u8, oq.?, iq.?)) continue;
+                    return f;
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    // How many fields of `inv` the stack would inject — the
+    // fillable-count half of inject(), shared with consume-detection.
+    fn injectableCount(self: *const @This(), inv: *const ast.Invocation, stack: []const Scope) usize {
+        if (stack.len == 0) return 0;
+        const od = self.declOf(inv) orelse return 0;
+        var n: usize = 0;
+        for (od.input.fields) |f| {
+            var have = false;
+            for (inv.args) |arg| {
+                if (std.mem.eql(u8, arg.name, f.name)) have = true;
+            }
+            if (have) continue;
+            var si = stack.len;
+            inner: while (si > 0) {
+                si -= 1;
+                const cols = self.scopeFields(stack[si].store);
+                if (self.matchingCol(cols, &f) != null) {
+                    n += 1;
+                    break :inner;
+                }
+            }
+        }
+        return n;
+    }
+
+    // Inject `scope.field` args for every declared field the call left
+    // unfilled — innermost scope with a name+type-fitting column wins;
+    // a mistyped same-named column falls through to outer scopes.
+    fn inject(self: *const @This(), inv: ast.Invocation, stack: []const Scope) ast.Invocation {
+        if (stack.len == 0) return inv;
+        const od = self.declOf(&inv) orelse return inv;
+        var adds = std.ArrayList(ast.Arg).initCapacity(self.a, 2) catch unreachable;
+        for (od.input.fields) |f| {
+            var have = false;
+            for (inv.args) |arg| {
+                if (std.mem.eql(u8, arg.name, f.name)) have = true;
+            }
+            if (have) continue;
+            var found = false;
+            var si = stack.len;
+            while (si > 0 and !found) {
+                si -= 1;
+                const cols = self.scopeFields(stack[si].store);
+                if (self.matchingCol(cols, &f) != null) {
+                    const value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable;
+                    adds.append(self.a, .{
+                        .name = self.a.dupe(u8, f.name) catch unreachable,
+                        .value = value,
+                        // Forced punning: `a: outer.a` is PARSE005-
+                        // redundant — `outer.a` already puns to `a`.
+                        // `theme[r].fs` can't pun (brackets) and keeps
+                        // its label.
+                        .had_explicit_label = !punsTo(value, f.name),
+                    }) catch unreachable;
+                    found = true;
+                }
+            }
+        }
+        if (adds.items.len == 0) return inv;
+        var ninv = inv;
+        const nargs = self.a.alloc(ast.Arg, inv.args.len + adds.items.len) catch unreachable;
+        for (inv.args, 0..) |arg, i| nargs[i] = arg;
+        for (adds.items, 0..) |add, i| nargs[inv.args.len + i] = add;
+        ninv.args = nargs;
+        return ninv;
+    }
+
+    // Mirrors lexer.punnableName (not importable from transform code —
+    // the backend gets `ast`/`errors` modules only): a value puns to
+    // `name` when it is a pure dotted-identifier path whose last
+    // segment equals the name. Brackets, operators, parens, quotes,
+    // `..`, leading/trailing dots, and leading digits all disqualify.
+    fn punsTo(value: []const u8, name: []const u8) bool {
+        if (value.len == 0) return false;
+        for (value) |c| {
+            switch (c) {
+                'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => {},
+                else => return false,
+            }
+        }
+        if (std.mem.indexOf(u8, value, "..") != null) return false;
+        if (value[0] == '.' or value[value.len - 1] == '.') return false;
+        if (value[0] >= '0' and value[0] <= '9') return false;
+        const seg = if (std.mem.lastIndexOfScalar(u8, value, '.')) |d|
+            value[d + 1 ..]
+        else
+            value;
+        return std.mem.eql(u8, seg, name);
+    }
+
+    fn isCtxCont(ct: *const ast.Continuation) bool {
+        if (ct.node == null or ct.node.? != .invocation) return false;
+        const inv = ct.node.?.invocation;
+        const segs = inv.path.segments;
+        if (segs.len == 0 or !std.mem.eql(u8, segs[segs.len - 1], "default")) return false;
+        const mq = inv.path.module_qualifier orelse return false;
+        return std.mem.eql(u8, mq, "std.ctx");
+    }
+
+    fn scopeOf(self: *const @This(), ct: *const ast.Continuation) Scope {
+        for (ct.node.?.invocation.args) |arg| {
+            if (!std.mem.eql(u8, arg.name, "source")) {
+                var v = arg.value;
+                if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v = v[1 .. v.len - 1];
+                return parseScope(self.a.dupe(u8, v) catch unreachable);
+            }
+        }
+        return .{ .store = "", .expr = "", .sub = null };
+    }
+
+    // Normalized stack key — subscript positions collapse to IDX, so
+    // `themes[i]`, `themes[j]`, and a clone's `themes[__ctxarg0]` all
+    // share one specialization.
+    fn stackKey(self: *const @This(), callee_last: []const u8, stack: []const Scope) []const u8 {
+        var buf = std.ArrayList(u8).initCapacity(self.a, 32) catch unreachable;
+        buf.appendSlice(self.a, callee_last) catch unreachable;
+        buf.appendSlice(self.a, "|") catch unreachable;
+        for (stack, 0..) |s, i| {
+            if (i > 0) buf.appendSlice(self.a, "+") catch unreachable;
+            buf.appendSlice(self.a, s.store) catch unreachable;
+            if (s.sub != null) buf.appendSlice(self.a, "IDX") catch unreachable;
+        }
+        return buf.toOwnedSlice(self.a) catch unreachable;
+    }
+
+    // The mangled clone segment: `needs-scope__ctx_inner`.
+    fn cloneSeg(self: *const @This(), callee_last: []const u8, stack: []const Scope) []const u8 {
+        var buf = std.ArrayList(u8).initCapacity(self.a, 32) catch unreachable;
+        buf.appendSlice(self.a, callee_last) catch unreachable;
+        buf.appendSlice(self.a, "__ctx_") catch unreachable;
+        for (stack, 0..) |s, i| {
+            if (i > 0) buf.appendSlice(self.a, "_") catch unreachable;
+            buf.appendSlice(self.a, s.store) catch unreachable;
+            if (s.sub != null) buf.appendSlice(self.a, "IDX") catch unreachable;
+        }
+        return buf.toOwnedSlice(self.a) catch unreachable;
+    }
+
+    // The clone's stack — subscripted scopes' vars renamed to their
+    // lifted params; `lift` receives the original binding names.
+    fn liftedStack(self: *const @This(), stack: []const Scope, lift: *[]const []const u8) []const Scope {
+        var vars = std.ArrayList([]const u8).initCapacity(self.a, stack.len) catch unreachable;
+        const out = self.a.alloc(Scope, stack.len) catch unreachable;
+        for (stack, 0..) |s, i| {
+            out[i] = s;
+            if (s.sub) |sv| {
+                const pname = std.fmt.allocPrint(self.a, "__ctxarg{d}", .{i}) catch unreachable;
+                vars.append(self.a, sv) catch unreachable;
+                out[i].sub = pname;
+                out[i].expr = std.fmt.allocPrint(self.a, "{s}[{s}]", .{ s.store, pname }) catch unreachable;
+            }
+        }
+        lift.* = vars.toOwnedSlice(self.a) catch unreachable;
+        return out;
+    }
+
+    // Stack position whose scope carries sub var `lv` — its __ctxargN.
+    fn stackIdxOf(stack: []const Scope, lv: []const u8) usize {
+        for (stack, 0..) |s, i| {
+            if (s.sub) |sv| {
+                if (std.mem.eql(u8, sv, lv)) return i;
+            }
+        }
+        return 0;
+    }
+
+    // Does the impl `flow`'s body consume `stack` — a call that
+    // inject() would fill, or a call to a koru-bodied tor that itself
+    // consumes? Fixpoint over the call graph; cycles contribute false.
+    fn consumes(self: *const @This(), flow: *const ast.Flow, stack: []const Scope, key: []const u8) bool {
+        if (self.memo.get(key)) |v| return v;
+        if (self.visiting.contains(key)) return false;
+        self.visiting.put(key, {}) catch unreachable;
+        defer _ = self.visiting.remove(key);
+        // The impl's root call IS flow.body.node — wrap the body so the
+        // head goes through the same per-cont scan (ctx push, node
+        // check, recursion) as any other continuation.
+        const res = self.scanConts(&[_]ast.Continuation{flow.body}, stack);
+        self.memo.put(key, res) catch unreachable;
+        return res;
+    }
+
+    fn scanConts(self: *const @This(), conts: []const ast.Continuation, stack: []const Scope) bool {
+        for (conts) |*ct| {
+            // A nested ctx inside the body DEEPENS the stack for its
+            // subtree — scan under the extended stack.
+            if (isCtxCont(ct)) {
+                const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
+                for (stack, 0..) |s, i| nstack[i] = s;
+                nstack[stack.len] = self.scopeOf(ct);
+                if (self.scanConts(ct.continuations, nstack)) return true;
+                continue;
+            }
+            if (ct.node != null and ct.node.? == .invocation) {
+                const inv = ct.node.?.invocation;
+                if (self.injectableCount(&inv, stack) > 0) return true;
+                if (self.implOf(&inv)) |sub| {
+                    const last = inv.path.segments[inv.path.segments.len - 1];
+                    const k = self.stackKey(last, stack);
+                    if (self.consumes(sub, stack, k)) return true;
+                }
+            }
+            if (self.scanConts(ct.continuations, stack)) return true;
+        }
+        return false;
+    }
+
+    // Clone-registration at a call under a non-empty stack: when the
+    // callee is koru-bodied and consumes the scope, rewrite the call to
+    // the mangled clone and append `__ctxargN: <binding>` args.
+    fn dispatchClone(self: *const @This(), inv: *ast.Invocation, stack: []const Scope) void {
+        const impl_flow = self.implOf(inv) orelse return;
+        const last = inv.path.segments[inv.path.segments.len - 1];
+        const key = self.stackKey(last, stack);
+        if (!self.consumes(impl_flow, stack, key)) return;
+        var lift: []const []const u8 = &[_][]const u8{};
+        const lstack = self.liftedStack(stack, &lift);
+        const clone_seg = self.cloneSeg(last, stack);
+        var found = false;
+        for (self.clones.items) |cr| {
+            if (std.mem.eql(u8, cr.key, key)) found = true;
+        }
+        if (!found) {
+            self.clones.append(self.a, .{
+                .orig_last = self.a.dupe(u8, last) catch unreachable,
+                .orig_mq = inv.path.module_qualifier,
+                .key = key,
+                .clone_seg = clone_seg,
+                .stack = lstack,
+                .lift = lift,
+            }) catch unreachable;
+        }
+        const nsegs = self.a.alloc([]const u8, inv.path.segments.len) catch unreachable;
+        for (inv.path.segments, 0..) |s, i| nsegs[i] = s;
+        nsegs[nsegs.len - 1] = clone_seg;
+        inv.path.segments = nsegs;
+        const nargs = self.a.alloc(ast.Arg, inv.args.len + lift.len) catch unreachable;
+        for (inv.args, 0..) |arg, i| nargs[i] = arg;
+        for (lift, 0..) |lv, i| {
+            nargs[inv.args.len + i] = .{
+                .name = std.fmt.allocPrint(self.a, "__ctxarg{d}", .{stackIdxOf(stack, lv)}) catch unreachable,
+                .value = self.a.dupe(u8, lv) catch unreachable,
+                .had_explicit_label = true,
+            };
+        }
+        inv.args = nargs;
+        self.changed.* = true;
+    }
+
+    // Recursive worker: rewrite a continuation list under `stack`. ctx
+    // continuations push their scope and SPLICE OUT (their children
+    // take their slot); every other invocation gets inject() and
+    // recursed — plus clone dispatch for consuming callees.
+    // Splicing a ctx step removes its node — the edge that fed it
+    // (`| row r`, `! fail`, a `when` clause) must land on each
+    // promoted kid or the binding evaporates upstream of its uses.
+    fn inheritEdge(kid: *ast.Continuation, from: *const ast.Continuation) void {
+        if (from.branch.len == 0 and from.binding == null and
+            from.destructure.len == 0 and from.condition == null and
+            from.kind == .terminal and !from.is_catchall) return;
+        if (kid.branch.len == 0) kid.branch = from.branch;
+        if (kid.binding == null) kid.binding = from.binding;
+        if (kid.binding_annotations.len == 0) kid.binding_annotations = from.binding_annotations;
+        if (kid.binding_marks.len == 0) kid.binding_marks = from.binding_marks;
+        if (kid.destructure.len == 0) kid.destructure = from.destructure;
+        if (kid.kind == .terminal) kid.kind = from.kind;
+        if (!kid.is_catchall) kid.is_catchall = from.is_catchall;
+        if (kid.catchall_metatype == null) kid.catchall_metatype = from.catchall_metatype;
+        if (kid.condition == null) kid.condition = from.condition;
+        if (kid.condition_expr == null) kid.condition_expr = from.condition_expr;
+        kid.binding_type = from.binding_type;
+    }
+
+    fn rewriteConts(self: *const @This(), conts: []const ast.Continuation, stack: []const Scope) []const ast.Continuation {
+        var out = std.ArrayList(ast.Continuation).initCapacity(self.a, conts.len) catch unreachable;
+        for (conts) |*ct| {
+            if (isCtxCont(ct)) {
+                const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
+                for (stack, 0..) |s, i| nstack[i] = s;
+                nstack[stack.len] = self.scopeOf(ct);
+                const pkids: []ast.Continuation = @constCast(self.rewriteConts(ct.continuations, nstack));
+                for (pkids) |*k| inheritEdge(k, ct);
+                out.appendSlice(self.a, pkids) catch unreachable;
+                self.changed.* = true;
+                continue;
+            }
+            var nc = ct.*;
+            if (ct.node != null and ct.node.? == .invocation) {
+                var inv = self.inject(ct.node.?.invocation, stack);
+                if (stack.len > 0) self.dispatchClone(&inv, stack);
+                nc.node = .{ .invocation = inv };
+            }
+            nc.continuations = self.rewriteConts(ct.continuations, stack);
+            out.append(self.a, nc) catch unreachable;
+        }
+        return out.toOwnedSlice(self.a) catch unreachable;
+    }
+
+    // Rewrite one impl-body root continuation under `stack` — the
+    // head-step handling the item walk and clone synthesis share.
+    fn rewriteBody(self: *const @This(), body: ast.Continuation, stack: []const Scope) ast.Continuation {
+        if (isCtxCont(&body)) {
+            const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
+            for (stack, 0..) |s, i| nstack[i] = s;
+            nstack[stack.len] = self.scopeOf(&body);
+            const kids = self.rewriteConts(body.continuations, nstack);
+            self.changed.* = true;
+            if (kids.len > 0) {
+                const k0: *ast.Continuation = @constCast(&kids[0]);
+                inheritEdge(k0, &body);
+                return k0.*;
+            }
+            var nb = body;
+            nb.continuations = &[_]ast.Continuation{};
+            return nb;
+        }
+        var nb = body;
+        if (nb.node != null and nb.node.? == .invocation) {
+            var inv = self.inject(nb.node.?.invocation, stack);
+            if (stack.len > 0) self.dispatchClone(&inv, stack);
+            nb.node = .{ .invocation = inv };
+        }
+        nb.continuations = self.rewriteConts(nb.continuations, stack);
+        return nb;
+    }
+
+    // Rewrite every flow in `items` — top level AND module_decl-nested.
+    // A `std/ctx(X)` step inside an imported module's tor scopes that
+    // module's continuation subtree exactly like an entry-level one.
+    fn rewriteItemsIn(self: *const @This(), items: []const ast.Item, out: *std.ArrayList(ast.Item)) void {
+        for (items) |pi| {
+            switch (pi) {
+                .flow => |f| {
+                    // The siteView flow — the runner wraps a nested site
+                    // as a synthetic top-level flow so `item.flow.body`
+                    // reads the site's own subtree. It is a VIEW, not a
+                    // real item: drop it or it leaks into the program (a
+                    // phantom second emission of the site's descendants).
+                    if (f.site_of != null) continue;
+                    var nf = f;
+                    nf.body = self.rewriteBody(nf.body, &[_]Scope{});
+                    out.append(self.a, .{ .flow = nf }) catch unreachable;
+                },
+                .module_decl => |md| {
+                    var nmd = md;
+                    var sub = std.ArrayList(ast.Item).initCapacity(self.a, md.items.len) catch unreachable;
+                    self.rewriteItemsIn(md.items, &sub);
+                    nmd.items = sub.toOwnedSlice(self.a) catch unreachable;
+                    out.append(self.a, .{ .module_decl = nmd }) catch unreachable;
+                },
+                else => out.append(self.a, pi) catch unreachable,
+            }
+        }
+    }
+
+};
+
 ~proc default|zig {
-    const ast = @import("ast");
     _ = expr;
     _ = invocation;
     _ = item;
-
-    // A scope is a store name plus an optional bare-identifier subscript:
-    // `world` → {store=world, sub=null}; `themes[i]` → {store=themes,
-    // sub="i"}. Anything else provides no fields.
-    const Scope = struct {
-        store: []const u8,
-        expr: []const u8, // emit text — `themes[i]`; in clones `themes[__ctxarg0]`
-        sub: ?[]const u8, // the subscript ident, when bare
-    };
-
-    // A CloneReq records that a callee was invoked under `stack` and its
-    // body consumes the scope — so a specialized decl+impl pair gets
-    // synthesized: the clone's input is the original's plus one
-    // `__ctxargN` per lifted subscript binding, and its body is the
-    // original's rewritten under the lifted stack.
-    const CloneReq = struct {
-        orig_last: []const u8,
-        orig_mq: ?[]const u8,
-        key: []const u8,
-        clone_seg: []const u8,
-        stack: []const Scope, // LIFTED — exprs read `store[__ctxargN]`
-        lift: []const []const u8, // original binding names, per __ctxargN
-    };
-
-    const Ctx = struct {
-        a: std.mem.Allocator,
-        prog: *const ast.Program,
-        changed: *bool,
-        clones: *std.ArrayList(CloneReq),
-        memo: *std.StringHashMap(bool),
-        visiting: *std.StringHashMap(void),
-
-        // `themes[i]` → {themes, expr, sub=i}; `world` → {world, expr, null}
-        fn parseScope(v: []const u8) Scope {
-            if (std.mem.indexOfScalar(u8, v, '[')) |bp| {
-                const close = std.mem.indexOfScalarPos(u8, v, bp, ']') orelse v.len;
-                const sv = v[bp + 1 .. close];
-                var bare = sv.len > 0;
-                for (sv) |ch| {
-                    if (!(std.ascii.isAlphanumeric(ch) or ch == '_')) bare = false;
-                }
-                if (bare) return .{ .store = v[0..bp], .expr = v, .sub = sv };
-            }
-            var end: usize = 0;
-            while (end < v.len) : (end += 1) {
-                const ch = v[end];
-                if (ch == '[' or ch == '.' or ch == ' ' or ch == '\t' or ch == '(') break;
-            }
-            return .{ .store = v[0..end], .expr = v, .sub = null };
-        }
-
-        // A column of the injectable surface: presented name + canonical
-        // type. Matching is name AND type — a same-named column whose type
-        // cannot serve the callee's param is skipped, so an outer scope's
-        // compatible field answers through a mistyped inner shadow.
-        const Col = struct { name: []const u8, type: []const u8 };
-
-        // Canonical column type from a seed field's rhs: `9[i64]` peels to
-        // `i64` (struct_literal.peelBaseType's rule, mirrored — transform
-        // code cannot import it), otherwise the rhs IS the type spelling.
-        // `<...>` phantom state is stripped, matching Field.type's canonical
-        // form ("phantom states/tags stripped"). A rhs that is a bare
-        // literal (`0`, `"x"`, `true`) carries no readable type — returns ""
-        // and matches by name alone, preserving name-only behavior for
-        // seeds whose type is inferred downstream.
-        fn canonColType(self: *const @This(), rhs0: []const u8) []const u8 {
-            var rhs = std.mem.trim(u8, rhs0, " \t");
-            if (rhs.len >= 3 and rhs[rhs.len - 1] == ']') {
-                if (std.mem.lastIndexOfScalar(u8, rhs, '[')) |lb| {
-                    const inner = rhs[lb + 1 .. rhs.len - 1];
-                    const base_types = [_][]const u8{
-                        "i8",  "i16", "i32",   "i64",   "u8",   "u16", "u32",
-                        "u64", "usize", "isize", "f16",  "f32",  "f64", "bool",
-                    };
-                    for (base_types) |t| {
-                        if (std.mem.eql(u8, inner, t)) {
-                            rhs = inner;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (rhs.len == 0) return "";
-            const c0 = rhs[0];
-            if ((c0 >= '0' and c0 <= '9') or c0 == '-' or c0 == '+' or c0 == '"' or c0 == '\'') return "";
-            if (std.mem.eql(u8, rhs, "true") or std.mem.eql(u8, rhs, "false")) return "";
-            if (std.mem.indexOfScalar(u8, rhs, '<')) |lt| rhs = std.mem.trim(u8, rhs[0..lt], " \t");
-            return self.a.dupe(u8, rhs) catch unreachable;
-        }
-
-        // Exact canonical-string match: column type vs the callee's declared
-        // field type. A module-qualified column `*app/lib/pend:Pending` also
-        // accepts `module_path:type` reconstruction — f.type for `*Pending`
-        // carries its qualifier in f.module_path. An unreadable column type
-        // (bare-literal seed, "") is a wildcard: name-only, as before.
-        fn typeFits(self: *const @This(), colty: []const u8, f: *const ast.Field) bool {
-            if (colty.len == 0) return true;
-            if (std.mem.eql(u8, colty, f.type)) return true;
-            const mp = f.module_path orelse return false;
-            var ty = f.type;
-            var ptr = false;
-            if (ty.len > 0 and ty[0] == '*') {
-                ptr = true;
-                ty = ty[1..];
-            }
-            const qualified = std.fmt.allocPrint(self.a, "{s}{s}:{s}", .{ if (ptr) "*" else "", mp, ty }) catch unreachable;
-            if (std.mem.eql(u8, colty, qualified)) return true;
-            // Separators differ between the two spellings — module_path is
-            // dotted (`test_lib.user`), seeds are slashed (`app/lib/pend`).
-            const alt = self.a.dupe(u8, qualified) catch unreachable;
-            for (alt) |*ch| {
-                if (ch.* == '/') ch.* = '.' else if (ch.* == '.') ch.* = '/';
-            }
-            return std.mem.eql(u8, colty, alt);
-        }
-
-        // First column of `cols` that can serve decl field `f` — same name
-        // AND a fitting type — or null.
-        fn matchingCol(self: *const @This(), cols: []const Col, f: *const ast.Field) ?[]const u8 {
-            for (cols) |c| {
-                if (std.mem.eql(u8, c.name, f.name) and self.typeFits(c.type, f)) return c.name;
-            }
-            return null;
-        }
-
-        // Columns of a store — the injectable surface of a scope that
-        // names it. Read off the `std/store:new` seed block.
-        fn scopeFields(self: *const @This(), store: []const u8) []const Col {
-            for (self.prog.items) |*pi| {
-                if (pi.* != .flow) continue;
-                const inv = pi.flow.inv();
-                if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "new")) continue;
-                const mq = inv.path.module_qualifier orelse continue;
-                if (!std.mem.eql(u8, mq, "std.store")) continue;
-                var named = false;
-                var seed: ?[]const u8 = null;
-                for (inv.args) |arg| {
-                    if (std.mem.eql(u8, arg.name, "expr")) {
-                        var v = arg.value;
-                        if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v = v[1 .. v.len - 1];
-                        named = std.mem.eql(u8, v, store);
-                    } else if (std.mem.eql(u8, arg.name, "source")) {
-                        seed = if (arg.source_value) |sv| sv.text else arg.value;
-                    }
-                }
-                if (!named or seed == null) continue;
-                var cols = std.ArrayList(Col).initCapacity(self.a, 8) catch unreachable;
-                var tok = std.mem.tokenizeAny(u8, seed.?, ",\n\r\t");
-                while (tok.next()) |raw| {
-                    const f = std.mem.trim(u8, raw, " \t");
-                    if (f.len == 0) continue;
-                    const cp = std.mem.indexOfScalar(u8, f, ':') orelse continue;
-                    const nm = std.mem.trim(u8, f[0..cp], " \t");
-                    if (nm.len == 0) continue;
-                    cols.append(self.a, .{
-                        .name = self.a.dupe(u8, nm) catch unreachable,
-                        .type = self.canonColType(f[cp + 1 ..]),
-                    }) catch unreachable;
-                }
-                return cols.toOwnedSlice(self.a) catch unreachable;
-            }
-            return &[_]Col{};
-        }
-
-        // Find the event_decl whose path matches an invocation — the input
-        // shape lookup AND the clone template share this walk. Pointer-
-        // recursive: the returned EventDecl must point into the real items
-        // array, never a copy.
-        fn declOf(self: *const @This(), inv: *const ast.Invocation) ?*const ast.EventDecl {
-            const segs = inv.path.segments;
-            if (segs.len == 0) return null;
-            return self.findDecl(self.prog.items, segs[segs.len - 1], inv.path.module_qualifier);
-        }
-
-        fn findDecl(self: *const @This(), items: []const ast.Item, want: []const u8, mq: ?[]const u8) ?*const ast.EventDecl {
-            for (items) |*pi| {
-                switch (pi.*) {
-                    .module_decl => |*md| {
-                        if (self.findDecl(md.items, want, mq)) |d| return d;
-                    },
-                    .event_decl => |*e| {
-                        const ds = e.path.segments;
-                        if (ds.len == 0 or !std.mem.eql(u8, ds[ds.len - 1], want)) continue;
-                        if (mq) |m| {
-                            const dq = e.path.module_qualifier orelse continue;
-                            if (!std.mem.eql(u8, m, dq)) continue;
-                        }
-                        return e;
-                    },
-                    else => {},
-                }
-            }
-            return null;
-        }
-
-        // The impl flow for an invocation's callee — the `.flow` item whose
-        // `impl_of` names it. Null = host-proc or decl-only tor: no koru
-        // body, nothing to clone.
-        fn implOf(self: *const @This(), inv: *const ast.Invocation) ?*const ast.Flow {
-            const segs = inv.path.segments;
-            if (segs.len == 0) return null;
-            const want = segs[segs.len - 1];
-            for (self.prog.items) |*pi| {
-                if (pi.* != .flow) continue;
-                const io_ = pi.flow.impl_of orelse continue;
-                const ds = io_.segments;
-                if (ds.len == 0 or !std.mem.eql(u8, ds[ds.len - 1], want)) continue;
-                const oq = io_.module_qualifier;
-                const iq = inv.path.module_qualifier;
-                if ((oq == null) != (iq == null)) continue;
-                if (oq != null and !std.mem.eql(u8, oq.?, iq.?)) continue;
-                return &pi.flow;
-            }
-            return null;
-        }
-
-        // How many fields of `inv` the stack would inject — the
-        // fillable-count half of inject(), shared with consume-detection.
-        fn injectableCount(self: *const @This(), inv: *const ast.Invocation, stack: []const Scope) usize {
-            if (stack.len == 0) return 0;
-            const od = self.declOf(inv) orelse return 0;
-            var n: usize = 0;
-            for (od.input.fields) |f| {
-                var have = false;
-                for (inv.args) |arg| {
-                    if (std.mem.eql(u8, arg.name, f.name)) have = true;
-                }
-                if (have) continue;
-                var si = stack.len;
-                inner: while (si > 0) {
-                    si -= 1;
-                    const cols = self.scopeFields(stack[si].store);
-                    if (self.matchingCol(cols, &f) != null) {
-                        n += 1;
-                        break :inner;
-                    }
-                }
-            }
-            return n;
-        }
-
-        // Inject `scope.field` args for every declared field the call left
-        // unfilled — innermost scope with a name+type-fitting column wins;
-        // a mistyped same-named column falls through to outer scopes.
-        fn inject(self: *const @This(), inv: ast.Invocation, stack: []const Scope) ast.Invocation {
-            if (stack.len == 0) return inv;
-            const od = self.declOf(&inv) orelse return inv;
-            var adds = std.ArrayList(ast.Arg).initCapacity(self.a, 2) catch unreachable;
-            for (od.input.fields) |f| {
-                var have = false;
-                for (inv.args) |arg| {
-                    if (std.mem.eql(u8, arg.name, f.name)) have = true;
-                }
-                if (have) continue;
-                var found = false;
-                var si = stack.len;
-                while (si > 0 and !found) {
-                    si -= 1;
-                    const cols = self.scopeFields(stack[si].store);
-                    if (self.matchingCol(cols, &f) != null) {
-                        const value = std.fmt.allocPrint(self.a, "{s}.{s}", .{ stack[si].expr, f.name }) catch unreachable;
-                        adds.append(self.a, .{
-                            .name = self.a.dupe(u8, f.name) catch unreachable,
-                            .value = value,
-                            // Forced punning: `a: outer.a` is PARSE005-
-                            // redundant — `outer.a` already puns to `a`.
-                            // `theme[r].fs` can't pun (brackets) and keeps
-                            // its label.
-                            .had_explicit_label = !punsTo(value, f.name),
-                        }) catch unreachable;
-                        found = true;
-                    }
-                }
-            }
-            if (adds.items.len == 0) return inv;
-            var ninv = inv;
-            const nargs = self.a.alloc(ast.Arg, inv.args.len + adds.items.len) catch unreachable;
-            for (inv.args, 0..) |arg, i| nargs[i] = arg;
-            for (adds.items, 0..) |add, i| nargs[inv.args.len + i] = add;
-            ninv.args = nargs;
-            return ninv;
-        }
-
-        // Mirrors lexer.punnableName (not importable from transform code —
-        // the backend gets `ast`/`errors` modules only): a value puns to
-        // `name` when it is a pure dotted-identifier path whose last
-        // segment equals the name. Brackets, operators, parens, quotes,
-        // `..`, leading/trailing dots, and leading digits all disqualify.
-        fn punsTo(value: []const u8, name: []const u8) bool {
-            if (value.len == 0) return false;
-            for (value) |c| {
-                switch (c) {
-                    'a'...'z', 'A'...'Z', '0'...'9', '_', '.' => {},
-                    else => return false,
-                }
-            }
-            if (std.mem.indexOf(u8, value, "..") != null) return false;
-            if (value[0] == '.' or value[value.len - 1] == '.') return false;
-            if (value[0] >= '0' and value[0] <= '9') return false;
-            const seg = if (std.mem.lastIndexOfScalar(u8, value, '.')) |d|
-                value[d + 1 ..]
-            else
-                value;
-            return std.mem.eql(u8, seg, name);
-        }
-
-        fn isCtxCont(ct: *const ast.Continuation) bool {
-            if (ct.node == null or ct.node.? != .invocation) return false;
-            const inv = ct.node.?.invocation;
-            const segs = inv.path.segments;
-            if (segs.len == 0 or !std.mem.eql(u8, segs[segs.len - 1], "default")) return false;
-            const mq = inv.path.module_qualifier orelse return false;
-            return std.mem.eql(u8, mq, "std.ctx");
-        }
-
-        fn scopeOf(self: *const @This(), ct: *const ast.Continuation) Scope {
-            for (ct.node.?.invocation.args) |arg| {
-                if (!std.mem.eql(u8, arg.name, "source")) {
-                    var v = arg.value;
-                    if (v.len >= 2 and v[0] == '"' and v[v.len - 1] == '"') v = v[1 .. v.len - 1];
-                    return parseScope(self.a.dupe(u8, v) catch unreachable);
-                }
-            }
-            return .{ .store = "", .expr = "", .sub = null };
-        }
-
-        // Normalized stack key — subscript positions collapse to IDX, so
-        // `themes[i]`, `themes[j]`, and a clone's `themes[__ctxarg0]` all
-        // share one specialization.
-        fn stackKey(self: *const @This(), callee_last: []const u8, stack: []const Scope) []const u8 {
-            var buf = std.ArrayList(u8).initCapacity(self.a, 32) catch unreachable;
-            buf.appendSlice(self.a, callee_last) catch unreachable;
-            buf.appendSlice(self.a, "|") catch unreachable;
-            for (stack, 0..) |s, i| {
-                if (i > 0) buf.appendSlice(self.a, "+") catch unreachable;
-                buf.appendSlice(self.a, s.store) catch unreachable;
-                if (s.sub != null) buf.appendSlice(self.a, "IDX") catch unreachable;
-            }
-            return buf.toOwnedSlice(self.a) catch unreachable;
-        }
-
-        // The mangled clone segment: `needs-scope__ctx_inner`.
-        fn cloneSeg(self: *const @This(), callee_last: []const u8, stack: []const Scope) []const u8 {
-            var buf = std.ArrayList(u8).initCapacity(self.a, 32) catch unreachable;
-            buf.appendSlice(self.a, callee_last) catch unreachable;
-            buf.appendSlice(self.a, "__ctx_") catch unreachable;
-            for (stack, 0..) |s, i| {
-                if (i > 0) buf.appendSlice(self.a, "_") catch unreachable;
-                buf.appendSlice(self.a, s.store) catch unreachable;
-                if (s.sub != null) buf.appendSlice(self.a, "IDX") catch unreachable;
-            }
-            return buf.toOwnedSlice(self.a) catch unreachable;
-        }
-
-        // The clone's stack — subscripted scopes' vars renamed to their
-        // lifted params; `lift` receives the original binding names.
-        fn liftedStack(self: *const @This(), stack: []const Scope, lift: *[]const []const u8) []const Scope {
-            var vars = std.ArrayList([]const u8).initCapacity(self.a, stack.len) catch unreachable;
-            const out = self.a.alloc(Scope, stack.len) catch unreachable;
-            for (stack, 0..) |s, i| {
-                out[i] = s;
-                if (s.sub) |sv| {
-                    const pname = std.fmt.allocPrint(self.a, "__ctxarg{d}", .{i}) catch unreachable;
-                    vars.append(self.a, sv) catch unreachable;
-                    out[i].sub = pname;
-                    out[i].expr = std.fmt.allocPrint(self.a, "{s}[{s}]", .{ s.store, pname }) catch unreachable;
-                }
-            }
-            lift.* = vars.toOwnedSlice(self.a) catch unreachable;
-            return out;
-        }
-
-        // Stack position whose scope carries sub var `lv` — its __ctxargN.
-        fn stackIdxOf(stack: []const Scope, lv: []const u8) usize {
-            for (stack, 0..) |s, i| {
-                if (s.sub) |sv| {
-                    if (std.mem.eql(u8, sv, lv)) return i;
-                }
-            }
-            return 0;
-        }
-
-        // Does the impl `flow`'s body consume `stack` — a call that
-        // inject() would fill, or a call to a koru-bodied tor that itself
-        // consumes? Fixpoint over the call graph; cycles contribute false.
-        fn consumes(self: *const @This(), flow: *const ast.Flow, stack: []const Scope, key: []const u8) bool {
-            if (self.memo.get(key)) |v| return v;
-            if (self.visiting.contains(key)) return false;
-            self.visiting.put(key, {}) catch unreachable;
-            defer _ = self.visiting.remove(key);
-            // The impl's root call IS flow.body.node — wrap the body so the
-            // head goes through the same per-cont scan (ctx push, node
-            // check, recursion) as any other continuation.
-            const res = self.scanConts(&[_]ast.Continuation{flow.body}, stack);
-            self.memo.put(key, res) catch unreachable;
-            return res;
-        }
-
-        fn scanConts(self: *const @This(), conts: []const ast.Continuation, stack: []const Scope) bool {
-            for (conts) |*ct| {
-                // A nested ctx inside the body DEEPENS the stack for its
-                // subtree — scan under the extended stack.
-                if (isCtxCont(ct)) {
-                    const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
-                    for (stack, 0..) |s, i| nstack[i] = s;
-                    nstack[stack.len] = self.scopeOf(ct);
-                    if (self.scanConts(ct.continuations, nstack)) return true;
-                    continue;
-                }
-                if (ct.node != null and ct.node.? == .invocation) {
-                    const inv = ct.node.?.invocation;
-                    if (self.injectableCount(&inv, stack) > 0) return true;
-                    if (self.implOf(&inv)) |sub| {
-                        const last = inv.path.segments[inv.path.segments.len - 1];
-                        const k = self.stackKey(last, stack);
-                        if (self.consumes(sub, stack, k)) return true;
-                    }
-                }
-                if (self.scanConts(ct.continuations, stack)) return true;
-            }
-            return false;
-        }
-
-        // Clone-registration at a call under a non-empty stack: when the
-        // callee is koru-bodied and consumes the scope, rewrite the call to
-        // the mangled clone and append `__ctxargN: <binding>` args.
-        fn dispatchClone(self: *const @This(), inv: *ast.Invocation, stack: []const Scope) void {
-            const impl_flow = self.implOf(inv) orelse return;
-            const last = inv.path.segments[inv.path.segments.len - 1];
-            const key = self.stackKey(last, stack);
-            if (!self.consumes(impl_flow, stack, key)) return;
-            var lift: []const []const u8 = &[_][]const u8{};
-            const lstack = self.liftedStack(stack, &lift);
-            const clone_seg = self.cloneSeg(last, stack);
-            var found = false;
-            for (self.clones.items) |cr| {
-                if (std.mem.eql(u8, cr.key, key)) found = true;
-            }
-            if (!found) {
-                self.clones.append(self.a, .{
-                    .orig_last = self.a.dupe(u8, last) catch unreachable,
-                    .orig_mq = inv.path.module_qualifier,
-                    .key = key,
-                    .clone_seg = clone_seg,
-                    .stack = lstack,
-                    .lift = lift,
-                }) catch unreachable;
-            }
-            const nsegs = self.a.alloc([]const u8, inv.path.segments.len) catch unreachable;
-            for (inv.path.segments, 0..) |s, i| nsegs[i] = s;
-            nsegs[nsegs.len - 1] = clone_seg;
-            inv.path.segments = nsegs;
-            const nargs = self.a.alloc(ast.Arg, inv.args.len + lift.len) catch unreachable;
-            for (inv.args, 0..) |arg, i| nargs[i] = arg;
-            for (lift, 0..) |lv, i| {
-                nargs[inv.args.len + i] = .{
-                    .name = std.fmt.allocPrint(self.a, "__ctxarg{d}", .{stackIdxOf(stack, lv)}) catch unreachable,
-                    .value = self.a.dupe(u8, lv) catch unreachable,
-                    .had_explicit_label = true,
-                };
-            }
-            inv.args = nargs;
-            self.changed.* = true;
-        }
-
-        // Recursive worker: rewrite a continuation list under `stack`. ctx
-        // continuations push their scope and SPLICE OUT (their children
-        // take their slot); every other invocation gets inject() and
-        // recursed — plus clone dispatch for consuming callees.
-        // Splicing a ctx step removes its node — the edge that fed it
-        // (`| row r`, `! fail`, a `when` clause) must land on each
-        // promoted kid or the binding evaporates upstream of its uses.
-        fn inheritEdge(kid: *ast.Continuation, from: *const ast.Continuation) void {
-            if (from.branch.len == 0 and from.binding == null and
-                from.destructure.len == 0 and from.condition == null and
-                from.kind == .terminal and !from.is_catchall) return;
-            if (kid.branch.len == 0) kid.branch = from.branch;
-            if (kid.binding == null) kid.binding = from.binding;
-            if (kid.binding_annotations.len == 0) kid.binding_annotations = from.binding_annotations;
-            if (kid.binding_marks.len == 0) kid.binding_marks = from.binding_marks;
-            if (kid.destructure.len == 0) kid.destructure = from.destructure;
-            if (kid.kind == .terminal) kid.kind = from.kind;
-            if (!kid.is_catchall) kid.is_catchall = from.is_catchall;
-            if (kid.catchall_metatype == null) kid.catchall_metatype = from.catchall_metatype;
-            if (kid.condition == null) kid.condition = from.condition;
-            if (kid.condition_expr == null) kid.condition_expr = from.condition_expr;
-            kid.binding_type = from.binding_type;
-        }
-
-        fn rewriteConts(self: *const @This(), conts: []const ast.Continuation, stack: []const Scope) []const ast.Continuation {
-            var out = std.ArrayList(ast.Continuation).initCapacity(self.a, conts.len) catch unreachable;
-            for (conts) |*ct| {
-                if (isCtxCont(ct)) {
-                    const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
-                    for (stack, 0..) |s, i| nstack[i] = s;
-                    nstack[stack.len] = self.scopeOf(ct);
-                    const pkids: []ast.Continuation = @constCast(self.rewriteConts(ct.continuations, nstack));
-                    for (pkids) |*k| inheritEdge(k, ct);
-                    out.appendSlice(self.a, pkids) catch unreachable;
-                    self.changed.* = true;
-                    continue;
-                }
-                var nc = ct.*;
-                if (ct.node != null and ct.node.? == .invocation) {
-                    var inv = self.inject(ct.node.?.invocation, stack);
-                    if (stack.len > 0) self.dispatchClone(&inv, stack);
-                    nc.node = .{ .invocation = inv };
-                }
-                nc.continuations = self.rewriteConts(ct.continuations, stack);
-                out.append(self.a, nc) catch unreachable;
-            }
-            return out.toOwnedSlice(self.a) catch unreachable;
-        }
-
-        // Rewrite one impl-body root continuation under `stack` — the
-        // head-step handling the item walk and clone synthesis share.
-        fn rewriteBody(self: *const @This(), body: ast.Continuation, stack: []const Scope) ast.Continuation {
-            if (isCtxCont(&body)) {
-                const nstack = self.a.alloc(Scope, stack.len + 1) catch unreachable;
-                for (stack, 0..) |s, i| nstack[i] = s;
-                nstack[stack.len] = self.scopeOf(&body);
-                const kids = self.rewriteConts(body.continuations, nstack);
-                self.changed.* = true;
-                if (kids.len > 0) {
-                    const k0: *ast.Continuation = @constCast(&kids[0]);
-                    inheritEdge(k0, &body);
-                    return k0.*;
-                }
-                var nb = body;
-                nb.continuations = &[_]ast.Continuation{};
-                return nb;
-            }
-            var nb = body;
-            if (nb.node != null and nb.node.? == .invocation) {
-                var inv = self.inject(nb.node.?.invocation, stack);
-                if (stack.len > 0) self.dispatchClone(&inv, stack);
-                nb.node = .{ .invocation = inv };
-            }
-            nb.continuations = self.rewriteConts(nb.continuations, stack);
-            return nb;
-        }
-    };
 
     // ---- whole-program walk ----------------------------------------------
 
@@ -618,146 +668,14 @@ const std = @import("std");
     var visiting = std.StringHashMap(void).init(allocator);
     const ctx = Ctx{ .a = allocator, .prog = program, .changed = &changed, .clones = &clones, .memo = &memo, .visiting = &visiting };
 
-    for (program.items) |pi| {
-        if (pi != .flow) {
-            new_items.append(allocator, pi) catch unreachable;
-            continue;
-        }
-        // The siteView flow — the runner wraps a nested site as a synthetic
-        // top-level flow so `item.flow.body` reads the site's own subtree.
-        // It is a VIEW, not a real item: drop it or it leaks into the program
-        // (a phantom second emission of the site's descendants).
-        if (pi.flow.site_of != null) continue;
-        var nf = pi.flow;
-        nf.body = ctx.rewriteBody(nf.body, &[_]Scope{});
-        new_items.append(allocator, ast.Item{ .flow = nf }) catch unreachable;
-    }
+    ctx.rewriteItemsIn(program.items, &new_items);
 
-    // Drain the clone worklist — generating a clone body registers the
-    // clones it needs, so iterate to fixpoint. A callee cloned under any
-    // stack is ctx-CONSUMING: its original impl is a template, never an
-    // emit body — its unfilled calls would refuse standalone, so the
-    // original flow drops out of the program. A bare call to it then
-    // fails as a decl with no implementation — the honest refusal.
-    var drops = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
-    var ci: usize = 0;
-    while (ci < clones.items.len) : (ci += 1) {
-        const cr = clones.items[ci];
-        var odecl: ?*const ast.EventDecl = null;
-        var oflow: ?*const ast.Flow = null;
-        for (program.items) |*pi| {
-            switch (pi.*) {
-                .event_decl => |*e| {
-                    const ds = e.path.segments;
-                    if (ds.len > 0 and std.mem.eql(u8, ds[ds.len - 1], cr.orig_last)) {
-                        const oq = e.path.module_qualifier;
-                        if ((oq == null) == (cr.orig_mq == null) and
-                            (oq == null or std.mem.eql(u8, oq.?, cr.orig_mq.?))) odecl = e;
-                    }
-                },
-                .flow => |*f| {
-                    if (f.impl_of) |io_| {
-                        const ds = io_.segments;
-                        if (ds.len > 0 and std.mem.eql(u8, ds[ds.len - 1], cr.orig_last)) {
-                            const oq = io_.module_qualifier;
-                            if ((oq == null) == (cr.orig_mq == null) and
-                                (oq == null or std.mem.eql(u8, oq.?, cr.orig_mq.?))) oflow = f;
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-        if (odecl == null or oflow == null) continue;
-
-        // mark the original impl for removal
-        const drop_key = std.fmt.allocPrint(allocator, "{s}|{s}", .{ cr.orig_mq orelse "", cr.orig_last }) catch unreachable;
-        var in_drops = false;
-        for (drops.items) |dk| {
-            if (std.mem.eql(u8, dk, drop_key)) in_drops = true;
-        }
-        if (!in_drops) drops.append(allocator, drop_key) catch unreachable;
-
-        const od = odecl.?.*;
-        const nfields = allocator.alloc(ast.Field, od.input.fields.len + cr.lift.len) catch unreachable;
-        for (od.input.fields, 0..) |f, i| nfields[i] = f;
-        for (cr.lift, 0..) |_, i| {
-            nfields[od.input.fields.len + i] = .{
-                .name = std.fmt.allocPrint(allocator, "__ctxarg{d}", .{i}) catch unreachable,
-                .type = "i64",
-            };
-        }
-        const nsegs = allocator.alloc([]const u8, od.path.segments.len) catch unreachable;
-        for (od.path.segments, 0..) |s, i| nsegs[i] = s;
-        nsegs[nsegs.len - 1] = cr.clone_seg;
-        new_items.append(allocator, .{ .event_decl = .{
-            .path = .{ .module_qualifier = od.path.module_qualifier, .segments = nsegs },
-            .input = .{ .fields = nfields },
-            .branches = od.branches,
-            .return_type = od.return_type,
-            .return_phantom = od.return_phantom,
-            .is_public = false,
-            .is_implicit_flow = od.is_implicit_flow,
-            .is_pure = od.is_pure,
-            .is_transitively_pure = od.is_transitively_pure,
-            .annotations = od.annotations,
-            .prose = od.prose,
-            .location = od.location,
-            .module = od.module,
-        } }) catch unreachable;
-        var nflow = oflow.?.*;
-        nflow.impl_of = .{ .module_qualifier = od.path.module_qualifier, .segments = nsegs };
-        nflow.body = ctx.rewriteBody(oflow.?.body, cr.stack);
-        new_items.append(allocator, .{ .flow = nflow }) catch unreachable;
-        changed = true;
-    }
-
-    // Drop the original impls of every cloned callee — they are templates —
-    // and mark the surviving decl [abstract] so a bare call to a template
-    // (one whose impl only ever existed as a specialization source) refuses
-    // under KORU047 instead of silently stubbing to a void no-op. The
-    // abstract resolver keys on segments[0]; `name__ctx_...` impls can never
-    // be mistaken for its `.default`.
-    if (drops.items.len > 0) {
-        var kept = std.ArrayList(ast.Item).initCapacity(allocator, new_items.items.len) catch unreachable;
-        for (new_items.items) |it| {
-            var drop_it = false;
-            if (it == .flow) {
-                if (it.flow.impl_of) |io_| {
-                    const ds = io_.segments;
-                    if (ds.len > 0) {
-                        const dk = std.fmt.allocPrint(allocator, "{s}|{s}", .{ io_.module_qualifier orelse "", ds[ds.len - 1] }) catch unreachable;
-                        for (drops.items) |dkk| {
-                            if (std.mem.eql(u8, dkk, dk)) drop_it = true;
-                        }
-                    }
-                }
-            }
-            if (!drop_it) kept.append(allocator, it) catch unreachable;
-        }
-        new_items = kept;
-        // Mark the template decls [abstract] so bare calls refuse (KORU047).
-        for (new_items.items) |*it| {
-            if (it.* != .event_decl) continue;
-            const ds = it.event_decl.path.segments;
-            if (ds.len == 0) continue;
-            const dk = std.fmt.allocPrint(allocator, "{s}|{s}", .{ it.event_decl.path.module_qualifier orelse "", ds[ds.len - 1] }) catch unreachable;
-            var hit = false;
-            for (drops.items) |dkk| {
-                if (std.mem.eql(u8, dkk, dk)) hit = true;
-            }
-            if (!hit) continue;
-            const anns = allocator.alloc([]const u8, it.event_decl.annotations.len + 1) catch unreachable;
-            for (it.event_decl.annotations, 0..) |an, i| anns[i] = an;
-            anns[it.event_decl.annotations.len] = "abstract";
-            it.event_decl.annotations = anns;
-        }
-    }
+    const final_items = finishProgram(&ctx, allocator, program, new_items.items, &clones);
 
     if (!changed) return .{};
     const new_prog = allocator.create(ast.Program) catch unreachable;
     new_prog.* = .{
-        .items = new_items.toOwnedSlice(allocator) catch unreachable,
+        .items = final_items,
         .module_annotations = program.module_annotations,
         .main_module_name = program.main_module_name,
         .allocator = program.allocator,
@@ -765,3 +683,5 @@ const std = @import("std");
     };
     return .{ .whole_program = new_prog };
 }
+
+~part finish

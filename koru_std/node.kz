@@ -423,10 +423,7 @@ const FH = struct {
         .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = args,
     };
-    const conts = allocator.alloc(ast.Continuation, site.continuations.len) catch unreachable;
-    for (site.continuations, 0..) |*c, i| {
-        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
-    }
+    const conts = ast_functional.cloneContinuationSlice(allocator, site.continuations) catch unreachable;
     return .{ .transformed = .{ .replacement_node = .{
         .node = .{ .invocation = call_inv },
         .children = conts,
@@ -529,10 +526,7 @@ const FH = struct {
         .path = ast.DottedPath{ .module_qualifier = allocator.dupe(u8, "std.node") catch unreachable, .segments = segs },
         .args = args[0..(if (member_text == null) 1 else 2)],
     };
-    const conts = allocator.alloc(ast.Continuation, flow.body.continuations.len) catch unreachable;
-    for (flow.body.continuations, 0..) |*c, i| {
-        conts[i] = ast_functional.cloneContinuation(allocator, c) catch unreachable;
-    }
+    const conts = ast_functional.cloneContinuationSlice(allocator, flow.body.continuations) catch unreachable;
     return .{ .transformed = .{ .replacement = ast.Item{ .flow = ast.Flow{
         .body = ast.rootSite(call_inv, conts, flow.location),
         .pre_label = null,
@@ -547,5 +541,6 @@ const FH = struct {
     } } } };
 }
 
+~part fleetretain
 ~part new
 ~part world

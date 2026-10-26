@@ -622,6 +622,8 @@ fn cloneContinuationWithNodeAndContinuations(
         .branch = try allocator.dupe(u8, cont.branch),
         .binding = if (cont.binding) |b| try allocator.dupe(u8, b) else null,
         .destructure = try ast.copyDestructure(allocator, cont.destructure),
+        .destructure_named = cont.destructure_named,
+        .produce = try ast.copyDestructure(allocator, cont.produce),
         .binding_annotations = binding_annotations,
         .binding_marks = binding_marks,
         .binding_type = cont.binding_type,
@@ -629,6 +631,7 @@ fn cloneContinuationWithNodeAndContinuations(
         .is_catchall = cont.is_catchall,
         .catchall_metatype = if (cont.catchall_metatype) |m| try allocator.dupe(u8, m) else null,
         .condition = if (cont.condition) |c| try allocator.dupe(u8, c) else null,
+        .post_condition = if (cont.post_condition) |c| try allocator.dupe(u8, c) else null,
         .condition_expr = cont.condition_expr,
         .node = new_node,
         .indent = cont.indent,
@@ -666,7 +669,7 @@ fn cloneContinuationWithReplacedNested(
     return cloneContinuationWithNodeAndContinuations(allocator, cont, cloned_step, new_nested, false);
 }
 
-fn cloneContinuationSlice(
+pub fn cloneContinuationSlice(
     allocator: std.mem.Allocator,
     continuations: []const ast.Continuation,
 ) CloneError![]ast.Continuation {
@@ -1438,6 +1441,11 @@ fn cloneField(allocator: std.mem.Allocator, field: *const ast.Field) !ast.Field 
         .type = try allocator.dupe(u8, field.type),
         .module_path = if (field.module_path) |mp| try allocator.dupe(u8, mp) else null,
         .phantom = if (field.phantom) |p| try allocator.dupe(u8, p) else null,
+        .type_annotations = blk: {
+            const anns = try allocator.alloc([]const u8, field.type_annotations.len);
+            for (field.type_annotations, 0..) |a, i| anns[i] = try allocator.dupe(u8, a);
+            break :blk anns;
+        },
         .is_source = field.is_source,
         .is_file = field.is_file,
         .is_embed_file = field.is_embed_file,
@@ -1553,6 +1561,7 @@ pub fn cloneInvocation(allocator: std.mem.Allocator, invocation: *const ast.Invo
             null,
         .return_binding_annotations = return_binding_annotations,
         .return_destructure = try ast.copyDestructure(allocator, invocation.return_destructure),
+        .return_destructure_named = invocation.return_destructure_named,
         .inline_body = if (invocation.inline_body) |ib|
             try allocator.dupe(u8, ib)
         else
@@ -1746,6 +1755,7 @@ fn cloneNamedBranch(allocator: std.mem.Allocator, branch: *const ast.NamedBranch
         .name = try allocator.dupe(u8, branch.name),
         .body = cloned_body,
         .binding = if (branch.binding) |b| try allocator.dupe(u8, b) else null,
+        .produce = try ast.copyDestructure(allocator, branch.produce),
         .is_optional = branch.is_optional,
         .annotations = cloned_annotations,
         .marks = cloned_marks,

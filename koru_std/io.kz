@@ -187,13 +187,12 @@ var readln_buf: [8192]u8 = undefined;
     };
     defer file.close();
 
-    const content = file.readToEndAlloc(koru_allocator(), std.math.maxInt(usize)) catch |err| {
-        const msg = switch (err) {
-            error.OutOfMemory => "Out of memory reading file",
-            else => "Failed to read file",
-        };
-        return .{ .failed = msg };
-    };
+    // One stat + one alloc + one readAll — readToEndAlloc's chunked growth
+    // copies the file ~3x and triples peak RSS on large inputs.
+    const size = (file.stat() catch return .{ .failed = "Failed to stat file" }).size;
+    const content = koru_allocator().alloc(u8, size) catch return .{ .failed = "Out of memory reading file" };
+    const n = file.readAll(content) catch { koru_allocator().free(content); return .{ .failed = "Failed to read file" }; };
+    if (n != size) { koru_allocator().free(content); return .{ .failed = "File changed during read" }; }
 
     return .{ .ok = content };
 }
@@ -215,12 +214,12 @@ var readln_buf: [8192]u8 = undefined;
 ~pub tor args {} -> []string
 
 ~proc args|zig {
-    var arg_list = std.ArrayList([]const u8).init(koru_allocator());
+    var arg_list: std.ArrayList([]const u8) = .empty;
     var iter = std.process.args();
     while (iter.next()) |arg| {
-        arg_list.append(arg) catch continue;
+        arg_list.append(koru_allocator(), arg) catch continue;
     }
-    return arg_list.toOwnedSlice() catch &.{};
+    return arg_list.toOwnedSlice(koru_allocator()) catch &.{};
 }
 
 // ============================================================================

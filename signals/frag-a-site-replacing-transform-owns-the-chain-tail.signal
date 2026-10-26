@@ -1,0 +1,15 @@
+name: frag-a-site-replacing-transform-owns-the-chain-tail
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: |
+  Auto-registered when 8ebf30924 declared `Signal:
+  frag-a-site-replacing-transform-owns-the-chain-tail` — a frag id was
+  written where a signal type belongs.
+
+  IT SHOULD NOT HAVE BEEN A NEW TYPE. The claim was "a defect class
+  gained a second offender" — that is `defect-class` (a defect whose
+  shape predicts siblings), with the frag named in prose. File stays so
+  the sealed commit derefs.
+route: surface

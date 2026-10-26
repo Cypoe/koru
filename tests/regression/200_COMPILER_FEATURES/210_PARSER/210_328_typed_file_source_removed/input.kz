@@ -1,0 +1,9 @@
+// The typed file-source echo `<type>"path"` was removed 2026-10-24 — the
+// tag is declared once on the parameter (`source: Source[kind]`) and the
+// invocation is `@"path"`. PARSE001 teaches the migration.
+~[comptime|transform]tor render.file { source: Source[text], program: *const Program, allocator: std.mem.Allocator }
+| transformed *const Program
+| failed string
+
+~render.file <text>"hello.txt"
+| transformed _ |> _

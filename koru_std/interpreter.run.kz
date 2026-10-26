@@ -77,6 +77,12 @@
             .message = msg, .line = 0, .column = 0,
         }};
     }
+    // Scopes mounted onto this session's vocabulary — read off the
+    // channel the caller set for this run (std/bridge installs them when
+    // a module is mounted). Same discipline as the dispatch pool: per
+    // call, threadlocal, cleared by the setter.
+    const mounted = runMountedScopes();
+
     // Validation pass
     if (validateFlow(flow, allocator, input_fn, branches_fn, defined, session_env, turn_env)) |validation_err| {
         return .{ .validation_error = std.heap.page_allocator.dupe(u8, validation_err.message) catch "validation error" };
@@ -136,6 +142,7 @@
         .session_bind_env = session_bind_env,
         .session_bind_counter = session_bind_counter,
         .turn_env = turn_env,
+        .mounted = mounted,
         .unhandled_outcome = null,
     };
 
@@ -754,12 +761,17 @@ fn executeFlow(
         return Value.fromDispatch(dispatch_result.branch, dispatch_result.fields);
     } else {
         // Normal dispatch for other tors
-        if (ctx.dispatcher) |dispatcher| {
+        if (ctx.dispatcher != null) {
             // Get tor name for budget tracking
             const event_name = if (inv.path.segments.len > 0) inv.path.segments[0] else "unknown";
 
+            // The verb's owner — bound scope's lookups or a mounted
+            // module's — resolved once (the `mounted` part) and reused
+            // for cost, the held-check, dispatch, and bookkeeping.
+            const own = resolveOwner(ctx, event_name);
+
             // Check budget before dispatch - use cost_fn if available
-            const event_cost: u64 = if (ctx.cost_fn) |cost_fn| cost_fn(event_name) else 1;
+            const event_cost: u64 = if (own.cost_fn) |cost_fn| cost_fn(event_name) else 1;
             if (ctx.budget) |budget| {
                 if (!budget.consume(event_cost, event_name)) {
                     return error.BudgetExhausted;
@@ -813,32 +825,10 @@ fn executeFlow(
                 // against rides the threadlocal channel for this call only.
                 if (ctx.handle_pool) |pool| setDispatchPool(pool, ctx.scope_name);
                 defer clearDispatchPool();
-                dispatcher(&evaluated_inv, &dispatch_result) catch |derr| {
-                    // A dispatcher that fails on typed args reports through
-                    // the detail slot — fold it into the teaching channel.
-                    if (takeDispatchDetail()) |det| ctx.error_detail = det;
-                    // A name the scope denies falls to the session's host
-                    // verbs (vocabulary, grammar — granted by the host, not
-                    // the register block). No grant, no verb: EventDenied
-                    // propagates unchanged.
-                    if (derr == error.EventDenied) {
-                        if (ctx.host_dispatch) |hd| {
-                            const view = HostView{
-                                .scope_name = ctx.scope_name,
-                                .defined = ctx.defined,
-                                .allocator = ctx.allocator,
-                                .error_detail = &ctx.error_detail,
-                                .session_env = ctx.session_env,
-                                // The pool carries the opaque session
-                                // context the custody witness was armed
-                                // with — the bridge's host verbs (the
-                                // custody() reader) cast it back.
-                                .custody_ctx = if (ctx.handle_pool) |p| p.custody_ctx else null,
-                            };
-                            try hd(event_name, &evaluated_inv, &view, &dispatch_result);
-                        } else return derr;
-                    } else return derr;
-                };
+                // Owner first (the `mounted` part): a mounted verb goes
+                // straight to its module's dispatcher; a bound name that
+                // denies falls to the host verbs.
+                try dispatchThroughOwner(ctx, own, event_name, &evaluated_inv, &dispatch_result);
             }
 
             // Own the result before anything reads it: binding (arm
@@ -870,108 +860,10 @@ fn executeFlow(
                 }) catch {};
             }
 
-            // Track obligations for the handle pool — prefer the spec API.
-            if (ctx.handle_pool) |pool| {
-                if (ctx.creates_spec_fn) |spec_fn| {
-                    const specs = spec_fn(event_name);
-                    for (specs) |spec| {
-                        // A branch-scoped spec acquires only on the outcome that carried it.
-                        if (spec.branch) |sb| { if (!namesEql(sb, dispatch_result.branch)) continue; }
-                        // Find the discharge tor — scope-local obligation name.
-                        const discharge_event = if (ctx.discharge_event_fn) |discharge_fn|
-                            discharge_fn(spec.obligation_name) orelse "unknown"
-                        else
-                            "unknown";
-                        // Extract handle_id from dispatch result using spec.field_name
-                        // Handle IDs must be strings - skip if not found or wrong type
-                        var handle_id: ?[]const u8 = null;
-                        for (dispatch_result.fields) |field| {
-                            if (std.mem.eql(u8, field.name, spec.field_name)) {
-                                handle_id = switch (field.value) {
-                                    .string_val => |s| s,
-                                    else => null,  // Only strings are valid handle IDs
-                                };
-                                break;
-                            }
-                        }
-                        // A spec that mints nothing is a broken contract —
-                        // the tor declared `<x!>` on this branch and its
-                        // result carried no holdable field under that name.
-                        // Refuse loudly; skipping would mint a silent lie.
-                        const hid = handle_id orelse {
-                            ctx.error_detail = std.fmt.allocPrint(ctx.allocator,
-                                "tor '{s}' owes <{s}:{s}> on field '{s}' but its '{s}' result carried no string token",
-                                .{ event_name, spec.obligation_module, spec.obligation_name, spec.field_name, dispatch_result.branch }) catch null;
-                            return error.ObligationUnfulfilled;
-                        };
-                        {
-                            // Guarded withdrawal (derived, never authored):
-                            // any input arg that names a currently-held handle
-                            // in this pool makes the new handle a dependent of
-                            // that provider. The provider must outlive it —
-                            // release order follows (dependents first).
-                            var dep_ids: [4]u32 = .{0} ** 4;
-                            var dep_len: usize = 0;
-                            for (evaluated_inv.args) |arg| {
-                                if (dep_len >= dep_ids.len) break;
-                                if (pool.findByHandleId(arg.value, ctx.scope_name)) |provider| {
-                                    dep_ids[dep_len] = provider.id;
-                                    dep_len += 1;
-                                }
-                            }
-                            // Custody subject: the verb's own args — the
-                            // why of the possess, witnessed at the mint.
-                            var subject_buf: [192]u8 = undefined;
-                            _ = pool.acquire(hid, spec.obligation_module, spec.obligation_name, discharge_event,
-                                event_name, spec.resource_type, ctx.scope_name, dep_ids[0..dep_len],
-                                custodySubject(&subject_buf, evaluated_inv.args)) catch {};
-                        }
-                    }
-                } else if (ctx.creates_obligations_fn) |creates_fn| {
-                    // Fallback to legacy API
-                    const obligations = creates_fn(event_name);
-                    for (obligations, 0..) |obligation, i| {
-                        const discharge_event = if (ctx.discharge_event_fn) |discharge_fn|
-                            discharge_fn(obligation) orelse "unknown"
-                        else
-                            "unknown";
-                        var binding_buf: [64]u8 = undefined;
-                        const binding_name = if (obligations.len > 1)
-                            std.fmt.bufPrint(&binding_buf, "result.{s}.{d}", .{dispatch_result.branch, i}) catch "result"
-                        else
-                            std.fmt.bufPrint(&binding_buf, "result.{s}", .{dispatch_result.branch}) catch "result";
-                        var subject_buf: [192]u8 = undefined;
-                        _ = pool.acquire(binding_name, "unknown", obligation, discharge_event,
-                            event_name, "unknown", ctx.scope_name, &.{},
-                            custodySubject(&subject_buf, evaluated_inv.args)) catch {};
-                    }
-                }
-
-                // Check if this tor discharges obligations - prefer new spec API
-                if (ctx.discharges_spec_fn) |spec_fn| {
-                    const specs = spec_fn(event_name);
-                    for (specs) |spec| {
-                        // Extract handle_id from args using spec.arg_name
-                        for (evaluated_inv.args) |arg| {
-                            if (std.mem.eql(u8, arg.name, spec.arg_name)) {
-                                // Scope-aware lookup prevents cross-scope discharge
-                                if (pool.findByHandleId(arg.value, ctx.scope_name)) |handle| {
-                                    pool.dischargeById(handle.id);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                } else if (ctx.discharges_obligations_fn) |discharges_fn| {
-                    // Fallback to legacy API
-                    const obligations = discharges_fn(event_name);
-                    if (obligations.len > 0) {
-                        if (evaluated_inv.args.len > 0) {
-                            pool.discharge(evaluated_inv.args[0].value);
-                        }
-                    }
-                }
-            }
+            // Book the dispatch into the ledger — minted obligations
+            // join the pool, spent ones retire, all through the owner's
+            // spec tables (the `mounted` part owns the bookkeeping).
+            try recordDispatchObligations(ctx, own, event_name, &evaluated_inv, &dispatch_result);
         } else {
             return error.NoDispatcher;
         }

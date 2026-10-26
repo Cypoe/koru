@@ -1,7 +1,7 @@
-// PINS: the each-name-once law holds across nesting levels — every leaf
-// of a destructure emits one `const <name>`, so `{ user: { x }, x }`
-// binds `x` twice and refuses PARSE010 at the arm line. The nested-only
-// sibling `{ user: { y }, x }` binds distinct leaves and stays legal.
+// PINS: the each-name-once law holds across paths — every destructure
+// entry emits one `const <local>`, so `{ user.x, x }` binds `x` twice and
+// refuses PARSE010 at the arm line. The sibling `{ user.y, x }` binds
+// distinct names and stays legal.
 ~import std/io
 const std = @import("std");
 const Point = struct { x: i64, y: i64 };
@@ -16,5 +16,5 @@ const Point = struct { x: i64, y: i64 };
 }
 
 ~fetch(id: 1)
-| found { user: { x }, x } |> std/io:print.ln("x = {{ x:d }}")
+| found { user.x, x } |> std/io:print.ln("x = {{ x:d }}")
 | missing |> std/io:print.ln("nope")

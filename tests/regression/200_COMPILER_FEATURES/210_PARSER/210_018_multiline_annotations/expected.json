@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -45,7 +45,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -54,7 +54,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 6,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -63,7 +63,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 8,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -83,7 +83,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                                 "line": 13,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -104,7 +104,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 10,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -113,7 +113,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 14,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -133,7 +133,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                                 "line": 19,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -154,7 +154,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 16,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -163,7 +163,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 20,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -191,7 +191,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 22,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -200,7 +200,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 26,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -213,7 +213,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_018_multiline_annotations/input.kz",
                 "line": 29,
-                "col": 0
+                "col": 1
             }
         }
     ]

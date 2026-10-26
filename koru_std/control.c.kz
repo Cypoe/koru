@@ -1,0 +1,203 @@
+// Koru Standard Library: the `c` part of control.kz — the capture C lane.
+// Joined via `~part c` in control.kz; merged into the control module at load.
+//
+// `CC` hosts the C-side helpers capture.kz grew: typed-seed peeling, array
+// seed declarators, and the cell preamble renderer — lifted at the
+// wall-driven split. Part-file top-level consts share the merged module's
+// scope, so `$mod.CC` resolves exactly as before (rings.new.kz's `R`
+// convention).
+const CC = struct {
+
+    /// Seed value → (koru type, bare value). `v[T]` peels through
+    /// peelBaseType; `@as(T, v)` — the other typed spelling (320_027) —
+    /// splits on the first top-level comma. Untyped values return "" type:
+    /// a bare `0` has no width the C cell can promise.
+    fn peelTyped(value: []const u8) struct { ty: []const u8, val: []const u8 } {
+        const sl = @import("struct_literal");
+        const p = sl.peelBaseType(value);
+        if (p.type.len > 0) return .{ .ty = p.type, .val = p.value };
+        const t = std.mem.trim(u8, p.value, " \t");
+        if (std.mem.startsWith(u8, t, "@as(") and t[t.len - 1] == ')') {
+            const inner = t[4 .. t.len - 1];
+            var depth: usize = 0;
+            for (inner, 0..) |ch, i| {
+                switch (ch) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -= 1,
+                    ',' => if (depth == 0) return .{
+                        .ty = std.mem.trim(u8, inner[0..i], " \t"),
+                        .val = std.mem.trim(u8, inner[i + 1 ..], " \t"),
+                    },
+                    else => {},
+                }
+            }
+        }
+        return .{ .ty = "", .val = p.value };
+    }
+
+    /// `[N]T{ … }` / `[N][M]T{ … }` seed → C declarator dims + brace-init
+    /// text, or null when the value is not a fixed-array literal. The type
+    /// text sits before the first top-level `{`; C puts the dims after the
+    /// member name, so the caller emits `<base> <mem><dims>` and the init
+    /// goes through cArrayInitText (`.{…}` ranks drop the `.`; elements
+    /// lower through the ordinary C expr path).
+    const ArraySeed = struct { at: @import("codegen_utils").CArrayType, init: []const u8 };
+    fn arraySeed(allocator: std.mem.Allocator, value: []const u8) !?ArraySeed {
+        const cgu = @import("codegen_utils");
+        const t = std.mem.trim(u8, value, " \t");
+        const open = std.mem.indexOfScalar(u8, t, '{') orelse return null;
+        if (t.len == 0 or t[t.len - 1] != '}') return null;
+        const at = cgu.cArrayType(t[0..open], null, null) orelse return null;
+        return .{ .at = at, .init = try cArrayInitText(allocator, t[open + 1 .. t.len - 1]) };
+    }
+
+    fn cArrayInitText(allocator: std.mem.Allocator, interior: []const u8) ![]const u8 {
+        const cgu = @import("codegen_utils");
+        var out = std.ArrayList(u8).initCapacity(allocator, interior.len + 4) catch unreachable;
+        out.append(allocator, '{') catch unreachable;
+        var rest = interior;
+        var n: usize = 0;
+        while (true) {
+            var depth: usize = 0;
+            var comma: usize = rest.len;
+            for (rest, 0..) |ch, i| {
+                switch (ch) {
+                    '(', '[', '{' => depth += 1,
+                    ')', ']', '}' => depth -= 1,
+                    ',' => if (depth == 0) { comma = i; break; },
+                    else => {},
+                }
+            }
+            const piece = std.mem.trim(u8, rest[0..comma], " \t\n");
+            if (piece.len == 0) break;
+            if (n > 0) out.appendSlice(allocator, ", ") catch unreachable;
+            const inner = if (std.mem.startsWith(u8, piece, ".{"))
+                piece[1..]
+            else
+                piece;
+            if (inner.len > 1 and inner[0] == '{' and inner[inner.len - 1] == '}') {
+                out.appendSlice(allocator, try cArrayInitText(allocator, inner[1 .. inner.len - 1])) catch unreachable;
+            } else {
+                const cv = cgu.lowerKoruExpr(allocator, inner, .c, .koru_expr, null) catch return error.NoCLowering;
+                out.appendSlice(allocator, cv) catch unreachable;
+            }
+            n += 1;
+            if (comma == rest.len) break;
+            rest = rest[comma + 1 ..];
+        }
+        out.append(allocator, '}') catch unreachable;
+        return out.toOwnedSlice(allocator) catch unreachable;
+    }
+
+    // The cell preamble — all three host spellings under one name, so the
+    // JS `let`, the C `struct __koru_cap_<cell>` and the Zig
+    // `__KoruCaptureT_` synthesis agree by being written once.
+    // `is_struct_init`/`init_host` are pre-render state the caller already
+    // computed; the refusal slot carries the KORU047 first-fragment
+    // refusals (existing-binding capture, unspellable seed).
+    fn preamble(allocator: std.mem.Allocator, cell_name: []const u8, cell_fields: []const @import("struct_literal").StructField, is_struct_init: bool, init_host: []const u8, host_is_js: bool, host_is_c: bool, reporter: anytype, loc: anytype, module: []const u8) struct { text: []const u8, refusal: ?@import("ast").Item } {
+        const ast = @import("ast");
+        if (host_is_js) {
+            // An object literal is already mutable and structurally typed,
+            // so the Zig type synthesis has no twin to write; an unused
+            // binding is legal there, so `_ = &cell;` has none either.
+            return .{ .text = std.fmt.allocPrint(allocator, "let {s} = {s};", .{ cell_name, init_host }) catch unreachable, .refusal = null };
+        }
+        if (host_is_c) {
+            // The C cell is a per-call LOCAL — `//@koru:stmt_scope` lands it
+            // at the head-call position inside the fn (the file-scope default
+            // is const|c's static-decl home; a file-scope cell would share
+            // state across calls). `struct __koru_cap_<cell>` is the
+            // convention the .assignment lowering re-derives from `target`
+            // alone — one spelling, no registry, no ast change. The
+            // anonymous zig seed gets no C twin: every field needs a
+            // declared width, which means `v[T]` or `@as(T, v)` — a bare `0`
+            // is comptime_int, a promise the fragment cannot make.
+            if (!is_struct_init) {
+                return .{ .text = "", .refusal = ast.refusal(allocator, reporter, .KORU047, loc, module, "~capture of an existing binding (`capture {{ <var> }}`) names no C cell type — `typeof` is outside the first fragment", .{}) };
+            }
+            const cgu = @import("codegen_utils");
+            var p = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+            var inits = std.ArrayList(u8).initCapacity(allocator, 128) catch unreachable;
+            p.appendSlice(allocator, "//@koru:stmt_scope\nstruct __koru_cap_") catch unreachable;
+            p.appendSlice(allocator, cell_name) catch unreachable;
+            p.appendSlice(allocator, " { ") catch unreachable;
+            for (cell_fields, 0..) |cf, i| {
+                const mem0 = cgu.cMemberName(allocator, cf.name);
+                const seed_opt = arraySeed(allocator, cf.value) catch {
+                    return .{ .text = "", .refusal = ast.refusal(allocator, reporter, .KORU047, loc, module, "~capture seed `{s}` — array elements have no C lowering in the first fragment", .{cf.name}) };
+                };
+                if (seed_opt) |seed| {
+                    // `[N]T` seed — C declarator dims ride the member name;
+                    // the braced init translates `.{}` ranks element-wise.
+                    p.appendSlice(allocator, seed.at.base) catch unreachable;
+                    p.appendSlice(allocator, " ") catch unreachable;
+                    p.appendSlice(allocator, mem0) catch unreachable;
+                    p.appendSlice(allocator, seed.at.dims) catch unreachable;
+                    p.appendSlice(allocator, "; ") catch unreachable;
+                    if (i > 0) inits.appendSlice(allocator, ", ") catch unreachable;
+                    inits.appendSlice(allocator, ".") catch unreachable;
+                    inits.appendSlice(allocator, mem0) catch unreachable;
+                    inits.appendSlice(allocator, " = ") catch unreachable;
+                    inits.appendSlice(allocator, seed.init) catch unreachable;
+                    continue;
+                }
+                const pv = peelTyped(cf.value);
+                const ct = cgu.cTypeOf(pv.ty) orelse {
+                    return .{ .text = "", .refusal = ast.refusal(allocator, reporter, .KORU047, loc, module, "~capture seed `{s}` has no declared base type — the C cell needs `v[i64]` or `@as(i64, v)`", .{cf.name}) };
+                };
+                const mem = cgu.cMemberName(allocator, cf.name);
+                p.appendSlice(allocator, ct) catch unreachable;
+                p.appendSlice(allocator, " ") catch unreachable;
+                p.appendSlice(allocator, mem) catch unreachable;
+                p.appendSlice(allocator, "; ") catch unreachable;
+                const cval = cgu.lowerKoruExpr(allocator, pv.val, .c, .koru_expr, null) catch {
+                    return .{ .text = "", .refusal = ast.refusal(allocator, reporter, .KORU047, loc, module, "~capture seed `{s}` — value has no C lowering in the first fragment", .{cf.name}) };
+                };
+                if (i > 0) inits.appendSlice(allocator, ", ") catch unreachable;
+                inits.appendSlice(allocator, ".") catch unreachable;
+                inits.appendSlice(allocator, mem) catch unreachable;
+                inits.appendSlice(allocator, " = ") catch unreachable;
+                inits.appendSlice(allocator, cval) catch unreachable;
+            }
+            p.appendSlice(allocator, "} ") catch unreachable;
+            p.appendSlice(allocator, cell_name) catch unreachable;
+            p.appendSlice(allocator, " = { ") catch unreachable;
+            p.appendSlice(allocator, inits.items) catch unreachable;
+            p.appendSlice(allocator, " };") catch unreachable;
+            return .{ .text = p.toOwnedSlice(allocator) catch unreachable, .refusal = null };
+        }
+        if (is_struct_init) {
+            // An anonymous ZIG struct literal is comptime, so a bare
+            // `var cell = .{...}` is a comptime var and runtime field writes
+            // fail — the cell gets an explicit struct type built from the
+            // seed's fields (made non-comptime) so it is a runtime value.
+            const type_name = std.fmt.allocPrint(allocator, "__KoruCaptureT_{s}", .{cell_name}) catch unreachable;
+            var p = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+            p.appendSlice(allocator, "const ") catch unreachable;
+            p.appendSlice(allocator, type_name) catch unreachable;
+            p.appendSlice(allocator, " = comptime blk: {\n") catch unreachable;
+            p.appendSlice(allocator, "    const __info = @typeInfo(@TypeOf(") catch unreachable;
+            p.appendSlice(allocator, init_host) catch unreachable;
+            p.appendSlice(allocator, "));\n") catch unreachable;
+            p.appendSlice(allocator, "    var __fields: [__info.@\"struct\".fields.len]@import(\"std\").builtin.Type.StructField = undefined;\n") catch unreachable;
+            p.appendSlice(allocator, "    for (__info.@\"struct\".fields, 0..) |__f, __i| {\n") catch unreachable;
+            p.appendSlice(allocator, "        __fields[__i] = .{ .name = __f.name, .type = __f.type, .default_value_ptr = null, .is_comptime = false, .alignment = __f.alignment };\n") catch unreachable;
+            p.appendSlice(allocator, "    }\n") catch unreachable;
+            p.appendSlice(allocator, "    break :blk @Type(.{ .@\"struct\" = .{ .layout = .auto, .fields = &__fields, .decls = &.{}, .is_tuple = false } });\n") catch unreachable;
+            p.appendSlice(allocator, "};\n") catch unreachable;
+            p.appendSlice(allocator, "var ") catch unreachable;
+            p.appendSlice(allocator, cell_name) catch unreachable;
+            p.appendSlice(allocator, ": ") catch unreachable;
+            p.appendSlice(allocator, type_name) catch unreachable;
+            p.appendSlice(allocator, " = ") catch unreachable;
+            p.appendSlice(allocator, init_host) catch unreachable;
+            p.appendSlice(allocator, ";\n_ = &") catch unreachable;
+            p.appendSlice(allocator, cell_name) catch unreachable;
+            p.appendSlice(allocator, ";") catch unreachable;
+            return .{ .text = p.toOwnedSlice(allocator) catch unreachable, .refusal = null };
+        }
+        // Existing-var captures already have a concrete type — seed verbatim.
+        return .{ .text = std.fmt.allocPrint(allocator, "var {s} = {s};\n_ = &{s};", .{ cell_name, init_host, cell_name }) catch unreachable, .refusal = null };
+    }
+};

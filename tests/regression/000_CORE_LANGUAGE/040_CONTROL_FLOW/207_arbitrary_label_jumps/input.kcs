@@ -4,7 +4,7 @@
     }
 
     __koru_stdout_write($"Outer: x={x}\n");
-    return new Output { tag = "next-outer", next_outer = (x, max) };
+    return new Output { tag = "next-outer", next_outer = new next_outer_payload { x = x, max = max } };
 }
 ~proc inner|cs {
     if (y > max) {
@@ -12,7 +12,7 @@
     }
 
     __koru_stdout_write($"  Inner: x={x}, y={y}\n");
-    return new Output { tag = "next-inner", next_inner = (x, y, max) };
+    return new Output { tag = "next-inner", next_inner = new next_inner_payload { x = x, y = y, max = max } };
 }
 ~proc start|cs {
     __koru_stdout_write("Starting nested loops...\n");

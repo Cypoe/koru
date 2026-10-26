@@ -1,0 +1,333 @@
+// Koru Standard Library: Reactive Stores — the `mint` part.
+// Joined via `~part mint` in store.kz; merged into the store module at load.
+// The mint-side helpers of `new`: bound-parameter scan, host-path builder,
+// brand/collect scans, field-order lookup, and the interceptor-unit emitter —
+// all self-contained namespaces lifted out of `store.new.kz` at the
+// wall-driven split (one lookup, one name, one convention).
+
+fn flowParamNamesStore(alloc: std.mem.Allocator, prog: *const ast_find.Program, f: *const ast_find.Flow) []const []const u8 {
+    const path_val = f.impl_of orelse return &.{};
+    const decl = findEventByPathStore(prog.items, &path_val) orelse return &.{};
+    if (decl.input.fields.len == 0) return &.{};
+    const names = alloc.alloc([]const u8, decl.input.fields.len) catch unreachable;
+    for (decl.input.fields, 0..) |field, i| names[i] = field.name;
+    return names;
+}
+
+// segment gets a `koru_` prefix. Mirrors codegen_utils.buildKoruModulePath /
+// continuation_codegen.buildEventPath — the ONE convention for naming any
+// module's emitted handler; the store reuses it instead of hardcoding.
+const HostPath = struct {
+    fn build(alloc: std.mem.Allocator, logical: []const u8) []const u8 {
+        var buf = std.ArrayList(u8).initCapacity(alloc, 32) catch unreachable;
+        var first = true;
+        var it = std.mem.splitAny(u8, logical, "./");
+        while (it.next()) |seg| {
+            if (seg.len == 0) continue;
+            if (!first) buf.append(alloc, '.') catch unreachable;
+            buf.appendSlice(alloc, "koru_") catch unreachable;
+            buf.appendSlice(alloc, seg) catch unreachable;
+            first = false;
+        }
+        return buf.toOwnedSlice(alloc) catch unreachable;
+    }
+    fn toDot(alloc: std.mem.Allocator, logical: []const u8) []const u8 {
+        const out = alloc.dupe(u8, logical) catch unreachable;
+        for (out) |*c| {
+            if (c.* == '/') c.* = '.';
+        }
+        return out;
+    }
+};
+
+
+const Brand = struct {
+    const ast = @import("ast");
+    fn add(alloc: std.mem.Allocator, names: *std.ArrayList([]const u8), n: []const u8) void {
+        for (names.items) |e| if (std.mem.eql(u8, e, n)) return;
+        names.append(alloc, n) catch unreachable;
+    }
+    // The ordinal is COORDINATION order, not item position: a
+    // coordinated store's apply event lands at the program's tail, so
+    // positions shuffle as stores coordinate (measured — the second
+    // store's walk saw itself first). What is stable: at this store's
+    // transform, exactly the stores coordinated BEFORE it carry a
+    // `__store_apply_` event, and coordination runs in program order.
+    // So this store's ordinal = the count of sibling apply events.
+    // Recurses into module decls (690_079/080 — a module can own a
+    // store); dedupe by name keeps a store at one ordinal no matter
+    // how many faces of it the walk meets.
+    fn collect(alloc: std.mem.Allocator, items: []const ast.Item, names: *std.ArrayList([]const u8)) void {
+        for (items) |*pi| {
+            switch (pi.*) {
+                .event_decl => |*ed2| {
+                    if (ed2.path.segments.len == 1 and std.mem.startsWith(u8, ed2.path.segments[0], "__store_apply_")) {
+                        add(alloc, names, ed2.path.segments[0]["__store_apply_".len..]);
+                    }
+                },
+                .module_decl => |*md2| collect(alloc, md2.items, names),
+                else => {},
+            }
+        }
+    }
+};
+
+
+fn fieldOrderOfStore(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []const u8) ?[]const []const u8 {
+    const struct_literal2 = @import("struct_literal");
+    // Already-coordinated stores: read the apply event's branches.
+    const apply_name2 = std.fmt.allocPrint(alloc, "__store_apply_{s}", .{store}) catch unreachable;
+    for (flatItems(alloc, prog.items)) |pi2| {
+        if (pi2.* != .event_decl) continue;
+        const ed2 = &pi2.event_decl;
+        if (ed2.path.segments.len == 1 and std.mem.eql(u8, ed2.path.segments[0], apply_name2)) {
+            const names2b = alloc.alloc([]const u8, ed2.branches.len) catch unreachable;
+            for (ed2.branches, 0..) |b2, bi2| names2b[bi2] = b2.name;
+            return names2b;
+        }
+    }
+    for (flatItems(alloc, prog.items)) |pi2| {
+        if (pi2.* != .flow) continue;
+        const f2 = &pi2.flow;
+        const inv2 = f2.inv();
+        if (inv2.path.segments.len != 1 or !std.mem.eql(u8, inv2.path.segments[0], "new")) continue;
+        const mq2 = inv2.path.module_qualifier orelse continue;
+        if (!std.mem.eql(u8, mq2, "std.store")) continue;
+        var matches2 = false;
+        var seed3: ?[]const u8 = null;
+        for (inv2.args) |a2| {
+            if (std.mem.eql(u8, a2.name, "expr")) {
+                var v2 = a2.value;
+                if (v2.len >= 2 and v2[0] == '"') v2 = v2[1 .. v2.len - 1];
+                matches2 = std.mem.eql(u8, v2, store);
+            } else if (std.mem.eql(u8, a2.name, "source")) {
+                seed3 = a2.value;
+            }
+        }
+        if (!matches2 or seed3 == null) continue;
+        const braced3 = std.fmt.allocPrint(alloc, "{{{s}}}", .{seed3.?}) catch unreachable;
+        const cf3 = struct_literal2.parseFields(alloc, braced3) catch continue;
+        const names3 = alloc.alloc([]const u8, cf3.len) catch unreachable;
+        for (cf3, 0..) |c3, ci3| names3[ci3] = c3.name;
+        return names3;
+    }
+    return null;
+}
+
+const StoreNameScan = struct {
+    const ast = @import("ast");
+    const struct_literal = @import("struct_literal");
+    fn go(alloc: std.mem.Allocator, its: []const ast.Item, out: *std.ArrayList([]const u8), ident_out: *std.ArrayList([]const u8)) void {
+        for (its) |*pi| {
+            switch (pi.*) {
+                .flow => |*f| {
+                    if (HomeScan.isStoreInv(f, "new", null)) {
+                        var nm: ?[]const u8 = null;
+                        var seed: ?[]const u8 = null;
+                        for (f.inv().args) |a| {
+                            if (std.mem.eql(u8, a.name, "expr")) nm = HomeScan.stripQuotes(a.value);
+                            if (std.mem.eql(u8, a.name, "source")) seed = a.value;
+                        }
+                        if (nm) |n| {
+                            out.append(alloc, n) catch unreachable;
+                            // Read the seed exactly as the declaration
+                            // does, so "is this identity-shaped" has ONE
+                            // answer wherever it is asked.
+                            if (seed) |sd| {
+                                const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{sd}) catch unreachable;
+                                if (struct_literal.isIdentityBlock(braced)) ident_out.append(alloc, n) catch unreachable;
+                            }
+                        }
+                    }
+                },
+                .event_decl => |*ed| {
+                    if (ed.path.segments.len == 1 and std.mem.startsWith(u8, ed.path.segments[0], "__store_apply_")) {
+                        const n = ed.path.segments[0]["__store_apply_".len..];
+                        out.append(alloc, n) catch unreachable;
+                        if (ed.branches.len == 1 and std.mem.eql(u8, ed.branches[0].name, ast.STORE_IDENTITY_COLUMN)) {
+                            ident_out.append(alloc, n) catch unreachable;
+                        }
+                    }
+                },
+                .module_decl => |*md| go(alloc, md.items, out, ident_out),
+                else => {},
+            }
+        }
+    }
+};
+
+
+const StoreLC = struct {
+    const ast = @import("ast");
+    const ast_functional = @import("ast_functional");
+    const emitter_helpers = @import("emitter_helpers");
+    fn emit(
+        alloc: std.mem.Allocator,
+        items: *std.ArrayList(ast.Item),
+        module: []const u8,
+        loc: anytype,
+        ev_name: []const u8,
+        arm_fields: []const []const u8, arm_types: []const []const u8,
+        arm_owned: []const ?OwnedCol,
+        arm_body: *const ast.Continuation,
+        prog: *const ast.Program,
+        pnames: []const []const u8,
+        pident: []const []const u8,
+    ) void {
+        const ev_in = alloc.alloc(ast.Field, arm_fields.len) catch unreachable;
+        for (arm_fields, arm_types, arm_owned, 0..) |fnm, ftp, aoi, fi| {
+            // An owned column binds into the reactive arm as a BARE
+            // borrow `*mod:Type<mod:state>` (no `!`): the interceptor
+            // reads it (read accepts the bare state, consumes nothing)
+            // while the store keeps the live <state!> it frees at
+            // teardown — 690_060's query projection, now in the
+            // `inserted` arm (690_061). Scalars/char bind their value.
+            ev_in[fi] = if (aoi) |oi| ast.Field{
+                .name = alloc.dupe(u8, fnm) catch unreachable,
+                .type = alloc.dupe(u8, ftp) catch unreachable,
+                .module_path = alloc.dupe(u8, oi.module_slash) catch unreachable,
+                .phantom = std.fmt.allocPrint(alloc, "{s}:{s}", .{ oi.module_dot, oi.state }) catch unreachable,
+            } else ast.Field{ .name = alloc.dupe(u8, fnm) catch unreachable, .type = alloc.dupe(u8, ftp) catch unreachable };
+        }
+        const retain = blk: {
+            const anns = alloc.alloc([]const u8, 1) catch unreachable;
+            anns[0] = alloc.dupe(u8, "retain") catch unreachable;
+            break :blk anns;
+        };
+        items.append(alloc, ast.Item{ .event_decl = ast.EventDecl{
+            .path = HomeScan.mkPathH(alloc, module, ev_name),
+            .input = ast.Shape{ .fields = ev_in },
+            .branches = &[_]ast.Branch{},
+            .is_public = false,
+            .is_implicit_flow = false,
+            .annotations = retain,
+            .location = loc,
+            .module = alloc.dupe(u8, module) catch unreachable,
+        } }) catch unreachable;
+        var body_clone = ast_functional.cloneContinuation(alloc, arm_body) catch unreachable;
+        const pscope = StoreScope{ .names = pnames, .prefixes = blk_lcpx: {
+            const px = alloc.alloc([]const u8, pnames.len) catch unreachable;
+            for (px) |*p| p.* = "";
+            break :blk_lcpx px;
+        } };
+        HomeScan.storeRefsContH(alloc, prog, &body_clone, pscope, pident, &[_][]const u8{});
+        const lbody_node = body_clone.node.?;
+        if (lbody_node == .inline_code) {
+            // A nested store-read site (query/rule/sweep) spliced
+            // its loop here BEFORE create ran (depth-first runner) —
+            // 690_093. The emitter's flow path assumes an
+            // invocation head, so this impl is a PROC: a proc impl
+            // binds every event input as a const, which is exactly
+            // how the loop's captures (the interceptor payload
+            // fields) resolve.
+            items.append(alloc, ast.Item{ .proc_decl = ast.ProcDecl{
+                .path = HomeScan.mkPathH(alloc, module, ev_name),
+                .body = ast.Source{ .text = lbody_node.inline_code, .location = loc, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+                .annotations = &[_][]const u8{},
+                // Reads the target directly: this is a nested
+                // helper struct, which cannot capture `new|zig`'s
+                // local. The body is a nested store read's spliced
+                // loop, which `query` now renders for whichever
+                // host is being built, so the tag must follow it.
+                .target = alloc.dupe(u8, switch (storeHostTarget()) {
+                    .js => "js",
+                    .cs => "cs",
+                    .c => "c",
+                    .zig => "zig",
+                }) catch unreachable,
+                .location = loc,
+                .module = alloc.dupe(u8, module) catch unreachable,
+            } }) catch unreachable;
+            return;
+        }
+        // The arm body is walked DEPTH-FIRST, so a transform at its
+        // root has already fired by the time the store declaration
+        // transforms — and it left its expansion on the INVOCATION
+        // (`Invocation.inline_body`, the canonical slot). A flow
+        // root is emitted from `Flow.inline_body` instead
+        // (emitter_helpers.zig:4946); only a NESTED continuation is
+        // emitted from the invocation's slot (:9189). Rebuilding the
+        // arm as a flow root without carrying the expansion up drops
+        // it between the two, and the emitter falls through to a
+        // plain handler call — for `std/io:print` that is the
+        // shape-check reroute, a real handler that prints nothing.
+        // Silent, and indistinguishable from an arm that ran.
+        //
+        // This is the mirror of the migration the runner already
+        // does in the other direction when it grafts a flow into a
+        // nested site (transform_pass_runner.zig itemToNode).
+        const body_cont: ast.Continuation = ast.rootSite(lbody_node.invocation, body_clone.continuations, loc);
+        items.append(alloc, ast.Item{ .flow = ast.Flow{
+            .body = body_cont,
+            .pre_label = null,
+            .impl_of = HomeScan.mkPathH(alloc, module, ev_name),
+            .super_shape = null,
+            .inline_body = lbody_node.invocation.inline_body,
+            .preamble_code = lbody_node.invocation.preamble_code,
+            .is_pure = false,
+            .is_transitively_pure = false,
+            .location = loc,
+            .module = alloc.dupe(u8, module) catch unreachable,
+        } }) catch unreachable;
+    }
+};
+// Interceptor payload types: inserted/removed bind ROW FIELDS by
+// name — each gets its column's type. updated binds {old, new} —
+// the written field's images; its bind form is walled to
+// uniform-typed containers above, so the shared column type is
+// exact (the discard form has no payload to type).
+const colTypes = struct {
+    fn call(alloc: std.mem.Allocator, names: []const []const u8, types: []const []const u8, wanted: []const []const u8) []const []const u8 {
+        const out = alloc.alloc([]const u8, wanted.len) catch unreachable;
+        for (wanted, 0..) |w, i| {
+            out[i] = blk: {
+                for (names, types) |n, t| {
+                    if (std.mem.eql(u8, n, w)) break :blk t;
+                }
+                unreachable; // arm fields were validated against field_names at collection
+            };
+        }
+        return out;
+    }
+}.call;
+// Parallel of colTypes: the OwnedCol info per arm field (null for
+// scalar/char), so the reactive arm binds an owned column as a bare
+// borrow (690_061). Non-owned stores get all-null — a no-op.
+const colOwned = struct {
+    fn call(alloc: std.mem.Allocator, names: []const []const u8, owned: []const ?OwnedCol, wanted: []const []const u8) []const ?OwnedCol {
+        const out = alloc.alloc(?OwnedCol, wanted.len) catch unreachable;
+        for (wanted, 0..) |w, i| {
+            out[i] = blk: {
+                for (names, owned) |n, o| {
+                    if (std.mem.eql(u8, n, w)) break :blk o;
+                }
+                break :blk null;
+            };
+        }
+        return out;
+    }
+}.call;
+// A `[id]` request rides the arm's input as one more field. It has
+// no column to resolve against, so its type is stated here (a
+// handle is i64, the type `| row` mints) and its ownedness is
+// null — a handle is a value, never a resource the arm borrows.
+const withIds = struct {
+    fn names(alloc: std.mem.Allocator, cols: []const []const u8, ids: []const []const u8) []const []const u8 {
+        const out = alloc.alloc([]const u8, cols.len + ids.len) catch unreachable;
+        for (cols, 0..) |c, i| out[i] = c;
+        for (ids, 0..) |d, i| out[cols.len + i] = d;
+        return out;
+    }
+    fn types(alloc: std.mem.Allocator, cols: []const []const u8, n_ids: usize) []const []const u8 {
+        const out = alloc.alloc([]const u8, cols.len + n_ids) catch unreachable;
+        for (cols, 0..) |c, i| out[i] = c;
+        for (0..n_ids) |i| out[cols.len + i] = "i64";
+        return out;
+    }
+    fn owned(alloc: std.mem.Allocator, cols: []const ?OwnedCol, n_ids: usize) []const ?OwnedCol {
+        const out = alloc.alloc(?OwnedCol, cols.len + n_ids) catch unreachable;
+        for (cols, 0..) |c, i| out[i] = c;
+        for (0..n_ids) |i| out[cols.len + i] = null;
+        return out;
+    }
+};

@@ -1,0 +1,3 @@
+A produce arm must not be where a grid read goes to die: the lowering
+either rewrites `g[i].v` here or the test compiles to a backend error
+naming `g` undeclared. Running proves the host call got a cell value.

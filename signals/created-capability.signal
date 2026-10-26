@@ -1,0 +1,8 @@
+name: created-capability
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `capability-added` — declare that name. Minted as an
+      orphan by the std/build:app commit, which used the wrong vocabulary;
+      the message's Signal line now reads capability-added.

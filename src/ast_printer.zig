@@ -280,6 +280,14 @@ const Printer = struct {
         }
         try self.write(f.type);
         if (f.phantom) |ph| try self.print("<{s}>", .{ph});
+        if (f.type_annotations.len > 0) {
+            try self.write("[");
+            for (f.type_annotations, 0..) |a, i| {
+                if (i > 0) try self.write(",");
+                try self.write(a);
+            }
+            try self.write("]");
+        }
     }
 
     /// A payload of exactly one field named `__type_ref` is the parse of a
@@ -327,6 +335,7 @@ const Printer = struct {
                 try self.print(" | {s}", .{arm.name});
                 if (arm.type) |t| try self.print(" {s}", .{t});
                 if (arm.phantom) |ph| try self.print("<{s}>", .{ph});
+                for (arm.type_annotations) |a| try self.print("[{s}]", .{a});
             }
         }
 
@@ -493,7 +502,8 @@ const Printer = struct {
             return self.unprintable("binding annotations without binding");
         }
         if (c.destructure.len > 0) {
-            try self.write(" ");
+            if (c.destructure_named and c.binding == null) try self.write(" _");
+            try self.write(if (c.destructure_named) ":" else " ");
             try self.printDestructure(c.destructure);
         }
         if (c.condition) |cond| try self.print(" when {s}", .{cond});
@@ -565,12 +575,18 @@ const Printer = struct {
         try self.write("{ ");
         for (fields, 0..) |*f, i| {
             if (i > 0) try self.write(", ");
-            try self.write(f.name);
-            if (f.type_text) |t| try self.print(": {s}", .{t});
-            if (f.sub.len > 0) {
-                if (f.type_text != null) return self.unprintable("destructure field with both type and sub");
-                try self.write(": ");
-                try self.printDestructure(f.sub);
+            for (f.annotations) |a| try self.print("[{s}]", .{a});
+            if (f.type_text) |t| {
+                // Named-group field-list entry: `name: Type`.
+                try self.print("{s}: {s}", .{ f.name, t });
+                continue;
+            }
+            // Pun when the local is the path's last segment, else `local: path`.
+            const last_seg = if (std.mem.lastIndexOfScalar(u8, f.path, '.')) |d| f.path[d + 1 ..] else f.path;
+            if (std.mem.eql(u8, f.name, last_seg)) {
+                try self.write(f.path);
+            } else {
+                try self.print("{s}: {s}", .{ f.name, f.path });
             }
         }
         try self.write(" }");

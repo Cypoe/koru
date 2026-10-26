@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_028_conditional_import_flag_off/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_028_conditional_import_flag_off/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_028_conditional_import_flag_off/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_028_conditional_import_flag_off/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -55,7 +55,7 @@
             "location": {
                 "file": "tests/regression/300_ADVANCED_FEATURES/310_COMPTIME/310_028_conditional_import_flag_off/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         }
     ]

@@ -48,9 +48,14 @@ because "no mirror" is exactly the state this file exists to make expensive.
 | `store:default` | no-green-usage |
 | `store:insert` | `115_018_store_insert_in_module` |
 | `store:new` | `690_079_store_declared_in_imported_module` |
+| `grid:for` | `115_045_grid_in_module` |
 | `grid:new` | `115_045_grid_in_module` |
+| `grid:pool` | `115_045_grid_in_module` |
+| `grid:pool-alloc` | `115_045_grid_in_module` |
+| `grid:pool-free` | `115_045_grid_in_module` |
 | `grid:stored` | `115_045_grid_in_module` |
 | `grid:sweep` | `115_045_grid_in_module` |
+| `grid:walk` | `115_045_grid_in_module` |
 | `store:preorder` | pins-unimplemented-surface |
 | `store:query` | `115_019_store_query_in_module` |
 | `store:rule` | `115_042_store_rule_in_module` |
@@ -117,3 +122,10 @@ because "no mirror" is exactly the state this file exists to make expensive.
 | `vaxis:default` | tested-in-koru-libs |
 | `vaxis:shader` | tested-in-koru-libs |
 | `vaxis:view` | tested-in-koru-libs |
+| `cell:capture` | `115_057_cell_capture_in_module` |
+| `cell:open` | `115_056_cell_open_in_module` |
+| `ctx:default` | `115_061_ctx_default_in_module` |
+| `node:new` | `115_058_node_new_in_module` |
+| `node:spawn` | `115_059_node_spawn_in_module` |
+| `node:default` | `115_060_node_default_in_module` |
+| `panic:catch` | `115_062_panic_catch_in_module` |

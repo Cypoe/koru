@@ -46,13 +46,12 @@ const std = @import("std");
     // arbitrary limit. (`read-lines` should ultimately stream line-by-line for
     // constant memory on >RAM inputs; that's a separate capability, not this
     // bug — the bug was the silent 10MB cap.)
-    const __koru_rl_content = __koru_rl_file.readToEndAlloc(koru_allocator(), std.math.maxInt(usize)) catch |err| {
-        const __koru_rl_msg = switch (err) {
-            error.OutOfMemory => "Out of memory reading file",
-            else => "Failed to read file",
-        };
-        return .{ .failed = __koru_rl_msg };
-    };
+    // One stat + one alloc + one readAll — readToEndAlloc's chunked growth
+    // copies the file ~3x and triples peak RSS on large inputs.
+    const __koru_rl_size = (__koru_rl_file.stat() catch return .{ .failed = "Failed to stat file" }).size;
+    const __koru_rl_content = koru_allocator().alloc(u8, __koru_rl_size) catch return .{ .failed = "Out of memory reading file" };
+    const __koru_rl_got = __koru_rl_file.readAll(__koru_rl_content) catch { koru_allocator().free(__koru_rl_content); return .{ .failed = "Failed to read file" }; };
+    if (__koru_rl_got != __koru_rl_size) { koru_allocator().free(__koru_rl_content); return .{ .failed = "File changed during read" }; }
     defer koru_allocator().free(__koru_rl_content);
 
     // HYGIENE: this body INLINES into the consumer's frame (effect

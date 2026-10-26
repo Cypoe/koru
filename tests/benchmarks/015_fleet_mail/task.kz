@@ -14,6 +14,8 @@
 ~import std/node
 ~import std/cell
 ~import std/fleet
+~import std/channel
+~import std/pump
 ~import std/proto
 ~import std/runtime
 ~import std/time
@@ -33,6 +35,108 @@
 }
 
 const TURNS: usize = 60;
+
+// ─── arm C machinery: the channel-carried mail turn ───
+// `Mail` is the resident-tier envelope — the body is the same source text
+// the file mailbox carries. `post` mints the must-settle debt; the `! turn`
+// consumer arm mints it again on the drain side, so a drain that touches a
+// mail without settling it is a compile refusal (KORU030), not a lost
+// message. `settle` is the discharge — on every path, including the error
+// arm: an errored turn is consumed-not-redelivered at this tier (a nack/
+// requeue tor is the production spelling; the checksum still sees it — a
+// failed turn shows as hits < expected).
+~std/proto(Mail) {
+    body: string
+}
+
+~pub tor post { b: string } -> Mail<posted!>
+~post -> { body: b }
+
+// The drain shape the custody grammar asks for: `drain-turn` borrows the
+// posted mail (`Mail<posted>` — read without custody), the nested cell
+// work reads m.body freely, and `settle` (`Mail<!posted>` — consume at
+// the boundary) discharges the debt in the arm's own continuation. An
+// errored turn is consumed-not-redelivered at this tier (a nack/requeue
+// tor is the production spelling; the checksum still sees it — a failed
+// turn shows as hits < expected).
+~pub tor drain-turn { m: Mail<posted> }
+~drain-turn = std/node(nodea.grain)
+  | cell c |> std/cell:run(c, source: m.body)
+    | result _ |> std/cell:capture(c, shape: counter)
+      ! as s |> std/cell:captured { hits: s.hits + 1 }
+      | captured _ |> sink()
+    | error e |> std/io:print.ln("turn failed: {{ e.kind:s }}")
+  | held-by o |> std/io:print.ln("drain lost grain: {{ o:s }}")
+  | not-found |> std/io:print.ln("grain gone")
+
+~pub tor settle { m: Mail<!posted> } -> i64
+~settle -> 0
+
+~std/channel:new(mail, capacity: 16) { turn: Mail }
+
+~std/channel(mail)
+! turn m |> drain-turn(m) |> settle(m)
+
+~std/pump:create(main)
+| drained |> pump-finished()
+
+~std/pump(main)
+! step |> mail-step()
+! live |> mail-live()
+! wait i |> mail-wait(i)
+
+// Producers are host threads writing the channel's ring — foreign callers
+// can't carry the compile-time debt (the ledger lives at the Koru
+// boundary, same as an HTTP client in celld's world). Capacity 16 < TURNS
+// so producers genuinely spin on `| full`: backpressure is exercised, not
+// bypassed. The closer thread sets the closed bit when all posts have
+// landed — `mail-live()` then reports done once the ring drains.
+var __mail_posted = @import("std").atomic.Value(u64).init(0);
+var __mail_claim = @import("std").atomic.Value(u64).init(0);
+var __mail_t0: i128 = 0;
+const MAIL_PRODUCERS: u64 = 8;
+
+~tor spawn-mail-producers { }
+~proc spawn-mail-producers|zig {
+    const std = @import("std");
+    __mail_t0 = std.time.nanoTimestamp();
+    const Producer = struct {
+        fn run() void {
+            while (true) {
+                const i = __mail_claim.fetchAdd(1, .acq_rel);
+                if (i >= TURNS) break;
+                while (!__koru_chan_mail_turn_ring.tryEnqueue(.{ .body = "touch(k: 1)" })) {
+                    std.Thread.yield() catch {};
+                }
+                _ = __mail_posted.fetchAdd(1, .release);
+            }
+        }
+    };
+    const Closer = struct {
+        fn run() void {
+            while (__mail_posted.load(.acquire) < TURNS) std.Thread.yield() catch {};
+            __koru_chan_mail_closed.store(true, .release);
+        }
+    };
+    var k: usize = 0;
+    while (k < MAIL_PRODUCERS) : (k += 1) {
+        const t = std.Thread.spawn(.{}, Producer.run, .{}) catch unreachable;
+        t.detach();
+    }
+    const w = std.Thread.spawn(.{}, Closer.run, .{}) catch unreachable;
+    w.detach();
+}
+
+// The pipelined arm's finish line: `pump:run` is a terminal invocation (no
+// continuable branches — `| drained` is the lifecycle hook), so the timer
+// lives in the scaffolding. Elapsed = producer-start → all turns drained.
+~tor pump-finished { }
+~proc pump-finished|zig {
+    const std = @import("std");
+    const ms = @as(f64, @floatFromInt(std.time.nanoTimestamp() - __mail_t0)) / 1e6;
+    std.debug.print("pipelined: {d:.3}ms for {d} turns\n", .{ ms, TURNS + 1 });
+}
+
 
 ~std/node:new(nodea, scope: "cell", world: "/tmp/koru-bench-mail", capacity: 8)
 ~std/node:new(nodeb, scope: "cell", world: "/tmp/koru-bench-mail", capacity: 8)
@@ -74,6 +178,24 @@ const TURNS: usize = 60;
     | failed e |> std/io:print.ln("drain failed {{ e:s }}")
   |> std/time:elapsed(start: t1): rb
   |> std/io:print.ln("deliver: {{ rb.ms:f }}ms for {{ TURNS:d }} mails")
+
+// ─── arm C: pipelined — producers on threads, drain through the pump ───
+// The celld "8 connections" counterpart: concurrent refused-callers post
+// turn programs into the cell's ring while the owner drains them as real
+// turns. The number answers "what does routed-turn throughput cost" —
+// producers saturate the bounded ring, so wall time ≈ drain rate.
+//
+// The warmup post goes through the real custody path — `send | ok`
+// consumes the caller's debt — and it is what teaches the channel that
+// `turn` transits <posted!>: consumer-arm minting is seeded from observed
+// custodial sends, and the host threads below carry bytes, not ledger.
+~post(b: "touch(k: 1)"): w |> std/channel:send(mail, w)
+| ok |> sink()
+| full |> std/io:print.ln("warmup mail full")
+| closed |> std/io:print.ln("warmup mail closed")
+
+~spawn-mail-producers()
+~std/pump:run(main)
 
 // ─── checksum: every routed turn must have committed once ───
 ~std/node(nodea.grain)

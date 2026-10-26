@@ -1,5 +1,5 @@
 ~proc stage-a|cs {
-    if (code < 0) return new Output { tag = "failed", failed = (code, "neg") };
+    if (code < 0) return new Output { tag = "failed", failed = new failed_payload { code = code, msg = "neg" } };
     return new Output { tag = "ok", ok = code + 1 };
 }
 ~proc stage-b|cs { return new Output { tag = "ok", ok = code * 2 }; 

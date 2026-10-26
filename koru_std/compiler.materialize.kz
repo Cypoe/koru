@@ -1,0 +1,174 @@
+// Compiler target routing + artifact materialization
+//
+// target-of reads the compile target (--lang / CompilerEnv.lang) and
+// selects the matching emission arm; emit-js / emit-cs are the non-zig
+// target emitters; the emit-*-artifact chains spell what emission does
+// with the code string once it exists — write the artifact, validate
+// it, invoke the host toolchain. Ordinary tors in the pipeline: a user
+// emission override can drop, reorder, or interpose on any of them.
+// Emit-only pipelines and custom Stage-D verbs are user-space
+// decisions, not driver privileges.
+
+// Per-target composed artifact chains — one entry per target-of arm.
+// `output` names the produced binary (defaults to the -o argv name);
+// `dir` stages the emitted artifact under a directory instead of cwd.
+
+~pub tor emit-zig-artifact { ctx: CompilerContext, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~emit-zig-artifact = emit-zig(ctx): e
+|> write-artifact(e.ctx, e.code, name: "output_emitted.zig", dir): w
+|> std/compiler:has-flag(flag: "deep-check"): h
+|> std/compiler:branch(cond: h)
+| yes |> validate-emitted(w.ctx, w.code): v -> v
+| no |> host-build-zig(w.ctx, w.code, output, dir): v -> v
+
+~pub tor emit-js-artifact { ctx: CompilerContext, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~emit-js-artifact = emit-js(ctx): e
+|> write-artifact(e.ctx, e.code, name: "output_emitted.js", dir): w -> w
+
+~pub tor emit-cs-artifact { ctx: CompilerContext, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~emit-cs-artifact = emit-cs(ctx): e
+|> write-artifact(e.ctx, e.code, name: "output_emitted.cs", dir): w
+|> host-build-cs(w.ctx, w.code, output, dir): v -> v
+
+// The C lane's artifact chain — std/emit:emit-c walks; ccomp is the
+// regression-invoked oracle, not koruc.
+~pub tor emit-c-artifact { ctx: CompilerContext, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~emit-c-artifact = std/emit:emit-c(ctx): e |> write-artifact(e.ctx, e.code, name: "output_emitted.c", dir): w -> w
+
+// Write the emitted code to its artifact file — `dir` relocates the
+// artifact under a directory (created if absent); unset means cwd.
+~pub tor write-artifact { ctx: CompilerContext, code: string, name: string, dir: ?string } -> { ctx: CompilerContext, code: string }
+
+~proc write-artifact|zig {
+    const allocator = ctx.allocator;
+    const path = if (dir) |d| blk: {
+        std.fs.cwd().makePath(d) catch |err| {
+            std.debug.print("error: could not create artifact directory {s}: {s}\n", .{ d, @errorName(err) });
+            std.process.exit(1);
+        };
+        break :blk std.fs.path.join(allocator, &.{ d, name }) catch unreachable;
+    } else name;
+    const file = std.fs.cwd().createFile(path, .{}) catch |err| {
+        std.debug.print("error: could not create {s}: {s}\n", .{ path, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer file.close();
+    file.writeAll(code) catch |err| {
+        std.debug.print("error: could not write {s}: {s}\n", .{ path, @errorName(err) });
+        std.process.exit(1);
+    };
+
+    const stdout = std.fs.File.stdout();
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "✓ Generated {s} ({d} bytes)\n", .{ path, code.len }) catch return .{ .ctx = ctx, .code = code };
+    stdout.writeAll(msg) catch {};
+    return .{ .ctx = ctx, .code = code };
+}
+
+// --deep-check: the emitted text must be a parseable program, not just text.
+// Replaces the Stage-D build with a zig.Ast witness — fuzz splices land
+// Koru-shaped lines inside `proc|zig` bodies and record fields, and both
+// paste verbatim into the Zig — a green verdict on emission `zig ast-check`
+// refuses. "Emitted" is not the verdict; "emitted valid" is.
+~pub tor validate-emitted { ctx: CompilerContext, code: string } -> { ctx: CompilerContext, code: string }
+
+~proc validate-emitted|zig {
+    const emitted_z = ctx.allocator.dupeZ(u8, code) catch unreachable;
+    const emit_tree = std.zig.Ast.parse(ctx.allocator, emitted_z, .zig) catch |perr| {
+        std.debug.print("error[KORU207]: emission validation itself failed ({s}) — output_emitted.zig could not be parsed\n", .{@errorName(perr)});
+        std.process.exit(1);
+    };
+    if (emit_tree.errors.len != 0) {
+        var aw: std.Io.Writer.Allocating = .init(ctx.allocator);
+        for (emit_tree.errors) |perr| {
+            if (perr.is_note) continue;
+            const loc = emit_tree.tokenLocation(0, perr.token);
+            emit_tree.renderError(perr, &aw.writer) catch {};
+            std.debug.print("error[KORU207]: output_emitted.zig:{d}:{d}: emitted Zig does not parse — {s}\n", .{ loc.line + 1, loc.column + 1, aw.written() });
+            aw.clearRetainingCapacity();
+        }
+        std.process.exit(1);
+    }
+    return .{ .ctx = ctx, .code = code };
+}
+
+
+
+// ------------------------------------------------------------
+// Target routing
+// ------------------------------------------------------------
+
+// Target router: reads the compile target (--lang / CompilerEnv.lang) and
+// selects the matching emission arm. `other` is not a fallback — KORU126
+// refuses undeclared targets upstream, so the only names that land here
+// are declared proc-variant tags (|mlir, |gpu, ...): the tag selects which
+// proc bodies emit, and the host artifact stays Zig.
+~[comptime] pub tor target-of { ctx: CompilerContext }
+| zig
+| js
+| cs
+| c
+| other
+
+~proc target-of|zig {
+    _ = ctx;
+    if (std.mem.eql(u8, CompilerEnv.lang, "js")) return .{ .js = .{} };
+    if (std.mem.eql(u8, CompilerEnv.lang, "cs")) return .{ .cs = .{} };
+    if (std.mem.eql(u8, CompilerEnv.lang, "c")) return .{ .c = .{} };
+    if (std.mem.eql(u8, CompilerEnv.lang, "zig")) return .{ .zig = .{} };
+    return .{ .other = .{} };
+}
+
+// JS code emission tor - selected by target-of under --lang=js
+~pub tor emit-js { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
+
+// C# code emission tor - selected by target-of under --lang=cs
+~pub tor emit-cs { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
+
+// Implementation of JS code emission — selected by the target-of arm under
+// --lang=js. It walks ctx.ast and emits runnable JavaScript for the
+// event-pump subset (tors, |js proc bodies, effect handlers, terminal
+// branches, flows). CompilerEnv is already in scope at file level in the
+// generated backend_output_emitted.zig (re-exported pub const) — reference
+// it directly rather than re-importing, which would shadow that declaration.
+~proc emit-js|zig {
+    const js_emitter = @import("js_emitter");
+    // Fail loud: a JS-emit failure must surface, not silently fall back to
+    // Zig. A refusal is a USER error — some tor has no JavaScript
+    // implementation on this target (a zig-only proc, an unmodelled
+    // construct) — so it becomes a clean, located diagnostic (the
+    // js_emitter already printed WHICH tor) and exit 1. The old
+    // std.debug.panic made every refusal read as a compiler bug: SIGABRT,
+    // a raw error name, and a backtrace that buried the reason. Pinned by
+    // 400_191_zig_only_proc_js_build_refuses.
+    const js_code = js_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
+        std.debug.print("error[KORU047]: JS emission failed: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emission";
+    return .{ .ctx = updated_ctx, .code = js_code };
+}
+
+// Implementation of C# code emission — selected by the target-of arm under
+// --lang=cs. Same fail-loud contract as the JS emitter: an unmodelled
+// construct or unlowered builtin refuses here, never falls back to the Zig
+// visitor's output.
+~proc emit-cs|zig {
+    const cs_emitter = @import("cs_emitter");
+    const cs_code = cs_emitter.emit(ctx.allocator, ctx.ast, CompilerEnv.library) catch |err| {
+        std.debug.print("error[KORU047]: CS emission failed: {s}\n", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var updated_ctx = ctx;
+    updated_ctx.passes_completed += 1;
+    updated_ctx.current_pass = "emission";
+    return .{ .ctx = updated_ctx, .code = cs_code };
+}

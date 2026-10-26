@@ -4,8 +4,12 @@
 //
 // What this pins is the REJECTION, not the wording. The diagnostic today is
 // KORU040 "unknown tor", which lands the program in the right place by the
-// wrong road: it reports a missing tor rather than a malformed qualifier, and
-// it names `io:print.impl` — a symbol the user never wrote. Both are message
+// UPDATED 2026-11-15: the wall moved to the frontend (KORU040 now names the
+// real call `io:print.ln` and teaches `import io`) — pin tightened to the new
+// stage+message per the note below's own instruction.
+//
+// Former note: it reports a missing tor rather than a malformed qualifier, and
+// it names `io:print.impl` — a symbol the user never wrote. Both were message
 // quality, tracked separately; if the wall ever moves to a qualifier-specific
 // diagnostic this pin should be tightened to name it.
 

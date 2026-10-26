@@ -1,0 +1,297 @@
+// Koru Standard Library: the `registry` part of tree.kz.
+// Joined via `~part registry` in tree.kz; merged into the tree module.
+//
+// Node registrations read two places, exactly like proto's own doors:
+// a LIVE `std/tree:node` invocation (declaration still in the tree — the
+// transform may not have visited it yet) and the erased `// proto-node
+// Name: fields` marker it leaves behind. A reader that checks only one
+// ordering-mines the registry; both scans answer "is X a node here".
+//
+// Field CLASSIFICATION is the lane's whole grammar. `name: Type` splits on
+// `?` (optional) and on which registry `Type` lives in:
+//   node-registered or the decl's own name → edge
+//   scalar / terminal / proto-compound      → payload
+//   anything else                            → refusal (caller words it)
+
+const TreeFieldKind = enum { payload, edge };
+
+const TreeField = struct {
+    name: []const u8,
+    optional: bool, // declared `?T`
+    kind: TreeFieldKind,
+    edge_type: []const u8 = "", // node name for edges
+    zig_type: []const u8 = "", // materialized payload type
+};
+
+const TreeDecl = struct {
+    name: []const u8,
+    home: []const u8,
+    fields: []const TreeField,
+};
+
+fn isNodeDoor(inv: *const astz.Invocation) bool {
+    if (inv.path.segments.len != 1) return false;
+    if (!std.mem.eql(u8, inv.path.segments[0], "node")) return false;
+    const mq = inv.path.module_qualifier orelse return false;
+    return std.mem.eql(u8, mq, "std.tree") or std.mem.eql(u8, mq, "std/tree");
+}
+
+fn nodeDoorName(inv: *const astz.Invocation) []const u8 {
+    if (inv.args.len == 0) return "";
+    const a0 = inv.args[0];
+    const v = if (a0.had_explicit_label) a0.name else a0.value;
+    var t = std.mem.trim(u8, v, " \t");
+    if (t.len >= 2 and t[0] == '"' and t[t.len - 1] == '"') t = t[1 .. t.len - 1];
+    return std.mem.trim(u8, t, " \t");
+}
+
+fn markerDeclaresNodeLine(line: []const u8, want: []const u8) bool {
+    const marker = std.mem.trimLeft(u8, line, " \t");
+    const prefix = "// proto-node ";
+    if (!std.mem.startsWith(u8, marker, prefix)) return false;
+    const colon = std.mem.indexOfScalar(u8, marker[prefix.len..], ':') orelse return false;
+    const declared = std.mem.trim(u8, marker[prefix.len .. prefix.len + colon], " \t");
+    return std.mem.eql(u8, declared, want);
+}
+
+/// Is `want` a node registered in `want_home` — live door or erased marker.
+fn isDeclaredNode(prog: *const astz.Program, alloc: std.mem.Allocator, want0: []const u8, want_home: []const u8) bool {
+    _ = alloc;
+    return scanNodeItems(prog.items, prog.main_module_name, want0, want_home);
+}
+
+fn scanNodeItems(items: []const astz.Item, scope_home: []const u8, want: []const u8, want_home: []const u8) bool {
+    for (items) |entry| {
+        switch (entry) {
+            .flow => |*candidate| {
+                if (candidate.body.node) |*n| {
+                    if (n.* == .invocation and std.mem.eql(u8, scope_home, want_home)) {
+                        const inv = &n.invocation;
+                        if (isNodeDoor(inv) and std.mem.eql(u8, nodeDoorName(inv), want)) return true;
+                    }
+                }
+            },
+            .inline_code => |ic| {
+                if (std.mem.eql(u8, scope_home, want_home)) {
+                    var lines = std.mem.splitScalar(u8, ic.code, '\n');
+                    while (lines.next()) |line| {
+                        if (markerDeclaresNodeLine(line, want)) return true;
+                    }
+                }
+            },
+            .module_decl => |*module| {
+                if (scanNodeItems(module.items, module.logical_name, want, want_home)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// The live door's attached field block, or the marker's flat field text.
+fn nodeFieldText(prog: *const astz.Program, want: []const u8, want_home: []const u8) ?[]const u8 {
+    return nodeFieldTextIn(prog.items, prog.main_module_name, want, want_home);
+}
+
+fn nodeFieldTextIn(items: []const astz.Item, scope_home: []const u8, want: []const u8, want_home: []const u8) ?[]const u8 {
+    for (items) |*entry| {
+        switch (entry.*) {
+            .flow => |*candidate| {
+                if (candidate.body.node) |*n| {
+                    if (n.* == .invocation and std.mem.eql(u8, scope_home, want_home)) {
+                        const inv = &n.invocation;
+                        if (isNodeDoor(inv) and std.mem.eql(u8, nodeDoorName(inv), want)) {
+                            for (inv.args) |a| {
+                                if (a.source_value) |sv| return sv.text;
+                            }
+                            return "";
+                        }
+                    }
+                }
+            },
+            .inline_code => |*ic| {
+                if (std.mem.eql(u8, scope_home, want_home)) {
+                    var lines = std.mem.splitScalar(u8, ic.code, '\n');
+                    while (lines.next()) |raw| {
+                        const line = std.mem.trimLeft(u8, raw, " \t");
+                        const prefix = "// proto-node ";
+                        if (!std.mem.startsWith(u8, line, prefix)) continue;
+                        const colon = std.mem.indexOfScalar(u8, line[prefix.len..], ':') orelse continue;
+                        const declared = std.mem.trim(u8, line[prefix.len .. prefix.len + colon], " \t");
+                        if (std.mem.eql(u8, declared, want))
+                            return std.mem.trim(u8, line[prefix.len + colon + 1 ..], " \t");
+                    }
+                }
+            },
+            .module_decl => |*module| {
+                if (nodeFieldTextIn(module.items, module.logical_name, want, want_home)) |t| return t;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+const NodeParseFault = struct { field: []const u8, why: []const u8 };
+const NodeParse = union(enum) {
+    ok: []const TreeField,
+    fault: NodeParseFault,
+};
+
+/// Parse + classify one node declaration's field block. `self_name` counts
+/// as node-registered for this walk — a self edge is the common case and the
+/// registration is in flight as this runs.
+fn parseNodeFields(
+    alloc: std.mem.Allocator,
+    prog: *const astz.Program,
+    text: []const u8,
+    home: []const u8,
+    self_name: []const u8,
+    comma_separates: bool,
+) NodeParse {
+    var fields = std.ArrayList(TreeField).initCapacity(alloc, 8) catch unreachable;
+    var lines = if (comma_separates)
+        std.mem.tokenizeAny(u8, text, "\n,")
+    else
+        std.mem.tokenizeAny(u8, text, "\n");
+    var seen = std.ArrayList([]const u8).initCapacity(alloc, 8) catch unreachable;
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse {
+            return .{ .fault = .{
+                .field = alloc.dupe(u8, line) catch unreachable,
+                .why = alloc.dupe(u8, "has no ':' — each field must be `name: Type` (or `name: ?Type`)") catch unreachable,
+            } };
+        };
+        const fname = std.mem.trim(u8, line[0..colon], " \t");
+        var ftype = std.mem.trim(u8, line[colon + 1 ..], " \t");
+        if (fname.len == 0 or ftype.len == 0) {
+            return .{ .fault = .{
+                .field = alloc.dupe(u8, line) catch unreachable,
+                .why = alloc.dupe(u8, "is missing a name or a type") catch unreachable,
+            } };
+        }
+        for (seen.items) |s| {
+            if (std.mem.eql(u8, s, fname)) {
+                return .{ .fault = .{
+                    .field = alloc.dupe(u8, fname) catch unreachable,
+                    .why = alloc.dupe(u8, "is bound twice — a node declares each field once") catch unreachable,
+                } };
+            }
+        }
+        seen.append(alloc, fname) catch unreachable;
+        const optional = ftype.len > 0 and ftype[0] == '?';
+        if (optional) ftype = std.mem.trim(u8, ftype[1..], " \t");
+
+        // Edge: the field type is node-registered, or the declaration's own
+        // name (self edge — registration in flight). Payload: scalar,
+        // terminal, compound, ref(T), or owned leaf — proto's leaf vocabulary.
+        const PRef = koru_std.koru_proto.TerminalRef;
+        if (std.mem.eql(u8, ftype, self_name) or isDeclaredNode(prog, alloc, ftype, home)) {
+            fields.append(alloc, .{
+                .name = fname,
+                .optional = optional,
+                .kind = .edge,
+                .edge_type = alloc.dupe(u8, ftype) catch unreachable,
+            }) catch unreachable;
+            continue;
+        }
+        if (PRef.isScalarWord(ftype)) {
+            fields.append(alloc, .{
+                .name = fname,
+                .optional = optional,
+                .kind = .payload,
+                .zig_type = if (optional)
+                    std.fmt.allocPrint(alloc, "?{s}", .{ftype}) catch unreachable
+                else
+                    alloc.dupe(u8, ftype) catch unreachable,
+            }) catch unreachable;
+            continue;
+        }
+        if (PRef.isDeclared(prog, alloc, ftype, home)) {
+            // A proto terminal lowers to its alias const (`const Port = i64`)
+            // — the field spells the name, the host resolves it.
+            fields.append(alloc, .{
+                .name = fname,
+                .optional = optional,
+                .kind = .payload,
+                .zig_type = if (optional)
+                    std.fmt.allocPrint(alloc, "?{s}", .{ftype}) catch unreachable
+                else
+                    alloc.dupe(u8, ftype) catch unreachable,
+            }) catch unreachable;
+            continue;
+        }
+        if (PRef.isDeclaredCompound(prog, alloc, ftype, home)) {
+            // Compound payload embeds — designed (proto→payload) but the
+            // materialization spelling is undecided; refused loudly, not
+            // silently half-materialized.
+            return .{ .fault = .{
+                .field = alloc.dupe(u8, fname) catch unreachable,
+                .why = std.fmt.allocPrint(alloc, "is a proto compound payload ('{s}') — embedding a proto record inside a node is not materialized yet; carry it by scalar fields, or declare the payload beside the node", .{ftype}) catch unreachable,
+            } };
+        }
+        if (PRef.isRefType(ftype)) {
+            // A store-row handle — payload material, not an edge (the row is
+            // borrowed, never owned, and the store owns the liveness).
+            fields.append(alloc, .{
+                .name = fname,
+                .optional = optional,
+                .kind = .payload,
+                .zig_type = alloc.dupe(u8, "i64") catch unreachable,
+            }) catch unreachable;
+            continue;
+        }
+        if (ftype.len > 0 and ftype[0] == '*') {
+            // Owned leaf `*mod:Type<state!>` — payload carrying a debt; the
+            // obligation checker settles it per path as it does on proto.
+            fields.append(alloc, .{
+                .name = fname,
+                .optional = optional,
+                .kind = .payload,
+                .zig_type = alloc.dupe(u8, ftype) catch unreachable,
+            }) catch unreachable;
+            continue;
+        }
+        return .{ .fault = .{
+            .field = alloc.dupe(u8, fname) catch unreachable,
+            .why = std.fmt.allocPrint(alloc, "names unknown type '{s}' — a node field must be a scalar material, a proto terminal of its home, a node-registered edge, ref(T), or an owned leaf `*mod:Type<state!>`", .{ftype}) catch unreachable,
+        } };
+    }
+    return .{ .ok = fields.toOwnedSlice(alloc) catch unreachable };
+}
+
+/// One registered node's resolved declaration, or null when absent.
+fn findNodeDecl(prog: *const astz.Program, alloc: std.mem.Allocator, name: []const u8, home: []const u8) ?TreeDecl {
+    const text = nodeFieldText(prog, name, home) orelse return null;
+    // Fields split on newlines AND commas — the decl block spell is
+    // `{ item: i64, left: ?Node }` (comma-joined, one line) and the erased
+    // marker is the same shape; both tokenize identically.
+    const parsed = parseNodeFields(alloc, prog, text, home, name, true);
+    return switch (parsed) {
+        .ok => |fs| .{ .name = name, .home = home, .fields = fs },
+        .fault => null, // the declaring transform already refused; readers stay silent
+    };
+}
+
+/// True when a `dispose-<Name>`/synth tor pair already exists for this type —
+/// the lazy-synthesis dedupe (transform order is not a contract).
+fn hasSynthTor(prog: *const astz.Program, tor_name: []const u8) bool {
+    return hasSynthTorIn(prog.items, tor_name);
+}
+
+fn hasSynthTorIn(items: []const astz.Item, tor_name: []const u8) bool {
+    for (items) |*entry| {
+        switch (entry.*) {
+            .event_decl => |*ed| {
+                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], tor_name)) return true;
+            },
+            .module_decl => |*module| {
+                if (hasSynthTorIn(module.items, tor_name)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}

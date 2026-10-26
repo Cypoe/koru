@@ -3,7 +3,7 @@
     var new_sum = sum + i;
 
     if (new_i < 10_000_000) {
-        return new Output { tag = "next", next = (new_i, new_sum) };
+        return new Output { tag = "next", next = new next_payload { i = new_i, sum = new_sum } };
     } else {
         return new Output { tag = "done", done = new_sum };
     }

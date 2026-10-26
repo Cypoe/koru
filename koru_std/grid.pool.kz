@@ -1,0 +1,569 @@
+// Koru Standard Library: the `pool` part of grid.kz — a positionally-
+// addressed table whose EXTENT is a run-time value. Joined via
+// `~part pool` in grid.kz; merged into the grid module at load.
+//
+//   std/grid:pool(ops) { o: 0[u8], j: 0[i64] }     -- declares the SHAPE
+//   std/grid:pool-alloc(ops, src.len)              -- decides the extent
+//   ... ops[i].j ... stored { ops[i].o: 1 } ...    -- reads/writes as usual
+//   std/grid:pool-free(ops)                        -- hands the slices back
+//
+// Why a sibling and not a flag on `new`: a grid's every cell exists from
+// declaration, so `size:` is comptime-only and its storage is static BSS.
+// A kernel that learns its table size from its input over-declares to the
+// worst case and pays the bytes on every run — brainfuck's `ops` grid was
+// four megabytes of i64 for programs a few kilocells long. A pool declares
+// the shape comptime and the extent at the point the program knows it: one
+// heap slice per column and a `var __koru_size` the alloc step sets.
+//
+// Everything else is the grid's own ABI, deliberately: the emitted struct
+// wears the same `__KoruGridT_<name>`/`__koru_grid_<name>` names, so
+// `collect`/`scanLowered` register it in the same namespace and reads,
+// `stored` writes, `sweep`/`for` cursors and `[unsafe(bounds)]` all ride
+// the existing path unchanged. The ONE difference the lowerers see is the
+// `.pool` flag on GridRef: slice columns cannot be `(&x)[i]`-indexed, so
+// pool access names the column without the `&`.
+//
+// The bounds floor is unchanged in spirit and sharper in message: an index
+// outruns `__koru_size`, which is `0` until `pool-alloc` runs — so touching
+// a pool before its extent arrives is the same loud trap as any other
+// index error, never a silent neighbour.
+//
+// Declared before first use, same as `new`. No `size:`/row/`dimensions`
+// facets — the extent is the alloc call's business and the layout is
+// column for now.
+
+~[keyword|comptime|transform]pub tor pool {
+    expr: Expression,
+    source: Source,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~[transform]proc pool|zig {
+    const ast = @import("ast");
+    const struct_literal = @import("struct_literal");
+
+    if (item.* != .flow) @panic("grid:pool transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    // Same annotation discipline as `new`: `[unsafe(bounds)]` waives the
+    // index floor and nothing else.
+    var unchecked = false;
+    {
+        const annotation_parser = @import("annotation_parser");
+        for (flow.annotations) |ann| {
+            const trimmed = std.mem.trim(u8, ann, " \t");
+            if (!std.mem.startsWith(u8, trimmed, "unsafe")) continue;
+            const call = annotation_parser.parseCall(allocator, trimmed) catch {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool: malformed annotation '[{s}]' - the form is `[unsafe(bounds)]`", .{trimmed}) };
+            } orelse {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool: `[unsafe]` must name what it waives - write `[unsafe(bounds)]`", .{}) };
+            };
+            const facet = std.mem.trim(u8, call.args[0], " \t\"");
+            if (!std.mem.eql(u8, facet, "bounds")) {
+                return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool: a pool has no `{s}` check to waive - it offers `bounds` (the per-access index floor)", .{facet}) };
+            }
+            unchecked = true;
+        }
+    }
+
+    var pool_name: []const u8 = "";
+    var seed_text: ?[]const u8 = null;
+    for (invocation.args) |arg| {
+        if (std.mem.eql(u8, arg.name, "expr")) {
+            pool_name = arg.value;
+            if (pool_name.len >= 2 and pool_name[0] == '"') pool_name = pool_name[1 .. pool_name.len - 1];
+        } else if (std.mem.eql(u8, arg.name, "source")) {
+            seed_text = arg.value;
+        } else {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): a pool takes a name and a cell block only - the extent arrives at `std/grid:pool-alloc`, so `size:`/`dimensions:` have no meaning here", .{pool_name}) };
+        }
+    }
+    if (pool_name.len == 0 or seed_text == null) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool requires a name and a cell block: pool(name) {{ field: default[type] }}", .{}) };
+    }
+
+    const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{seed_text.?}) catch unreachable;
+    const cells = struct_literal.parseFields(allocator, braced) catch {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): malformed cell block", .{pool_name}) };
+    };
+    if (cells.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): a pool needs at least one column", .{pool_name}) };
+    }
+
+    var fields = std.ArrayList(GridC.Col).initCapacity(allocator, cells.len) catch unreachable;
+    for (cells) |c| {
+        const v = std.mem.trim(u8, c.value, " ");
+        const lb = std.mem.indexOfScalar(u8, v, '[') orelse {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): column '{s}' needs a default and a type - `{s}: 0[i64]`", .{ pool_name, c.name, c.name }) };
+        };
+        if (v.len == 0 or v[v.len - 1] != ']') {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): column '{s}' has a malformed type - `{s}: 0[i64]`", .{ pool_name, c.name, c.name }) };
+        }
+        fields.append(allocator, .{
+            .name = c.name,
+            .ty = std.mem.trim(u8, v[lb + 1 .. v.len - 1], " "),
+            .dflt = std.mem.trim(u8, v[0..lb], " "),
+        }) catch unreachable;
+    }
+
+    // THE ZIG SHAPE — a grid's ABI with two substitutions: slice columns
+    // (`[]T` for `[N]T`) and a container `var __koru_size` the alloc step
+    // sets, so every `{ns}__KoruGridT_<p>.__koru_size` the existing
+    // machinery emits reads the runtime extent without knowing the
+    // difference. `__koru_pool` is the marker `scanLowered` reads as
+    // "runtime extent" — GridRef.pool follows from it.
+    var g = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+    {
+        const head = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = struct {{\n", .{pool_name}) catch unreachable;
+        g.appendSlice(allocator, head) catch unreachable;
+        for (fields.items) |f| {
+            const col = std.fmt.allocPrint(allocator, "    {s}: []{s} = &.{{}},\n", .{ f.name, f.ty }) catch unreachable;
+            g.appendSlice(allocator, col) catch unreachable;
+        }
+        g.appendSlice(allocator, "    const __koru_dflt = struct {\n") catch unreachable;
+        for (fields.items) |f| {
+            const d = std.fmt.allocPrint(allocator, "        {s}: {s} = {s},\n", .{ f.name, f.ty, f.dflt }) catch unreachable;
+            g.appendSlice(allocator, d) catch unreachable;
+        }
+        g.appendSlice(allocator, "    }{};\n    const __koru_pool = {};\n    var __koru_size: usize = 0;\n    fn __koru_wide(v: anytype) i64 {\n        return if (@TypeOf(v) == comptime_int) v else @intCast(v);\n    }\n") catch unreachable;
+        if (unchecked) {
+            g.appendSlice(allocator, "    // [unsafe(bounds)] at the declaration: no index floor.\n    fn __koru_at(i_raw: anytype) usize {\n        return @as(usize, @intCast(__koru_wide(i_raw)));\n    }\n") catch unreachable;
+        } else {
+            const at = std.fmt.allocPrint(allocator, "    fn __koru_at(i_raw: anytype) usize {{\n        const i = __koru_wide(i_raw);\n        if (i < 0 or @as(usize, @intCast(i)) >= __koru_size) @panic(\"std/grid:pool: index out of range for pool '{s}' - the extent arrives at pool-alloc, so this outruns what was allocated\");\n        return @as(usize, @intCast(i));\n    }}\n", .{pool_name}) catch unreachable;
+            g.appendSlice(allocator, at) catch unreachable;
+        }
+        g.appendSlice(allocator, "};\n") catch unreachable;
+        const inst = std.fmt.allocPrint(allocator, "var __koru_grid_{s}: __KoruGridT_{s} = .{{}};", .{ pool_name, pool_name }) catch unreachable;
+        g.appendSlice(allocator, inst) catch unreachable;
+    }
+
+    // THE JS RENDERING — same names, slice columns as arrays, mutable
+    // `__koru_size` and `__koru_pool: true` as the marker scanLowered reads.
+    const host_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
+    const host_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    const gdecl = if (host_is_c) blk_gc: {
+        const d = GridC.poolDecl(allocator, pool_name, fields.items, unchecked);
+        if (d.bad) |bad| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool({s}): field '{s}' type '{s}' has no C spelling in the first fragment", .{ pool_name, bad.name, bad.ty }) };
+        break :blk_gc d.text;
+    } else if (host_is_js) blk_gjs: {
+        var jg = std.ArrayList(u8).initCapacity(allocator, 512) catch unreachable;
+        const jhead = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = {{\n  __koru_pool: true,\n  __koru_size: 0,\n  __koru_wide: (v) => v,\n", .{pool_name}) catch unreachable;
+        jg.appendSlice(allocator, jhead) catch unreachable;
+        if (unchecked) {
+            jg.appendSlice(allocator, "  __koru_at: (i) => i,\n") catch unreachable;
+        } else {
+            const jat = std.fmt.allocPrint(allocator, "  __koru_at: (i) => {{ if (i < 0 || i >= __KoruGridT_{s}.__koru_size) throw new Error(\"std/grid:pool: index out of range for pool '{s}'\"); return i; }},\n", .{ pool_name, pool_name }) catch unreachable;
+            jg.appendSlice(allocator, jat) catch unreachable;
+        }
+        jg.appendSlice(allocator, "  __koru_dflt: {") catch unreachable;
+        for (fields.items, 0..) |f, fi| {
+            const d = std.fmt.allocPrint(allocator, "{s} {s}: {s}", .{ if (fi == 0) "" else ",", f.name, f.dflt }) catch unreachable;
+            jg.appendSlice(allocator, d) catch unreachable;
+        }
+        jg.appendSlice(allocator, " },\n};\n") catch unreachable;
+        const jinst = std.fmt.allocPrint(allocator, "let __koru_grid_{s} = {{", .{pool_name}) catch unreachable;
+        jg.appendSlice(allocator, jinst) catch unreachable;
+        for (fields.items, 0..) |f, fi| {
+            const c = std.fmt.allocPrint(allocator, "{s} {s}: []", .{ if (fi == 0) "" else ",", f.name }) catch unreachable;
+            jg.appendSlice(allocator, c) catch unreachable;
+        }
+        jg.appendSlice(allocator, " };") catch unreachable;
+        break :blk_gjs jg.toOwnedSlice(allocator) catch unreachable;
+    } else g.toOwnedSlice(allocator) catch unreachable;
+
+    // WHOLE-PROGRAM READ LOWERING — the declaration owns it, exactly as
+    // `new` does: `collect` sees this raw `std/grid:pool` flow (the
+    // flow-site branch matches `pool` next to `new`), registers the name
+    // with `.pool = true`, and `ops[i].o` below lowers through the same
+    // single read path.
+    {
+        var seen = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
+        grid_read.collect(allocator, program, &seen);
+        grid_readwalk.lowerItems(allocator, @constCast(program.items), seen.items);
+    }
+
+    // Same dual-item routing as `new`: the Zig host_line stays in the AST
+    // on both targets (it is the record columnType/collect re-read); on JS
+    // and C the runnable declaration rides `.inline_code`.
+    if (host_is_js or host_is_c) {
+        const jappended = allocator.alloc(ast.Item, 1) catch unreachable;
+        jappended[0] = ast.Item{ .inline_code = ast.InlineCode{
+            .code = gdecl,
+            .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        } };
+        return .{ .transformed = .{
+            .replacement = ast.Item{ .host_line = ast.HostLine{
+                .content = g.toOwnedSlice(allocator) catch unreachable,
+                .location = flow.location,
+                .module = allocator.dupe(u8, flow.module) catch unreachable,
+            } },
+            .appended = jappended,
+        } };
+    }
+    return .{ .transformed = .{ .replacement = ast.Item{ .host_line = ast.HostLine{
+        .content = gdecl,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } } } };
+}
+
+// ============================================================================
+// GRID.POOL-ALLOC — decide the extent, once the program knows it
+// ============================================================================
+//
+//   std/grid:pool-alloc(ops, src.len)
+//
+// A flow step, not a declaration: the bound is an ordinary caller-scope
+// expression (`src.len`, `n * 4`), evaluated at the site and threaded into
+// the generated unit as an event input — the same de-bundled-operand shape
+// `stored` and `for` already use. One heap slice per column through
+// `koru_allocator`, each seeded with its declared default, then the
+// runtime `__koru_size` is set — last, so a column never says it has a
+// cell it does not.
+
+~[comptime|transform]pub tor pool-alloc {
+    expr: Expression,
+    size: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~[transform]proc pool-alloc|zig {
+    const ast = @import("ast");
+
+    if (item.* != .flow) @panic("grid:pool-alloc transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    var pool_name: []const u8 = "";
+    var bound_text: []const u8 = "";
+    for (invocation.args, 0..) |arg, ai| {
+        if (ai == 0 and !arg.had_explicit_label) {
+            pool_name = arg.value;
+            if (pool_name.len >= 2 and pool_name[0] == '"') pool_name = pool_name[1 .. pool_name.len - 1];
+        } else if (std.mem.eql(u8, arg.name, "size") or !arg.had_explicit_label) {
+            bound_text = std.mem.trim(u8, arg.value, " ");
+        }
+    }
+    if (pool_name.len == 0 or bound_text.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-alloc requires a pool and an extent: pool-alloc(name, <expr>)", .{}) };
+    }
+
+    var refs = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
+    grid_read.collect(allocator, program, &refs);
+    const gref = grid_read.find(refs.items, pool_name) orelse {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-alloc({s}): no pool named '{s}' is declared in this program", .{ pool_name, pool_name }) };
+    };
+    if (!gref.pool) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-alloc({s}): '{s}' is a fixed grid - its extent was sealed at `new`, and a second sizing would lie about where it came from", .{ pool_name, pool_name }) };
+    }
+
+    // The columns come back out of the emitted declaration: `\n    f: []T`
+    // members of the pool's struct text, and their defaults out of the
+    // `__koru_dflt` record (`name: T = dflt,` lines) — a zero default means
+    // calloc can stand in for the elementwise fill, and the pages stay
+    // lazy until the program actually writes them.
+    var cols = std.ArrayList(GridC.Col).initCapacity(allocator, 8) catch unreachable;
+    {
+        var found = false;
+        const head = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = struct {{", .{pool_name}) catch unreachable;
+        for (pool_weld.flatItems(allocator, program.items)) |pi| {
+            const text = switch (pi) {
+                .host_line => |hl| hl.content,
+                .inline_code => |ic| ic.code,
+                else => continue,
+            };
+            const at = std.mem.indexOf(u8, text, head) orelse continue;
+            if (std.mem.indexOf(u8, text[at..], "__koru_pool") == null) continue;
+            var dflts = std.StringHashMap([]const u8).init(allocator);
+            if (std.mem.indexOfPos(u8, text, at, "__koru_dflt = struct {")) |dm| {
+                var dcur = dm + "__koru_dflt = struct {".len;
+                while (std.mem.indexOfScalarPos(u8, text, dcur, '\n')) |nl| {
+                    const line = std.mem.trim(u8, text[dcur..nl], " \t,");
+                    dcur = nl + 1;
+                    if (std.mem.startsWith(u8, line, "}")) break;
+                    const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+                    const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+                    if (colon > eq) continue;
+                    dflts.put(std.mem.trim(u8, line[0..colon], " "), std.mem.trim(u8, line[eq + 1 ..], " ,{}")) catch {};
+                }
+            }
+            var cur = at + head.len;
+            while (std.mem.indexOfScalarPos(u8, text, cur, '\n')) |nl| {
+                const line = std.mem.trim(u8, text[cur..nl], " \t");
+                cur = nl + 1;
+                if (std.mem.startsWith(u8, line, "}")) break;
+                const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+                const fname = std.mem.trim(u8, line[0..colon], " ");
+                const rest = std.mem.trim(u8, line[colon + 1 ..], " ");
+                if (!std.mem.startsWith(u8, rest, "[]")) continue;
+                const sp = std.mem.indexOfAny(u8, rest[2..], " =") orelse continue;
+                cols.append(allocator, .{ .name = fname, .ty = rest[2 .. 2 + sp], .dflt = dflts.get(fname) orelse "" }) catch unreachable;
+            }
+            found = true;
+            break;
+        }
+        // The raw-flow spelling, for the `pool` decl that has not lowered
+        // yet: `pool(ops) { o: 0[u8], j: 0[i64] }` — same cell-block parse
+        // the declaration itself ran.
+        if (!found) {
+            const struct_literal = @import("struct_literal");
+            for (pool_weld.flatItems(allocator, program.items)) |pi| {
+                if (pi != .flow) continue;
+                const f = pi.flow;
+                const inv2 = f.inv();
+                const mq = inv2.path.module_qualifier orelse continue;
+                if (!std.mem.eql(u8, mq, "std.grid") or inv2.path.segments.len != 1 or !std.mem.eql(u8, inv2.path.segments[0], "pool")) continue;
+                var this_name: []const u8 = "";
+                var block: []const u8 = "";
+                for (inv2.args) |a| {
+                    if (std.mem.eql(u8, a.name, "expr")) {
+                        this_name = a.value;
+                        if (this_name.len >= 2 and this_name[0] == '"') this_name = this_name[1 .. this_name.len - 1];
+                    } else if (std.mem.eql(u8, a.name, "source")) {
+                        block = a.value;
+                    }
+                }
+                if (!std.mem.eql(u8, this_name, pool_name) or block.len == 0) continue;
+                const braced = std.fmt.allocPrint(allocator, "{{{s}}}", .{block}) catch unreachable;
+                const cells = struct_literal.parseFields(allocator, braced) catch continue;
+                for (cells) |c| {
+                    const v = std.mem.trim(u8, c.value, " ");
+                    const lb = std.mem.indexOfScalar(u8, v, '[') orelse continue;
+                    cols.append(allocator, .{ .name = c.name, .ty = std.mem.trim(u8, v[lb + 1 .. v.len - 1], " "), .dflt = std.mem.trim(u8, v[0..lb], " ") }) catch unreachable;
+                }
+                break;
+            }
+        }
+        if (cols.items.len == 0) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-alloc({s}): could not read the pool's columns from its declaration", .{pool_name}) };
+        }
+    }
+
+    const home_ns = pool_weld.home(program.items, flow.module, null) orelse flow.module;
+
+    // The mint carries the pool name: two lifecycles on one line share
+    // flow.location, so line alone does not disambiguate.
+    const flat = std.mem.replaceOwned(u8, allocator, pool_name, "-", "_") catch unreachable;
+    const driver_name = std.fmt.allocPrint(allocator, "__grid_poolalloc_{s}_L{d}", .{ flat, flow.location.line }) catch unreachable;
+    const nn = std.fmt.allocPrint(allocator, "__koru_pooln_{s}_L{d}", .{ flat, flow.location.line }) catch unreachable;
+
+    var appended = std.ArrayList(ast.Item).initCapacity(allocator, 2) catch unreachable;
+    const dfields = allocator.alloc(ast.Field, 1) catch unreachable;
+    dfields[0] = ast.Field{ .name = allocator.dupe(u8, nn) catch unreachable, .type = allocator.dupe(u8, "i64") catch unreachable };
+    appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+        .path = pool_weld.path(allocator, home_ns, driver_name),
+        .input = ast.Shape{ .fields = dfields },
+        .branches = &[_]ast.Branch{},
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &[_][]const u8{},
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } }) catch unreachable;
+
+    const alloc_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
+    const alloc_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    var b = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    if (alloc_is_c) {
+        const d = GridC.poolAlloc(allocator, pool_name, nn, cols.items);
+        if (d.bad) |bad| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-alloc({s}): column '{s}' type '{s}' has no C spelling in the first fragment", .{ pool_name, bad.name, bad.ty }) };
+        b.appendSlice(allocator, d.text) catch unreachable;
+    } else if (alloc_is_js) {
+        const ng = std.fmt.allocPrint(allocator, "const __koru_pn = {s};\nif (__koru_pn < 0) throw new Error(\"std/grid:pool-alloc({s}): a pool's extent cannot be negative\");\n", .{ nn, pool_name }) catch unreachable;
+        b.appendSlice(allocator, ng) catch unreachable;
+        for (cols.items) |c| {
+            const l = std.fmt.allocPrint(allocator, "{s}__koru_grid_{s}.{s} = new Array(__koru_pn).fill({s}__KoruGridT_{s}.__koru_dflt.{s});\n", .{ gref.ns, pool_name, c.name, gref.ns, pool_name, c.name }) catch unreachable;
+            b.appendSlice(allocator, l) catch unreachable;
+        }
+        const sz = std.fmt.allocPrint(allocator, "{s}__KoruGridT_{s}.__koru_size = __koru_pn;\nreturn;", .{ gref.ns, pool_name }) catch unreachable;
+        b.appendSlice(allocator, sz) catch unreachable;
+    } else {
+        const ng = std.fmt.allocPrint(allocator, "if ({s} < 0) @panic(\"std/grid:pool-alloc({s}): a pool's extent cannot be negative\");\nconst __koru_pn: usize = @intCast({s});\n", .{ nn, pool_name, nn }) catch unreachable;
+        b.appendSlice(allocator, ng) catch unreachable;
+        for (cols.items) |c| {
+            // Page-granular backing: fresh anonymous pages arrive zeroed
+            // (POSIX mmap / VirtualAlloc both) and stay non-resident until
+            // written — the extent a pool declares is virtual, its cost is
+            // what the program touches. A non-zero default has no lazy
+            // spelling: the fill has to write every cell either way.
+            if (std.mem.eql(u8, c.dflt, "0")) {
+                const l = std.fmt.allocPrint(allocator, "{s}__koru_grid_{s}.{s} = @import(\"std\").heap.page_allocator.alloc({s}, __koru_pn) catch @panic(\"std/grid:pool-alloc({s}): allocation failed\");\n", .{ gref.ns, pool_name, c.name, c.ty, pool_name }) catch unreachable;
+                b.appendSlice(allocator, l) catch unreachable;
+            } else {
+                const l = std.fmt.allocPrint(allocator, "{s}__koru_grid_{s}.{s} = @import(\"std\").heap.page_allocator.alloc({s}, __koru_pn) catch @panic(\"std/grid:pool-alloc({s}): allocation failed\");\nfor ({s}__koru_grid_{s}.{s}) |*e| e.* = {s}__KoruGridT_{s}.__koru_dflt.{s};\n", .{ gref.ns, pool_name, c.name, c.ty, pool_name, gref.ns, pool_name, c.name, gref.ns, pool_name, c.name }) catch unreachable;
+                b.appendSlice(allocator, l) catch unreachable;
+            }
+        }
+        const sz = std.fmt.allocPrint(allocator, "{s}__KoruGridT_{s}.__koru_size = __koru_pn;\nreturn;", .{ gref.ns, pool_name }) catch unreachable;
+        b.appendSlice(allocator, sz) catch unreachable;
+    }
+    appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+        .path = pool_weld.path(allocator, home_ns, driver_name),
+        .body = ast.Source{ .text = b.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+        .annotations = &[_][]const u8{},
+        .target = allocator.dupe(u8, if (alloc_is_js) "js" else if (alloc_is_c) "c" else "zig") catch unreachable,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } }) catch unreachable;
+
+    // The bound lowers NOW — a `cells[i].n` inside it would otherwise reach
+    // the host verbatim: no later declaration's read pass sees a flow that
+    // did not exist yet when it ran.
+    const bound_lowered = grid_read.lower(allocator, bound_text, refs.items);
+    const call_args = allocator.alloc(ast.Arg, 1) catch unreachable;
+    call_args[0] = ast.Arg{ .name = allocator.dupe(u8, nn) catch unreachable, .value = if (alloc_is_c) bound_lowered else std.fmt.allocPrint(allocator, "@as(i64, @intCast({s}))", .{bound_lowered}) catch unreachable, .had_explicit_label = true };
+    const call = ast.Invocation{ .path = pool_weld.path(allocator, home_ns, driver_name), .args = call_args };
+    return .{ .transformed = .{
+        .replacement = ast.Item{ .flow = ast.Flow{
+            .body = ast.rootSite(call, flow.body.continuations, flow.location),
+            .pre_label = null,
+            .impl_of = flow.impl_of,
+            .annotations = &[_][]const u8{},
+            .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        } },
+        .appended = appended.toOwnedSlice(allocator) catch unreachable,
+    } };
+}
+
+// ============================================================================
+// GRID.POOL-FREE — hand the slices back, seal the extent to zero
+// ============================================================================
+//
+//   std/grid:pool-free(ops)
+//
+// Discharges the allocation through the same allocator that made it and
+// resets `__koru_size` to 0 — a read after free traps exactly as a read
+// before alloc does. No phantom obligation this rung: the pool is a
+// module-level table, not a bound value, so there is nothing to carry the
+// `<pool!>` state on. That gap is named rather than hidden — freeing is
+// the program's call to make.
+
+~[comptime|transform]pub tor pool-free {
+    expr: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~[transform]proc pool-free|zig {
+    const ast = @import("ast");
+
+    if (item.* != .flow) @panic("grid:pool-free transform: containing item is not a flow - walker dispatch contract broken");
+    const flow = &item.flow;
+
+    var pool_name: []const u8 = "";
+    for (invocation.args, 0..) |arg, ai| {
+        if (ai == 0 and !arg.had_explicit_label) {
+            pool_name = arg.value;
+            if (pool_name.len >= 2 and pool_name[0] == '"') pool_name = pool_name[1 .. pool_name.len - 1];
+        }
+    }
+    if (pool_name.len == 0) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-free requires a pool: pool-free(name)", .{}) };
+    }
+
+    var refs = std.ArrayList(grid_read.GridRef).initCapacity(allocator, 4) catch unreachable;
+    grid_read.collect(allocator, program, &refs);
+    const gref = grid_read.find(refs.items, pool_name) orelse {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-free({s}): no pool named '{s}' is declared in this program", .{ pool_name, pool_name }) };
+    };
+    if (!gref.pool) {
+        return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-free({s}): '{s}' is a fixed grid - there is no allocation to hand back", .{ pool_name, pool_name }) };
+    }
+
+    // Column names from the emitted declaration, the same record
+    // pool-alloc reads.
+    var cols = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
+    {
+        const head = std.fmt.allocPrint(allocator, "const __KoruGridT_{s} = struct {{", .{pool_name}) catch unreachable;
+        for (pool_weld.flatItems(allocator, program.items)) |pi| {
+            const text = switch (pi) {
+                .host_line => |hl| hl.content,
+                .inline_code => |ic| ic.code,
+                else => continue,
+            };
+            const at = std.mem.indexOf(u8, text, head) orelse continue;
+            if (std.mem.indexOf(u8, text[at..], "__koru_pool") == null) continue;
+            var cur = at + head.len;
+            while (std.mem.indexOfScalarPos(u8, text, cur, '\n')) |nl| {
+                const line = std.mem.trim(u8, text[cur..nl], " \t");
+                cur = nl + 1;
+                if (std.mem.startsWith(u8, line, "}")) break;
+                const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+                const fname = std.mem.trim(u8, line[0..colon], " ");
+                if (!std.mem.startsWith(u8, std.mem.trim(u8, line[colon + 1 ..], " "), "[]")) continue;
+                cols.append(allocator, fname) catch unreachable;
+            }
+            break;
+        }
+        if (cols.items.len == 0) {
+            return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, "std/grid:pool-free({s}): could not read the pool's columns from its declaration", .{pool_name}) };
+        }
+    }
+
+    const home_ns = pool_weld.home(program.items, flow.module, null) orelse flow.module;
+
+    const flat = std.mem.replaceOwned(u8, allocator, pool_name, "-", "_") catch unreachable;
+    const driver_name = std.fmt.allocPrint(allocator, "__grid_poolfree_{s}_L{d}", .{ flat, flow.location.line }) catch unreachable;
+    var appended = std.ArrayList(ast.Item).initCapacity(allocator, 2) catch unreachable;
+    appended.append(allocator, ast.Item{ .event_decl = ast.EventDecl{
+        .path = pool_weld.path(allocator, home_ns, driver_name),
+        .input = ast.Shape{ .fields = &[_]ast.Field{} },
+        .branches = &[_]ast.Branch{},
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &[_][]const u8{},
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } }) catch unreachable;
+
+    const free_is_js = std.mem.eql(u8, CompilerEnv.lang, "js");
+    const free_is_c = std.mem.eql(u8, CompilerEnv.lang, "c");
+    var b = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    for (cols.items) |c| {
+        const l = if (free_is_c)
+            std.fmt.allocPrint(allocator, "free(__koru_grid_{s}.{s}); __koru_grid_{s}.{s} = 0;\n", .{ pool_name, c, pool_name, c }) catch unreachable
+        else if (free_is_js)
+            std.fmt.allocPrint(allocator, "{s}__koru_grid_{s}.{s} = [];\n", .{ gref.ns, pool_name, c }) catch unreachable
+        else
+            std.fmt.allocPrint(allocator, "if ({s}__koru_grid_{s}.{s}.len > 0) @import(\"std\").heap.page_allocator.free({s}__koru_grid_{s}.{s});\n{s}__koru_grid_{s}.{s} = &.{{}};\n", .{ gref.ns, pool_name, c, gref.ns, pool_name, c, gref.ns, pool_name, c }) catch unreachable;
+        b.appendSlice(allocator, l) catch unreachable;
+    }
+    const sz = if (free_is_c)
+        std.fmt.allocPrint(allocator, "__koru_grid_{s}_size = 0;\nreturn;", .{pool_name}) catch unreachable
+    else
+        std.fmt.allocPrint(allocator, "{s}__KoruGridT_{s}.__koru_size = 0;\nreturn;", .{ gref.ns, pool_name }) catch unreachable;
+    b.appendSlice(allocator, sz) catch unreachable;
+    appended.append(allocator, ast.Item{ .proc_decl = ast.ProcDecl{
+        .path = pool_weld.path(allocator, home_ns, driver_name),
+        .body = ast.Source{ .text = b.toOwnedSlice(allocator) catch unreachable, .location = flow.location, .scope = .{ .bindings = &[_]ast.ScopeBinding{} }, .phantom_type = null },
+        .annotations = &[_][]const u8{},
+        .target = allocator.dupe(u8, if (free_is_js) "js" else if (free_is_c) "c" else "zig") catch unreachable,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } }) catch unreachable;
+
+    const call = ast.Invocation{ .path = pool_weld.path(allocator, home_ns, driver_name), .args = &[_]ast.Arg{} };
+    return .{ .transformed = .{
+        .replacement = ast.Item{ .flow = ast.Flow{
+            .body = ast.rootSite(call, flow.body.continuations, flow.location),
+            .pre_label = null,
+            .impl_of = flow.impl_of,
+            .annotations = &[_][]const u8{},
+            .location = flow.location,
+            .module = allocator.dupe(u8, flow.module) catch unreachable,
+        } },
+        .appended = appended.toOwnedSlice(allocator) catch unreachable,
+    } };
+}

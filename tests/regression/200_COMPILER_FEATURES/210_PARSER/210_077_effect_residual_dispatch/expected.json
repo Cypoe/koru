@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -45,7 +45,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -54,7 +54,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -63,7 +63,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 6,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -72,7 +72,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -165,7 +165,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 9,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -193,7 +193,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 14,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -221,7 +221,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 15,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -249,7 +249,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 16,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -275,7 +275,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                         "line": 19,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -304,7 +304,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                         "line": 20,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -333,7 +333,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                         "line": 21,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -358,7 +358,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_077_effect_residual_dispatch/input.kz",
                 "line": 18,
-                "col": 0
+                "col": 1
             }
         }
     ]

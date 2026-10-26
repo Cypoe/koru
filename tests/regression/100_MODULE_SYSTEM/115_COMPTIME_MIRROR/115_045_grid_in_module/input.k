@@ -1,5 +1,7 @@
-// MIRROR for `std/grid:new`, `std/grid:stored` and `std/grid:sweep`: all three
-// declared and used from an imported module rather than the entry file.
+// MIRROR for `std/grid:new`, `std/grid:stored`, `std/grid:sweep`,
+// `std/grid:for`, `std/grid:walk`, `std/grid:pool`, `std/grid:pool-alloc` and
+// `std/grid:pool-free`: all declared and used from an imported module rather
+// than the entry file.
 //
 // The wall asked for this the moment the transforms landed and it earned its
 // keep immediately. The first version named the generated write unit in
@@ -15,3 +17,4 @@
 import app/lib
 
 app/lib:bump() |> app/lib:bump() |> app/lib:total() |> app/lib:show()
+    |> app/lib:copy() |> app/lib:stream() |> app/lib:pooled()

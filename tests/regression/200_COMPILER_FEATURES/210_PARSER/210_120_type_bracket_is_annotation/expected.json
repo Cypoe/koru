@@ -1,0 +1,121 @@
+{
+    "module_annotations": [
+
+    ],
+    "items": [
+        {
+            "type": "import_decl",
+            "path": "std/compiler",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 1,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 1,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 2,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 3,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 4,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 5,
+                "col": 1
+            }
+        },
+        {
+            "type": "host_line",
+            "module": "input",
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 6,
+                "col": 1
+            }
+        },
+        {
+            "type": "event_decl",
+            "name": "use-sq",
+            "path": ["use-sq"],
+            "module": "input",
+            "input": {
+                "fields": [
+                    {
+                        "name": "r",
+                        "type": "*Resource",
+                        "is_source": false,
+                        "is_file": false,
+                        "is_embed_file": false,
+                        "is_expression": false,
+                        "is_invocation_meta": false,
+                        "phantom": null
+                    },
+                    {
+                        "name": "s",
+                        "type": "*Resource",
+                        "is_source": false,
+                        "is_file": false,
+                        "is_embed_file": false,
+                        "is_expression": false,
+                        "is_invocation_meta": false,
+                        "phantom": "active!"
+                    }
+                ]
+            },
+            "branches": [
+
+            ],
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 7,
+                "col": 1
+            }
+        },
+        {
+            "type": "proc_decl",
+            "event_name": "use-sq",
+            "path": ["use-sq"],
+            "module": "input",
+            "target": "zig",
+            "is_pure": false,
+            "location": {
+                "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_120_type_bracket_is_annotation/input.kz",
+                "line": 9,
+                "col": 1
+            }
+        }
+    ]
+}

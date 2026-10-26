@@ -363,6 +363,11 @@ pub const EmissionContext = struct {
     // Set by emitFlow when the target event has effect (`!`) branches and a Handlers
     // struct has been synthesized locally. Cleared after the invocation.
     pending_handlers_name: ?[]const u8 = null,
+    // Fork/join: `[parallel]`-marked invocation calls emit as spawned tasks
+    // writing slots instead of `const <bind> = handler(...)`. Each spawn
+    // records its thread var here; the join emits before the next step that
+    // could read the binding (any non-parallel step drains the list).
+    pending_parallel: std.ArrayList([]const u8) = .empty,
     // ── Tail self-continuation loop lowering ─────────────────────────────────
     // When a flow that implements event E re-enters E in tail position and
     // forwards the result unchanged (e.g. `|> run(...) | done res => done res`),
@@ -1470,6 +1475,30 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     try emitter.write("};\n");
     try emitter.write("const __koru_backing = if (@import(\"builtin\").link_libc) @import(\"std\").heap.c_allocator else if (@import(\"builtin\").os.tag == .freestanding and !@import(\"builtin\").cpu.arch.isWasm()) __koru_bare.allocator else @import(\"std\").heap.page_allocator;\n");
     try emitter.write("var __koru_leak_count: @import(\"std\").atomic.Value(usize) = .init(0);\n");
+    // Fork/join pool: [parallel]-marked calls queue as WaitGroup tasks on a
+    // lazily-initialized worker pool (µs-cost queued work, never an OS
+    // thread per call — kernel.kz's __koru_pool_ensure pattern, mutex-gated
+    // because a spawned worker can itself reach a marked call). The live
+    // task count is a best-effort bound: over the cap the call runs inline —
+    // work is owed, only width is lost, and correctness never rides on it.
+    try emitter.write("var __koru_par_tasks: @import(\"std\").atomic.Value(usize) = .init(0);\n");
+    try emitter.write("const __koru_par_CAP: usize = 128;\n");
+    // The REAL bound is fork-depth, not live count: a marked call forks only
+    // while the fork-tree is shallow, so ~2^DEPTH_CAP coarse tasks exist for
+    // an entire run — queue churn (task-count caps let finished tasks free
+    // budget, so millions of spawnWg ops roll through) can't happen. This is
+    // the frag's cutoff ruling landed as semantics, not a tuning knob.
+    try emitter.write("threadlocal var __koru_par_depth: usize = 0;\n");
+    try emitter.write("const __koru_par_DEPTH_CAP: usize = 7;\n");
+    try emitter.write("var __koru_par_pool: @import(\"std\").Thread.Pool = undefined;\n");
+    try emitter.write("var __koru_par_pool_ready: bool = false;\n");
+    try emitter.write("var __koru_par_pool_mtx: @import(\"std\").Thread.Mutex = .{};\n");
+    try emitter.write("fn __koru_par_pool_ensure() *@import(\"std\").Thread.Pool {\n");
+    try emitter.write("    __koru_par_pool_mtx.lock();\n    defer __koru_par_pool_mtx.unlock();\n");
+    try emitter.write("    if (!__koru_par_pool_ready) {\n");
+    try emitter.write("        @import(\"std\").Thread.Pool.init(&__koru_par_pool, .{ .allocator = @import(\"std\").heap.smp_allocator }) catch @panic(\"koru: thread pool init failed\");\n");
+    try emitter.write("        __koru_par_pool_ready = true;\n    }\n");
+    try emitter.write("    return &__koru_par_pool;\n}\n");
     try emitter.write("fn __koru_alloc(ctx: *anyopaque, len: usize, alignment: @import(\"std\").mem.Alignment, ret_addr: usize) ?[*]u8 {\n");
     try emitter.write("    _ = ctx;\n");
     try emitter.write("    const r = __koru_backing.rawAlloc(len, alignment, ret_addr);\n");
@@ -4824,21 +4853,22 @@ fn scopeWalkCont(
     return false;
 }
 
-/// Append a destructure's bound names to the scope, recursing into `sub` —
-/// nested fields bind too (`{ limits: { rps } }` binds `rps` as an access
-/// path off the payload). The intermediate name (`limits`) is NOT bound by
-/// emitDestructureConsts, so it is not reported here.
+/// Append a destructure's bound names to the scope. Paths are flat —
+/// every entry binds exactly its local name (`{ pos.x }` binds `x`).
 fn appendScopeDestructure(
     allocator: std.mem.Allocator,
     fields: []const ast.DestructureField,
     out: *std.ArrayList(ast.ScopeBinding),
 ) !void {
     for (fields) |*df| {
-        if (df.sub.len > 0) {
-            try appendScopeDestructure(allocator, df.sub, out);
-            continue;
-        }
-        try out.append(allocator, .{ .name = df.name, .type = df.type_text orelse "", .value_ref = df.name });
+        // The bound name's declared type: `x: T` carries T on type_text
+        // (sigil-shaped RHS) or on path (ident-shaped RHS — `service:
+        // string` can't be told from a rename at parse, so the consumer
+        // reads the spec). A rename `x: p` puts p here too — the old
+        // annotation reading — and resolves (or fails) as a type name.
+        const spec: []const u8 = df.type_text orelse (if (!std.mem.eql(u8, df.path, df.name)) df.path else "");
+        try out.append(allocator, .{ .name = df.name, .type = spec, .value_ref = df.name });
+        if (df.sub.len > 0) try appendScopeDestructure(allocator, df.sub, out);
     }
 }
 
@@ -5839,39 +5869,38 @@ const INLINE_CONTINUE_PREFIX = "__koru_continue_";
 /// they round-trip deterministically. An omitted optional terminal never minted a
 /// marker, so its absence simply emits nothing. Markers resolve in source order.
 /// Emit the consts for a shape-destructure binding: one
-/// `const <name>[: <type>] = <prefix>.<name>;` per named leaf, recursing into
-/// nested sub-shapes with longer access paths. `_` fields are skipped (the
-/// payload field simply isn't bound). Interiors may be host types — the
+/// `const <local> = <prefix>.<path>;` per bound name. `_` fields are skipped
+/// (the payload field simply isn't bound). Interiors may be host types — the
 /// emitter only writes access paths; Zig validates them at the next stage.
 pub fn emitDestructureConsts(
     emitter: *CodeEmitter,
     fields: []const ast.DestructureField,
     prefix: []const u8,
 ) anyerror!void {
+    // Flat paths (ruled 2026-10-24): each entry mints `const <local> =
+    // <prefix>.<path>` — `pos.x` descends inline, no recursion needed.
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, "_")) continue;
-        if (f.sub.len > 0) {
-            var path_buf: [256]u8 = undefined;
-            const sub_prefix = std.fmt.bufPrint(&path_buf, "{s}.{s}", .{ prefix, f.name }) catch {
-                @panic("destructure path too long");
-            };
-            try emitDestructureConsts(emitter, f.sub, sub_prefix);
-            continue;
-        }
         try emitter.write("const ");
         try writeBranchName(emitter, f.name);
         if (f.type_text) |t| {
             try emitter.write(": ");
-            // Lower the canonical `string` to its Zig slice at emission.
             try emitter.write(lowerZigType(t));
         }
         try emitter.write(" = ");
         try emitter.write(prefix);
         try emitter.write(".");
-        try writeBranchName(emitter, f.name);
+        try emitter.write(f.path);
         try emitter.write("; _ = &");
         try writeBranchName(emitter, f.name);
         try emitter.write("; ");
+        // Named-group nested fields (`addr: { city }`) bind their leaves too —
+        // `city` comes off `prefix.addr` the same as it did under sub-descent.
+        if (f.sub.len > 0) {
+            var pb: [256]u8 = undefined;
+            const np = std.fmt.bufPrint(&pb, "{s}.{s}", .{ prefix, f.path }) catch @panic("destructure path too long");
+            try emitDestructureConsts(emitter, f.sub, np);
+        }
     }
 }
 
@@ -6032,9 +6061,9 @@ fn emitInlineCodeResolvingSplices(
             // the stack — a name that occurs as a token in ANY of them would
             // be shadowed by `const <binding>`, not just one in the immediate
             // producer's text.
-            const producer_shadow = containsToken(inline_code, binding) or blk: {
+            const producer_shadow = codegen_utils.containsToken(inline_code, binding) or blk: {
                 for (ctx.splice_frame_codes.items) |frame| {
-                    if (containsToken(frame, binding)) break :blk true;
+                    if (codegen_utils.containsToken(frame, binding)) break :blk true;
                 }
                 break :blk false;
             };
@@ -6054,7 +6083,12 @@ fn emitInlineCodeResolvingSplices(
                 // so a fixed `__koru_dst` shadows the outer one and Zig rejects it
                 // (surfaced by AoC day16: `Sue …` match → per-piece match).
                 var dst_buf: [64]u8 = undefined;
-                const dst = std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
+                // A named group (`| ok e:{ k }`) makes the whole-bind name the
+                // prefix — `const e = arg; const k = e.k;` — plain `const`s.
+                const dst = if (binding.len > 0 and !std.mem.eql(u8, binding, "_"))
+                    binding
+                else
+                    std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
                 try emitter.write("const ");
                 try emitter.write(dst);
                 try emitter.write(" = ");
@@ -6088,15 +6122,76 @@ fn emitInlineCodeResolvingSplices(
                 try writeBranchName(emitter, binding);
                 try emitter.write("; ");
             }
-            const guarded = cont.condition != null;
+            // `! else` — exclusive dispatch continuing the contiguous
+            // each/else effect run above. An else arm fires iff no earlier
+            // arm's guard passed AND its own does — the else-if chain
+            // telescoped: every earlier raw guard negated, own appended.
+            // (An arm "fires" iff body runs — pre `when` and post-produce
+            // `when` both gate it, so both join the negated guard. An
+            // unguarded earlier arm contributes `!(true)` — a dead else,
+            // matching `else` after an unconditional `if`.) Earlier guards
+            // are rebound to THIS arm's binding name — every arm declares
+            // its own, but the payload is the same element. A `! else`
+            // with no `! each` head compiles to a compileError, not a guess.
+            var cond_text: ?[]const u8 = cont.condition;
+            var cond_owned: ?[]u8 = null;
+            defer if (cond_owned) |o| ctx.allocator.free(o);
+            if (cont.kind == .effect and std.mem.eql(u8, cont.branch, "else")) {
+                var g: usize = idx;
+                while (g > 0) {
+                    const prev = &continuations[g - 1];
+                    if (prev.kind != .effect) break;
+                    if (!std.mem.eql(u8, prev.branch, "each") and !std.mem.eql(u8, prev.branch, "else")) break;
+                    g -= 1;
+                }
+                var buf = try std.ArrayList(u8).initCapacity(ctx.allocator, 128);
+                if (g < idx and std.mem.eql(u8, continuations[g].branch, "each")) {
+                    for (continuations[g..idx]) |*prev| {
+                        var prev_full: []const u8 = "true";
+                        var pg_owned: ?[]u8 = null;
+                        defer if (pg_owned) |o| ctx.allocator.free(o);
+                        if (prev.condition != null and prev.post_condition != null) {
+                            prev_full = try std.fmt.allocPrint(ctx.allocator, "({s}) and ({s})", .{ prev.condition.?, prev.post_condition.? });
+                            pg_owned = @constCast(prev_full);
+                        } else if (prev.condition orelse prev.post_condition) |single| {
+                            prev_full = single;
+                        }
+                        if (prev.binding != null and cont.binding != null and
+                            !std.mem.eql(u8, prev.binding.?, cont.binding.?))
+                        {
+                            const rw = try codegen_utils.replaceIdentifier(ctx.allocator, prev_full, prev.binding.?, cont.binding.?);
+                            if (pg_owned) |o| ctx.allocator.free(o);
+                            pg_owned = @constCast(rw);
+                            prev_full = pg_owned.?;
+                        }
+                        try buf.appendSlice(ctx.allocator, "!(");
+                        try buf.appendSlice(ctx.allocator, prev_full);
+                        try buf.appendSlice(ctx.allocator, ") and ");
+                    }
+                    if (cont.condition) |own| {
+                        try buf.appendSlice(ctx.allocator, "(");
+                        try buf.appendSlice(ctx.allocator, own);
+                        try buf.appendSlice(ctx.allocator, ")");
+                    } else {
+                        buf.shrinkRetainingCapacity(buf.items.len - " and ".len);
+                    }
+                    cond_owned = try buf.toOwnedSlice(ctx.allocator);
+                    cond_text = cond_owned.?;
+                } else {
+                    buf.deinit(ctx.allocator);
+                    cond_owned = try ctx.allocator.dupe(u8, "@compileError(\"`! else` has no `! each` group — an else arm continues a contiguous each/else run, it cannot open one.\")");
+                    cond_text = cond_owned.?;
+                }
+            }
+            const guarded = cond_text != null;
             if (guarded) {
                 // Presence rewrite (400_147): `! each i when <optional arm>`
                 // — the guard is written here at splice time, so a bare
                 // optional-arm name becomes the comptime @hasDecl test.
                 const cond_out: []const u8 = blk: {
-                    const alloc = emitter.allocator orelse break :blk cont.condition.?;
-                    const ev = ctx.impl_event_decl orelse break :blk cont.condition.?;
-                    break :blk (try presenceConditionRewrite(alloc, cont.condition.?, ev, ctx.inline_fire_conts)) orelse cont.condition.?;
+                    const alloc = emitter.allocator orelse break :blk cond_text.?;
+                    const ev = ctx.impl_event_decl orelse break :blk cond_text.?;
+                    break :blk (try presenceConditionRewrite(alloc, cond_text.?, ev, ctx.inline_fire_conts)) orelse cond_text.?;
                 };
                 try emitter.write("if (");
                 if (bind_rename) |br| {
@@ -6385,6 +6480,21 @@ pub fn emitInlineBodyNode(
             var body_calls_effect = false;
             for (ed.branches) |b| {
                 if (b.kind != .effect or std.mem.eql(u8, b.name, "*")) continue;
+                // A bare `name(` call only needs a Handlers member when a
+                // LIVE arm supplies one — transform-consumed arms resolve
+                // through the graft, not `Handlers_N.name`, so calls to
+                // consumed-only branch names must not force the struct
+                // (690_342: the bulk insert consumed `! each`; the textual
+                // `each(` resolves through the graft, and a memberless
+                // `const Handlers_0 = struct {}` is just an unused local).
+                var has_live_arm = false;
+                for (inline_effect_conts.items) |lc| {
+                    if (std.mem.eql(u8, lc.branch, b.name)) {
+                        has_live_arm = true;
+                        break;
+                    }
+                }
+                if (!has_live_arm) continue;
                 if (callsBranchByName(inline_code, b.name)) {
                     body_calls_effect = true;
                     break;
@@ -7124,8 +7234,8 @@ fn inlineEffectfulEligibility(ctx: *EmissionContext, inv: *const ast.Invocation,
         // A nested fn makes token rewriting unsound; a terminal-bearing event
         // whose proc never `return`s relies on the legacy glue's synthesized
         // tail. Both keep the call path.
-        if (containsToken(proc.body.text, "fn")) return null;
-        if (has_terminal_branch and !containsToken(proc.body.text, "return")) return null;
+        if (codegen_utils.containsToken(proc.body.text, "fn")) return null;
+        if (has_terminal_branch and !codegen_utils.containsToken(proc.body.text, "return")) return null;
 
         // Inline splicing lowers an effect arm only in DIRECT-CALL form
         // (`ready(...)` → splice, or evaluate-and-discard when unhandled). A body
@@ -7214,38 +7324,6 @@ fn identUsedAsNonCall(body: []const u8, name: []const u8) bool {
                 while (j < body.len and (body[j] == ' ' or body[j] == '\t' or body[j] == '\n' or body[j] == '\r')) j += 1;
                 if (j >= body.len or body[j] != '(') return true;
             }
-        }
-    }
-    return false;
-}
-
-/// Word-boundary token scan, quote- and comment-aware.
-fn containsToken(body: []const u8, token: []const u8) bool {
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (q != 0) {
-            if (c == '\\') {
-                i += 1;
-            } else if (c == q) {
-                q = 0;
-            }
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') i += 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, body[i..], token)) {
-            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-            const after = i + token.len;
-            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
-            if (before_ok and after_ok) return true;
         }
     }
     return false;
@@ -8404,19 +8482,11 @@ const ArmScope = struct {
 fn collectArmScope(cont: *const ast.Continuation, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
     if (cont.is_transformed_subtree) return;
     if (cont.binding) |b| try scope.binds.put(b, {});
-    for (cont.destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+    for (cont.destructure) |f| try scope.binds.put(f.name, {});
     if (cont.condition) |c| try scanArmRefs(c, &scope.refs);
     if (cont.condition_expr) |e| try collectExprRefs(e, &scope.refs, allocator);
     if (cont.node) |*n| try collectArmNodeScope(n, scope, allocator);
     for (cont.continuations) |*child| try collectArmScope(child, scope, allocator);
-}
-
-fn collectArmDestructureBinds(f: ast.DestructureField, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
-    if (f.sub.len > 0) {
-        for (f.sub) |sub| try collectArmDestructureBinds(sub, scope, allocator);
-        return;
-    }
-    try scope.binds.put(f.name, {});
 }
 
 fn collectArmNamedBranch(nb: *const ast.NamedBranch, scope: *ArmScope, allocator: std.mem.Allocator) anyerror!void {
@@ -8429,7 +8499,7 @@ fn collectArmNodeScope(n: *const ast.Node, scope: *ArmScope, allocator: std.mem.
         .invocation => |*inv| {
             for (inv.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
             if (inv.return_binding) |rb| try scope.binds.put(rb, {});
-            for (inv.return_destructure) |f| try collectArmDestructureBinds(f, scope, allocator);
+            for (inv.return_destructure) |f| try scope.binds.put(f.name, {});
         },
         .label_with_invocation => |*lwi| {
             for (lwi.invocation.args) |*arg| try scanArmRefs(arg.value, &scope.refs);
@@ -8799,6 +8869,30 @@ fn emitArmContBlock(
     else
         false;
     const cont_binding: []const u8 = if (cont.binding) |b| b else branch.name;
+    // Produce stage `! each i { f, g: e }` — `const g = <expr>` for named
+    // exprs, `const f = i.f` for puns (the element's fields), `const i = i`
+    // for the element itself.
+    if (cont.produce.len > 0) {
+        for (cont.produce) |pf| {
+            if (std.mem.eql(u8, pf.name, "_")) continue;
+            try out.writeIndent();
+            try out.write("const ");
+            try writeBranchName(out, pf.name);
+            try out.write(" = ");
+            if (pf.type_text) |t| {
+                try out.write(lowerExprZig(out, ctx, t));
+            } else if (std.mem.eql(u8, pf.name, cont_binding)) {
+                try out.write(shared_param_name);
+            } else {
+                try out.write(shared_param_name);
+                try out.write(".");
+                try out.write(pf.name);
+            }
+            try out.write("; _ = &");
+            try writeBranchName(out, pf.name);
+            try out.write(";\n");
+        }
+    }
     if (cont.destructure.len > 0) {
         // Shape-destructure: per-field consts off the shared param.
         try out.writeIndent();
@@ -9414,6 +9508,27 @@ fn escapeBoundNames(ctx: *const EmissionContext, text: []const u8) ![]const u8 {
     var out = text;
     var names_buf: [128][]const u8 = undefined;
     var names_len: usize = 0;
+    // The impl tor's input fields destructure to mangled consts (`x_y`)
+    // without ever entering zig_scope_bindings — every handler ctx carries
+    // the decl, so source its field names here. `x-y` in an impl body
+    // reference otherwise passes through verbatim and Zig reads subtraction.
+    if (ctx.impl_event_decl) |impl_ev| {
+        for (impl_ev.input.fields) |field| {
+            if (!codegen_utils.hasKebab(field.name) and !codegen_utils.needsEscaping(field.name)) continue;
+            if (names_len == names_buf.len) break;
+            if (std.mem.indexOf(u8, out, field.name) == null) continue;
+            var dup = false;
+            for (names_buf[0..names_len]) |seen| {
+                if (std.mem.eql(u8, seen, field.name)) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+            names_buf[names_len] = field.name;
+            names_len += 1;
+        }
+    }
     for (ctx.zig_scope_bindings.items) |name| {
         if (!codegen_utils.hasKebab(name) and !codegen_utils.needsEscaping(name)) continue;
         if (names_len == names_buf.len) break;
@@ -9499,6 +9614,15 @@ fn emitInvocation(
     invocation: *const ast.Invocation,
     result_var: []const u8,
 ) !void {
+    // Fork/join drains before any unmarked call — a pending spawn's slot is
+    // only safe to read once joined, and every subsequent step is a reader.
+    const is_parallel_inv = blk: {
+        for (invocation.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) break :blk true;
+        }
+        break :blk false;
+    };
+    if (!is_parallel_inv) try drainParallelJoins(emitter, ctx);
     // Subflow-implemented effects: inside the declaring event's impl, a call
     // to one of its own effect arms IS the firing — lower it to the
     // consumer's handler-struct fn via the comptime `__H` param, never to an
@@ -9948,6 +10072,74 @@ fn emitInvocation(
         }
         break :blk false;
     };
+    // Fork/join: a [parallel]-marked call lowers to slot + spawn instead of
+    // `const <bind> = handler(...)`. The worker fn runs `handler` on a
+    // thread writing the slot; the join drains at the first step that could
+    // read the binding. Serial fallbacks where the call shape can't fork:
+    // pending effect-handlers (the Handlers 2nd arg can't cross a thread),
+    // explicit variants, `try`/async emission, and destructured binds
+    // (their consts would read the slot pre-join).
+    const forkable = is_parallel_inv and
+        ctx.pending_handlers_name == null and
+        invocation.variant == null and
+        ctx.is_sync and
+        invocation.return_destructure.len == 0;
+    if (forkable) {
+        const slot = if (std.mem.eql(u8, bound_var, "_"))
+            try std.fmt.allocPrint(ctx.allocator, "__koru_par_s{d}", .{ctx.pending_parallel.items.len})
+        else
+            bound_var;
+        try emitter.writeIndent();
+        try emitter.write("var ");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output = undefined;\n");
+        try emitter.writeIndent();
+        try emitter.write("const __koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input = .{ ");
+        try emitArgs(emitter, ctx, invocation.args, &invocation.path);
+        try emitter.write(" };\nconst __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(" = struct {\n    fn run(__in: ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input, __out: *");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output) void {\n        __out.* = ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".handler(__in);\n    }\n    fn runTask(__in: ");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Input, __out: *");
+        try emitInvocationTarget(emitter, ctx, &invocation.path);
+        try emitter.write(".Output) void {\n        __koru_par_depth += 1;\n        defer __koru_par_depth -= 1;\n        run(__in, __out);\n        _ = __koru_par_tasks.fetchSub(1, .monotonic);\n    }\n};\n");
+        try emitter.write("var __koru_par_wg_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(": @import(\"std\").Thread.WaitGroup = .{};\n");
+        try emitter.write("if (__koru_par_depth < __koru_par_DEPTH_CAP and __koru_par_tasks.load(.monotonic) < __koru_par_CAP) {\n    _ = __koru_par_tasks.fetchAdd(1, .monotonic);\n    __koru_par_pool_ensure().spawnWg(&__koru_par_wg_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(".runTask, .{ __koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", &");
+        try writeBranchName(emitter, slot);
+        try emitter.write(" });\n} else __koru_par_w_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(".run(__koru_par_in_");
+        try writeBranchName(emitter, slot);
+        try emitter.write(", &");
+        try writeBranchName(emitter, slot);
+        try emitter.write(");\n");
+        const tvar = try std.fmt.allocPrint(ctx.allocator, "__koru_par_wg_{s}", .{slot});
+        try ctx.pending_parallel.append(ctx.allocator, tvar);
+        if (!std.mem.eql(u8, bound_var, "_")) {
+            try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, bound_var));
+        }
+        return;
+    }
     if (!std.mem.eql(u8, bound_var, "_")) {
         try emitter.write(if (bound_mutable) "var " else "const ");
         // Record the name for the current Zig function scope: an inline frame
@@ -11445,8 +11637,13 @@ fn emitContinuationCase(
 
         if (cont.destructure.len > 0) {
             // Shape-destructure: capture the payload under a temp, then
-            // per-field consts at the top of the case block.
-            try emitter.write("__koru_dst");
+            // per-field consts at the top of the case block. A named group
+            // (`| ok e:{ k }`) captures under the group name instead.
+            if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) {
+                try writeBranchName(emitter, cont.binding.?);
+            } else {
+                try emitter.write("__koru_dst");
+            }
         } else if (binding_name.len == 0 or !binding_used) {
             try emitter.write("_");
         } else {
@@ -11461,7 +11658,32 @@ fn emitContinuationCase(
 
     if (cont.destructure.len > 0 and has_payload_fields) {
         try emitter.writeIndent();
-        try emitDestructureConsts(emitter, cont.destructure, "__koru_dst");
+        const dst = if (cont.binding != null and !std.mem.eql(u8, cont.binding.?, "_")) cont.binding.? else "__koru_dst";
+        try emitDestructureConsts(emitter, cont.destructure, dst);
+        try emitter.write("\n");
+    }
+    // Produce stage `! each i { f, g: e }` — emit `const f = i.f` for a pun,
+    // `const g = <expr>` for a named expr (`{ i }` pun emits `const i = i`).
+    if (cont.produce.len > 0 and cont.binding != null) {
+        for (cont.produce) |pf| {
+            if (std.mem.eql(u8, pf.name, "_")) continue;
+            try emitter.writeIndent();
+            try emitter.write("const ");
+            try writeBranchName(emitter, pf.name);
+            try emitter.write(" = ");
+            if (pf.type_text) |t| {
+                try emitter.write(lowerExprZig(emitter, ctx, t));
+            } else if (std.mem.eql(u8, pf.name, cont.binding.?)) {
+                try emitter.write(cont.binding.?);
+            } else {
+                try emitter.write(cont.binding.?);
+                try emitter.write(".");
+                try emitter.write(pf.name);
+            }
+            try emitter.write("; _ = &");
+            try writeBranchName(emitter, pf.name);
+            try emitter.write(";");
+        }
         try emitter.write("\n");
     }
 
@@ -11514,7 +11736,7 @@ fn emitWhenClauseCase(
     result_counter: *usize,
 ) !void {
     const first_cont = group.continuations[0];
-    const binding_name = if (first_cont.destructure.len > 0) "__koru_dst" else first_cont.binding orelse first_cont.branch;
+    const binding_name = if (first_cont.destructure.len > 0) (first_cont.binding orelse "__koru_dst") else first_cont.binding orelse first_cont.branch;
 
     // Check if any continuation in the group wants mutable binding
     var needs_mutable = false;
@@ -11840,10 +12062,6 @@ fn emitFoldFallthroughGuard(emitter: *CodeEmitter, ctx: *EmissionContext) !void 
 /// `emitDestructureConsts` mints them as `const`s at the same site.
 fn registerDestructureScopeNames(ctx: *EmissionContext, fields: []const ast.DestructureField) !void {
     for (fields) |f| {
-        if (f.sub.len > 0) {
-            try registerDestructureScopeNames(ctx, f.sub);
-            continue;
-        }
         if (std.mem.eql(u8, f.name, "_") or std.mem.startsWith(u8, f.name, "__")) continue;
         try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, f.name));
     }
@@ -11872,6 +12090,76 @@ pub fn emitContinuationBody(
         }
     }
     try registerDestructureScopeNames(ctx, cont.destructure);
+    // Produce stage `! each i { f, g: expr }` — one `const` per field: a
+    // `name: expr` lowers the expr in the pre-stage scope, a bare `name`
+    // pun binds the element's field (`const f = i.f`). A pun on the bound
+    // element itself (`{ i }` where `i` is the binding) is a carry-through
+    // — the name is already bound, so nothing emits. A produced name that
+    // collides with a live binding (`{ i: i + 1 }` rebind) mints a
+    // site-unique const and renames its downstream reads via
+    // splice_binding_renames — the same mechanism the splice uses for
+    // producer/consumer collisions; the RHS text is emitted before the
+    // rename registers, so it still reads the pre-stage scope.
+    const produce_rename_depth = ctx.splice_binding_renames.items.len;
+    defer ctx.splice_binding_renames.shrinkRetainingCapacity(produce_rename_depth);
+    for (cont.produce) |pf| {
+        if (std.mem.eql(u8, pf.name, "_")) continue;
+        if (pf.type_text == null) {
+            if (cont.binding) |b| {
+                if (std.mem.eql(u8, pf.name, b)) continue;
+            }
+        }
+        var collides = false;
+        if (cont.binding) |b| collides = std.mem.eql(u8, pf.name, b);
+        if (!collides) {
+            for (ctx.zig_scope_bindings.items) |sb| {
+                if (std.mem.eql(u8, pf.name, sb)) {
+                    collides = true;
+                    break;
+                }
+            }
+        }
+        const emitted_name: []const u8 = if (collides) blk: {
+            const uniq = try std.fmt.allocPrint(ctx.allocator, "__koru_prod_{s}_{d}_{d}", .{ pf.name, cont.location.line, cont.location.column });
+            try ctx.splice_binding_renames.append(ctx.allocator, .{ .from = pf.name, .to = uniq });
+            break :blk uniq;
+        } else pf.name;
+        try emitter.writeIndent();
+        try emitter.write("const ");
+        try writeBranchName(emitter, emitted_name);
+        try emitter.write(" = ");
+        if (pf.type_text) |t| {
+            try emitter.write(lowerExprZig(emitter, ctx, t));
+        } else if (cont.binding) |b| {
+            try emitter.write(b);
+            try emitter.write(".");
+            try emitter.write(pf.name);
+        }
+        try emitter.write("; _ = &");
+        try writeBranchName(emitter, emitted_name);
+        try emitter.write(";\n");
+    }
+
+    // Post-produce `when` (`! each i { f } when f > 0`) — a guard in the
+    // PRODUCED scope, emitted after the consts and wrapping the arm body.
+    // (The pre-stage `when`, cont.condition, was already emitted by the
+    // splice before this body.) Produce-renamed names are rewritten so a
+    // rebind reads the new value (`{ i: i+1 } when i > 2` sees new `i`).
+    if (cont.post_condition) |pc| {
+        var cond_text: []const u8 = lowerExprZig(emitter, ctx, pc);
+        var cond_owned: ?[]u8 = null;
+        defer if (cond_owned) |o| ctx.allocator.free(o);
+        for (ctx.splice_binding_renames.items) |br| {
+            const rw = try codegen_utils.replaceIdentifier(ctx.allocator, cond_text, br.from, br.to);
+            if (cond_owned) |o| ctx.allocator.free(o);
+            cond_owned = @constCast(rw);
+            cond_text = cond_owned.?;
+        }
+        try emitter.write("if (");
+        try emitter.write(cond_text);
+        try emitter.write(") { ");
+    }
+    defer if (cont.post_condition != null) emitter.write("} ") catch {};
 
     // Zero-overhead control flow at depth: if a template transform set
     // inline_body on this continuation's invocation node (e.g. a nested `~for`
@@ -12365,12 +12653,40 @@ pub fn emitContinuationBody(
 }
 
 /// Emit a single step in a pipeline
+/// Fork/join: join every spawned task recorded on ctx — emitted before any
+/// step that isn't itself a `[parallel]` invocation, so a spawned binding's
+/// first reader (the produce, an unmarked call, a branch) sees the joined
+/// value, never mid-flight.
+fn drainParallelJoins(emitter: *CodeEmitter, ctx: *EmissionContext) !void {
+    // waitAndWork, not wait: a pool worker that blocks on its join would
+    // hold queued tasks nobody runs (all workers waiting = deadlock on a
+    // recursive fork tree). Cooperative waiting lets the waiter drain the
+    // queue itself — the standard fork/join requirement.
+    for (ctx.pending_parallel.items) |wgvar| {
+        try emitter.writeIndent();
+        try emitter.write("if (__koru_par_pool_ready) __koru_par_pool.waitAndWork(&");
+        try emitter.write(wgvar);
+        try emitter.write(");\n");
+    }
+    ctx.pending_parallel.clearRetainingCapacity();
+}
+
 fn emitStep(
     emitter: *CodeEmitter,
     ctx: *EmissionContext,
     step: *const ast.Step,
     result_var: []const u8,
 ) !void {
+    // Fork/join: a pending spawn drains before any step that isn't itself a
+    // marked invocation — marked steps keep the window open so sibling
+    // binds overlap.
+    const keep_open = step.* == .invocation and blk: {
+        for (step.invocation.annotations) |ann| {
+            if (std.mem.eql(u8, ann, "parallel")) break :blk true;
+        }
+        break :blk false;
+    };
+    if (!keep_open) try drainParallelJoins(emitter, ctx);
     // Check if this step is from an opaque tap - if so, skip nested tap-inserted steps
     const is_from_opaque_tap = switch (step.*) {
         .invocation => |inv| inv.from_opaque_tap,
@@ -14118,8 +14434,22 @@ fn emitEventDeclForModuleFromType(
     try code_emitter.writeIndent();
     try code_emitter.write("_ = &__koru_event_input;\n");
 
-    // ImmediateImpl always has a value (BranchConstructor) - emit it directly
+    // ImmediateImpl always has a value (BranchConstructor) - emit it directly.
+    // Register the field names so escapeBoundNames rewrites kebab/keyword
+    // references (`x-y` → `x_y`); there is no EventDecl here for the ctx to
+    // carry, so the names go through zig_scope_bindings instead.
     {
+        const prev_scope_len = ctx.zig_scope_bindings.items.len;
+        defer while (ctx.zig_scope_bindings.items.len > prev_scope_len) {
+            const popped = ctx.zig_scope_bindings.pop() orelse break;
+            ctx.allocator.free(popped);
+        };
+        if (event_type.input_shape) |shape| {
+            for (shape.fields) |field| {
+                if (!codegen_utils.hasKebab(field.name) and !codegen_utils.needsEscaping(field.name)) continue;
+                try ctx.zig_scope_bindings.append(ctx.allocator, try ctx.allocator.dupe(u8, field.name));
+            }
+        }
         try code_emitter.writeIndent();
         try code_emitter.write("return ");
         try emitBranchConstructorWithEventType(code_emitter, ctx, &immediate_impl.value, event_type);
@@ -15613,6 +15943,13 @@ fn emitEventDeclForModule(
 
     // First check for impl items (immediate mock or flow body)
     if (findImplByPath(event_items, &event.path)) |found| {
+        // The impl body references input fields by their Koru names while the
+        // destructure above emits the Zig spelling (`x_y`). Carrying the decl
+        // on the ctx lets escapeBoundNames rewrite those references; without
+        // it `x-y` passes through verbatim and Zig reads subtraction.
+        const saved_impl_event_for_scope = ctx.impl_event_decl;
+        ctx.impl_event_decl = event;
+        defer ctx.impl_event_decl = saved_impl_event_for_scope;
         switch (found) {
             .immediate_impl => |ii| {
                 const bc = &ii.value;
@@ -15883,4 +16220,150 @@ pub fn bareBorrow(alloc: std.mem.Allocator, ph: []const u8) []const u8 {
         return out;
     }
     return alloc.dupe(u8, ph) catch unreachable;
+}
+
+// ============================================================================
+// MATERIALIZATION HELPERS — used by the in-pipeline host-build steps
+// (std/compiler:host-build-*). They were born as generated text inside the
+// backend driver's main(); they live here so backend_output_emitted handlers
+// can reach them — the dependency edge is backend → backend_output, never the
+// reverse.
+// ============================================================================
+
+/// The output executable name as the backend sees it: argv[1] when it isn't a
+/// Koru source path (hand-run backend passes the input file there), else
+/// "a.out". Was the generated driver's inline `output_exe` detection.
+pub fn outputExeName(allocator: std.mem.Allocator) []const u8 {
+    const args = std.process.argsAlloc(allocator) catch return "a.out";
+    // Not freed — the name is read for the rest of the compile.
+    if (args.len > 1 and
+        !std.mem.endsWith(u8, args[1], ".kgpu") and
+        !std.mem.endsWith(u8, args[1], ".kjs") and
+        !std.mem.endsWith(u8, args[1], ".kz") and
+        !std.mem.endsWith(u8, args[1], ".kc") and
+        !std.mem.endsWith(u8, args[1], ".k")) return args[1];
+    return "a.out";
+}
+
+/// The zig binary every toolchain spawn must use: `KORU_ZIG` when set and
+/// non-empty, else PATH's `zig`. One resolver for koruc's own spawns
+/// (backend build, version probes) AND the backend's (build-exe, zig env,
+/// zig fetch) — the two processes must agree, or the zig-lib overlay
+/// byte-verified against one version gets applied to another's std.
+/// posix.getenv, not getEnvVarOwned: zero-alloc — an owned read leaks past
+/// the GPA's exit report on every KORU_ZIG compile. Windows has no
+/// std.posix.getenv (env is WTF-16): getenvW + a static utf8 scratch keeps
+/// the same zero-alloc contract there.
+var zig_exe_buf: [4096]u8 = undefined;
+
+pub fn zigExe() []const u8 {
+    const v = if (@import("builtin").os.tag == .windows) blk: {
+        const w = std.process.getenvW(std.unicode.utf8ToUtf16LeStringLiteral("KORU_ZIG")) orelse return "zig";
+        break :blk zig_exe_buf[0..std.unicode.wtf16LeToWtf8(&zig_exe_buf, w)];
+    } else std.posix.getenv("KORU_ZIG") orelse return "zig";
+    return if (v.len == 0) "zig" else v;
+}
+
+/// The --zig-lib-dir overlay: koru's optimized-but-byte-identical
+/// std/json/Stringify.zig for every @import("std") the emitted program makes.
+/// null → stock std; identical output, slower. Moved verbatim from the
+/// generated backend driver's __koruEnsureZigLibOverlay; `koru_home` arrives
+/// as a parameter so this module stays free of a compiler_env edge.
+pub fn ensureZigLibOverlay(allocator: std.mem.Allocator, koru_home: []const u8, out: []u8) ?[]const u8 {
+    const env_res = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ zigExe(), "env" },
+        .max_output_bytes = 64 * 1024,
+    }) catch return null;
+    defer allocator.free(env_res.stdout);
+    defer allocator.free(env_res.stderr);
+    const lib_key = ".lib_dir = \"";
+    const lib_at = std.mem.indexOf(u8, env_res.stdout, lib_key) orelse return null;
+    const lib_rest = env_res.stdout[lib_at + lib_key.len ..];
+    const lib_end = std.mem.indexOfScalar(u8, lib_rest, '"') orelse return null;
+    const real_lib = lib_rest[0..lib_end];
+
+    // The patch is verified byte-identical against 0.15.2's
+    // std.json.Stringify only. On any other zig version the
+    // overlay could fail to compile — refuse it and keep stock
+    // std rather than break every emitted-program build.
+    const ver_key = ".version = \"";
+    const ver_at = std.mem.indexOf(u8, env_res.stdout, ver_key) orelse return null;
+    const ver_rest = env_res.stdout[ver_at + ver_key.len ..];
+    const ver_end = std.mem.indexOfScalar(u8, ver_rest, '"') orelse return null;
+    if (!std.mem.eql(u8, ver_rest[0..ver_end], "0.15.2")) return null;
+
+    const overlay_rel = ".zig-cache/koru_lib_overlay";
+    const overlay_tmp = ".zig-cache/koru_lib_overlay.tmp";
+    const marker_rel = ".zig-cache/koru_lib_overlay/.koru_src";
+
+    // A ready overlay built against this same lib dir is reused as-is.
+    if (std.fs.cwd().readFileAlloc(allocator, marker_rel, 4096) catch null) |marker| {
+        defer allocator.free(marker);
+        if (std.mem.eql(u8, marker, real_lib))
+            return std.fs.cwd().realpath(overlay_rel, out) catch null;
+    }
+
+    const patch_path = std.fmt.allocPrint(allocator, "{s}/src/zig_std_patch/Stringify.zig", .{koru_home}) catch return null;
+    defer allocator.free(patch_path);
+    const patch_src = std.fs.cwd().readFileAlloc(allocator, patch_path, 1 << 20) catch return null;
+    defer allocator.free(patch_src);
+
+    std.fs.cwd().deleteTree(overlay_tmp) catch {};
+    std.fs.cwd().makePath(overlay_tmp) catch return null;
+    defer std.fs.cwd().deleteTree(overlay_tmp) catch {};
+
+    // Mirror every top-level lib entry; std/ is expanded one level
+    // deeper so std/json can be swapped piecewise below.
+    var lib_dir = std.fs.cwd().openDir(real_lib, .{ .iterate = true }) catch return null;
+    defer lib_dir.close();
+    var lib_it = lib_dir.iterate();
+    while (lib_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "std")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/{s}", .{ real_lib, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    const std_target = std.fmt.allocPrint(allocator, "{s}/std", .{real_lib}) catch return null;
+    defer allocator.free(std_target);
+    std.fs.cwd().makePath(overlay_tmp ++ "/std") catch return null;
+    var std_dir = std.fs.cwd().openDir(std_target, .{ .iterate = true }) catch return null;
+    defer std_dir.close();
+    var std_it = std_dir.iterate();
+    while (std_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "json")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/std/{s}", .{ real_lib, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/std/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    const json_target = std.fmt.allocPrint(allocator, "{s}/json", .{std_target}) catch return null;
+    defer allocator.free(json_target);
+    std.fs.cwd().makePath(overlay_tmp ++ "/std/json") catch return null;
+    var json_dir = std.fs.cwd().openDir(json_target, .{ .iterate = true }) catch return null;
+    defer json_dir.close();
+    var json_it = json_dir.iterate();
+    while (json_it.next() catch return null) |ent| {
+        if (std.mem.eql(u8, ent.name, "Stringify.zig")) continue;
+        const target = std.fmt.allocPrint(allocator, "{s}/{s}", .{ json_target, ent.name }) catch return null;
+        defer allocator.free(target);
+        const link = std.fmt.allocPrint(allocator, "{s}/std/json/{s}", .{ overlay_tmp, ent.name }) catch return null;
+        defer allocator.free(link);
+        std.fs.cwd().symLink(target, link, .{}) catch return null;
+    }
+
+    std.fs.cwd().writeFile(.{ .sub_path = overlay_tmp ++ "/std/json/Stringify.zig", .data = patch_src }) catch return null;
+    std.fs.cwd().writeFile(.{ .sub_path = overlay_tmp ++ "/.koru_src", .data = real_lib }) catch return null;
+
+    // Publish atomically-ish: build under .tmp, then swap in. A
+    // stale overlay is deleted first (rename onto a non-empty
+    // dir fails on some platforms).
+    std.fs.cwd().deleteTree(overlay_rel) catch {};
+    std.fs.cwd().rename(overlay_tmp, overlay_rel) catch return null;
+    return std.fs.cwd().realpath(overlay_rel, out) catch null;
 }

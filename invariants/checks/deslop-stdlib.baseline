@@ -57,14 +57,18 @@
 # (121 leaves, same part-file decl-shell class as every prior entry)
 # alongside the list.* event_decl shells and pump/interpreter/store
 # preamble clusters.
-clusters=134
-members=210
-skipped=2
-spellings=60
 # spellings 53->60: the emit.kz port landed the C lane's addressable
 # layer — target-of plus the five pass tors of the emit-c chain
 # (emit-c-open/decls/defs/driver/close) plus emit-c itself: +7 declared
 # tor spellings, no clone clusters. Vocabulary growth, sanctioned.
+# 142/216: sampled roll fired during the KORU211 commit — pure foreign
+# drift accumulated on main between rolls (interpreter/store/proto/
+# channel import_decl and event_decl residuals; this diff stages zero
+# .kz files). Re-pinning records the tree as measured 2026-11-15.
+clusters=142
+members=216
+skipped=2
+spellings=60
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)
 # 71/113: bulkjoin's import-preamble clone (joined 2026-10-14) + in-flight
 # pump/channel work in the shared checkout; re-pinning records the working
@@ -108,3 +112,28 @@ spellings=60
 # part's scaffolding joins part-file clone clusters by convention, and
 # uncommitted store.* work in the shared checkout counts per the row's
 # uncommitted-work clause (2026-10-08).
+# 132/202 (spellings 45->59): measured 2026-11-13 during the gated-part
+# fixup commit (zero .kz staged — a signal tombstone and two test-dir
+# deletions). The +14 clusters/+4 members/+14 spellings is committed
+# drift under rolls that missed since the 118/198 pin: proto.kz's
+# 12-member event_decl self-cluster leads the board, with the
+# interpreter.run/runcached event_decl twins and the bridge/kernel/
+# supervisor import_decl quads — the documented part-file decl-shell
+# category. Uncommitted store.new.kz in the shared checkout counts per
+# the row's uncommitted-work clause.
+# Merge pin (2026-10-27): union of both streams .kz corpora — main
+# landed cli/grid.*/tree/materialize parts, the branch emit.kz. Own
+# deltas measured zero in both directions at their pins; the merged
+# corpus measures the sum.
+clusters=152
+members=228
+skipped=2
+spellings=74
+# 153/230: the merge's wall-driven ~part splits (grid.c/control.c/store.mint)
+# moved shared vocabulary across file boundaries; the +1/+2 is the same
+# cross-file event_decl/import_decl minted-decl cluster class pinned above,
+# not a new clone kind. Measured on the ccomp merge tree.
+clusters=153
+members=230
+skipped=2
+spellings=74

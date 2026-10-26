@@ -1296,7 +1296,7 @@ self.checkCatalogFragment("missing-target-proc-body");
         const saved_event = self.cur_event;
         self.cur_event = event;
         defer self.cur_event = saved_event;
-        try self.writeFmt("static {s} {s}(", .{ ret, name });
+        try self.writeFmt("static {s}{s} {s}(", .{ if (emit_walk.alwaysInline(event)) "__attribute__((always_inline)) " else "", ret, name });
         if (event.input.fields.len == 0) {
             try self.write("void");
         } else {
@@ -3083,7 +3083,11 @@ fn validateNoZigInC(em: *Emitter, buf: *const std.ArrayList(u8)) CEmitError!void
             var e = i + 1;
             while (e < text.len and codegen_utils.exprIdentChar(text[e])) e += 1;
             const name = text[i + 1 .. e];
-            std.debug.print("error[KORU047]: C lane: un-lowered builtin `@{s}` reached output line {d}\n", .{ name, line });
+            var ctx_lo = i;
+            while (ctx_lo > 0 and text[ctx_lo - 1] != '\n') ctx_lo -= 1;
+            var ctx_hi = i;
+            while (ctx_hi < text.len and text[ctx_hi] != '\n') ctx_hi += 1;
+            std.debug.print("error[KORU047]: C lane: un-lowered builtin `@{s}` reached output line {d} -- context: {s}\n", .{ name, line, text[ctx_lo..ctx_hi] });
             em.checkCatalogBuiltinRefusal(name);
             return CEmitError.ZigTextInOutput;
         }

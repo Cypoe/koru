@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 2,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -36,7 +36,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -45,7 +45,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -54,7 +54,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -63,7 +63,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 6,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -72,7 +72,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -81,7 +81,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 8,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -90,7 +90,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 9,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -99,7 +99,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 10,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -108,7 +108,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 11,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -117,7 +117,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 12,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -126,7 +126,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 13,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -135,7 +135,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 14,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -144,7 +144,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 16,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -160,7 +160,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                                 "line": 19,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -177,7 +177,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                                 "line": 21,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -198,7 +198,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 18,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -214,7 +214,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                                 "line": 23,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -231,7 +231,7 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                                 "line": 25,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
@@ -252,7 +252,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_140_variant_selector_on_transform_swallowed/input.kz",
                 "line": 22,
-                "col": 0
+                "col": 1
             }
         }
     ]

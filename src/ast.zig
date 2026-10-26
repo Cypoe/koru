@@ -490,6 +490,9 @@ pub const EventDecl = struct {
     is_pure: bool = false, // True if ALL proc implementations are pure
     is_transitively_pure: bool = false, // True if ALL proc implementations are transitively pure
 
+    // Threading: dirty when any @threaded path reaches this event
+    is_threaded_dirty: bool = false,
+
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
     module: []const u8 = "", // Canonical module path (e.g., "input", "lib/fs")
@@ -652,6 +655,14 @@ pub const ProcDecl = struct {
     // Purity tracking
     is_pure: bool = false, // True if marked ~[pure] or inline-only pattern
     is_transitively_pure: bool = false, // True if pure AND all called events are transitively pure
+
+    // Threading: root marker from ~[threaded]; dirty when any threaded path reaches it
+    is_threaded: bool = false,
+    is_threaded_dirty: bool = false,
+    // Dirty AND reachable from itself through the call graph — a recursive
+    // proc re-entering its own non-recursive mutex would deadlock, so the
+    // emitter exempts it from the entry lock.
+    is_threaded_recursive: bool = false,
 
     // FOUNDATIONAL: Every item knows where it came from
     location: errors.SourceLocation = .{ .file = "generated", .line = 0, .column = 0 },
@@ -1255,6 +1266,9 @@ pub const Flow = struct {
     is_pure: bool = true, // Flows are always locally pure (just composition)
     is_transitively_pure: bool = false, // Default false until purity checker walks and verifies
 
+    // Threading: dirty when a threaded-reachable path invokes this flow
+    is_threaded_dirty: bool = false,
+
     // Subflow implementation context (null for top-level flows)
     // When set, this flow implements the named event.
     impl_of: ?DottedPath = null,
@@ -1512,6 +1526,12 @@ pub const Field = struct {
     type: []const u8, // Zig type as string (phantom states/tags stripped)
     module_path: ?[]const u8 = null, // Module path for cross-module types (e.g., "test_lib.user" from "test_lib.user:User")
     phantom: ?[]const u8 = null, // Opaque phantom string - analyzers interpret
+    /// Compiler annotations on the type itself: `Type[text]` → "text",
+    /// `Type[a,b]` → {"a","b"}. Opaque strings — the annotation system's
+    /// directive channel to transforms, inert at runtime. Distinct lane from
+    /// `<>` (phantom = value-level obligation) and from binding `[ann]`
+    /// (`r[mutable]`). Always the outermost suffix: `Type<phantom>[ann]`.
+    type_annotations: []const []const u8 = &.{},
     is_source: bool = false, // For Source type - captures raw syntax
     is_file: bool = false, // For File type - compile-time file read (not embedded)
     is_embed_file: bool = false, // For EmbedFile type - embeds file contents in binary
@@ -1541,6 +1561,8 @@ pub const Field = struct {
         allocator.free(self.type);
         if (self.module_path) |mp| allocator.free(mp);
         if (self.phantom) |p| allocator.free(p);
+        for (self.type_annotations) |a| allocator.free(a);
+        allocator.free(self.type_annotations);
         if (self.expression) |expr| {
             if (self.owns_expression) {
                 expr.deinit(allocator);
@@ -1562,11 +1584,16 @@ pub const ResumeArm = struct {
     name: []const u8,
     type: ?[]const u8 = null, // null = arm carries no payload (`| timeout`)
     phantom: ?[]const u8 = null, // per-arm obligation; same discharge-only rule as resume_phantom
+    /// Compiler annotations on the arm's type — same `Type[ann]` lane as
+    /// Field.type_annotations.
+    type_annotations: []const []const u8 = &.{},
 
     pub fn deinit(self: *ResumeArm, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         if (self.type) |t| allocator.free(t);
         if (self.phantom) |p| allocator.free(p);
+        for (self.type_annotations) |a| allocator.free(a);
+        allocator.free(self.type_annotations);
     }
 };
 
@@ -1639,6 +1666,9 @@ pub const NamedBranch = struct {
     name: []const u8, // Branch name: "then", "else", "each", "done", "as", etc.
     body: []const Continuation, // The continuations in this branch
     binding: ?[]const u8 = null, // Optional binding for the branch (e.g., "item" in | each item |>)
+    /// `! each i { double: i * 2 }` — produce literal after the binding, same
+    /// grammar as `Continuation.produce` (name pun / name: expr).
+    produce: []const DestructureField = &.{},
     is_optional: bool = false, // Marks branches that don't need to be handled (like `for`'s `done`)
     annotations: []const []const u8 = &.{}, // Branch annotations (e.g., [mutable])
     /// Compiler-internal marks (`@scope`, ...) — pass-produced only, never
@@ -1650,6 +1680,7 @@ pub const NamedBranch = struct {
         allocator.free(self.name);
         deinitSliceItems(self.body, allocator);
         if (self.binding) |b| allocator.free(b);
+        freeDestructure(allocator, self.produce);
         for (self.annotations) |ann| allocator.free(ann);
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
         for (self.marks) |mark| allocator.free(@constCast(mark));
@@ -1714,7 +1745,10 @@ pub const Invocation = struct {
     variant: ?[]const u8 = null, // Variant selector: "gpu", "naive", etc. for ~event|variant() calls
     return_binding: ?[]const u8 = null, // `~double(a:21) -> d |> ...`: binds the event's single unnamed `-> T` return value to `d` for the following pipeline. Call-site twin of EventDecl.return_type.
     return_binding_annotations: []const []const u8 = &[_][]const u8{}, // `~get-data(): r[mutable] |> ...`: annotations on the bare-return bind. Call-site twin of Branch.annotations; `[mutable]` makes the emitter bind `var` not `const`.
-    return_destructure: []const DestructureField = &.{}, // `~locate(): { pos: { x }, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
+    return_destructure: []const DestructureField = &.{}, // `~locate(): { pos.x, label } |> ...`: shape-destructure at the bind position. Bind-site twin of the branch-payload `Continuation.destructure`; the emitter binds the return to a temp and emits per-field consts (emitDestructureConsts). Mutually exclusive with a plain return_binding name.
+    /// `f(): my:{ … }` — the braces are a declared shape (named group), not a
+    /// projection. Same rule as `Continuation.destructure_named`.
+    return_destructure_named: bool = false,
 
     // Transform replacement: if set, emitter outputs this code instead of calling the handler.
     // The path is kept for shape validation (the shape checker uses it to verify branch coverage).
@@ -1767,15 +1801,23 @@ pub const BindingType = enum {
 };
 
 /// One field of a shape-destructure at the binding position:
-/// `| found { name, age: i64, user: { city } } |> ...`
-/// Each field binds the payload's same-named field directly — by NAME, never
-/// by position. `type_text` is an optional representation annotation (a typed
-/// const in the emission; transforms like match may define it as conversion).
-/// `sub` is a nested destructure into that field (emission is just longer
-/// access paths; interiors may be host types — Zig validates at Stage D).
+/// `| found { name, x: pos.x, user.city } |> ...`
+/// Each field binds by name — `path` is the source path into the payload — `k`, `pos.x`,
+/// `a.b.c`. `name` is the local binding minted; a bare `{ pos.x }` puns to
+/// the path's last segment (`{ k }` ≡ `{ k: k }`). A `local: path` entry
+/// renames; the parser refuses `local == last(path)` — if you can pun, you
+/// must. Ruled 2026-10-24: name-matched, never positional; the path list is
+/// the projection set an emitter materializes.
 pub const DestructureField = struct {
-    name: []const u8, // binding name, or "_" to discard the slot
+    name: []const u8, // local binding name, or "_" to discard the slot
+    path: []const u8, // source path into the payload (`pos.x`); `k` for puns
+    /// Set only inside a NAMED group (`my:{ name: Type }`) — the declared
+    /// type text of the field (may be `{...}`, `?T`, `[]T` — the schema
+    /// reads it, e.g. std/json:parse). Bare-brace destructures never carry
+    /// one: `:` there is rename (`local: path`), never a type.
     type_text: ?[]const u8 = null,
+    /// Nested field list inside a named group (`my:{ addr: { city } }`) —
+    /// the schema recursion. Never set on a bare-brace projection entry.
     sub: []const DestructureField = &.{},
     /// PREFIX annotations on the entry: `{ [row]e, [ordinal]n }`. Prefix is the
     /// language's annotation form (`[comptime]tor`, `[global(name)]`); the
@@ -1790,10 +1832,11 @@ pub const DestructureField = struct {
 
     pub fn deinit(self: *const DestructureField, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
+        allocator.free(self.path);
         if (self.type_text) |t| allocator.free(t);
+        freeDestructure(allocator, self.sub);
         for (self.annotations) |a| allocator.free(@constCast(a));
         if (self.annotations.len > 0) allocator.free(@constCast(self.annotations));
-        freeDestructure(allocator, self.sub);
     }
 };
 
@@ -1808,6 +1851,7 @@ pub fn copyDestructure(allocator: std.mem.Allocator, fields: []const Destructure
     for (fields, 0..) |f, i| {
         out[i] = .{
             .name = try allocator.dupe(u8, f.name),
+            .path = try allocator.dupe(u8, f.path),
             .type_text = if (f.type_text) |t| try allocator.dupe(u8, t) else null,
             .sub = try copyDestructure(allocator, f.sub),
             .annotations = blk: {
@@ -1833,6 +1877,20 @@ pub const Continuation = struct {
     /// exclusive with `binding`: a continuation binds the whole payload to
     /// one name OR destructures it by field name.
     destructure: []const DestructureField = &.{},
+    /// Set when the destructure rode a named group (`my:{ … }` / `_:{ … }`):
+    /// the braces are a declared shape, not a projection — field-existence
+    /// and unused-field checks do not apply to its entries.
+    destructure_named: bool = false,
+    /// `! each i { double: i * 2 }` — a produce literal after the binding:
+    /// `name` pun / `name: expr` over the element scope. Replaces the
+    /// element as what the body sees — only listed names flow through.
+    produce: []const DestructureField = &.{},
+    /// `! each i { f } when f > 0` — a `when` that follows the produce
+    /// stage: a guard evaluated in the PRODUCED scope, emitted after the
+    /// produce consts wrap the arm body. `condition` stays the pre-stage
+    /// `when` (binding scope). One of each for now — the full stage list
+    /// `(when EXPR | { FIELDS })*` is the generalization.
+    post_condition: ?[]const u8 = null,
     binding_type: BindingType = .branch_payload,
     kind: BranchKind = .terminal, // `|` = terminal handler, `!` = effect handler
     is_catchall: bool = false, // True for |* or !* residual continuations
@@ -1876,7 +1934,9 @@ pub const Continuation = struct {
         }
         if (self.catchall_metatype) |m| allocator.free(m);
         if (self.condition) |c| allocator.free(c);
+        if (self.post_condition) |c| allocator.free(c);
         if (self.condition_expr) |e| e.deinit(allocator);
+        freeDestructure(allocator, self.produce);
         if (self.node) |*n| {
             var mutable_node = n.*;
             mutable_node.deinit(allocator);

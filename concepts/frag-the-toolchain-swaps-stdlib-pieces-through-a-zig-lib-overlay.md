@@ -53,3 +53,19 @@ build against stock std. Correctness never depends on the overlay existing.
   generic; `Stringify.zig` is just the first payload.
 - Concurrent first-builds in one project dir could race on overlay creation
   (tmp+rename mitigates, unproven under load).
+
+---
+
+**Evolved 2026-10-22 (KORU_ZIG).** The version gate's premise — "the zig we
+build with is one known zig" — was unenforceable: every spawn site hardcoded
+`"zig"` and resolved whatever PATH happened to name, in BOTH processes
+(koruc's backend build + version probes in `main.zig`, and the backend's
+`build`/`build-exe`/`env`/`fetch` in `compiler.materialize-build.kz` and
+siblings). A host with two zigs — the benchmark suite ships 0.16.0 while
+koruc pins 0.15.2 — had no way to say which one koruc means. `KORU_ZIG` is
+that name now: one resolver, `emitter_helpers.zigExe()`, read at all nine
+spawn sites across both processes, empty-or-unset falling back to PATH's
+`zig`. posix.getenv (zero-alloc) rather than getEnvVarOwned — the owned read
+leaked past the DebugAllocator exit report on every compile. Pin:
+220_057 (wrapper script proves both pipeline halves go through it);
+sibling 220_056 pins `-o` naming, the other half of the Makefile contract.

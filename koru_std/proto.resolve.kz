@@ -6,7 +6,7 @@
 // the extension merge (entryName/parentSpec/findCompound/expandParents)
 // lives here too — the `<:` field-set union, 698_OOP.
 
-const TerminalRef = struct {
+pub const TerminalRef = struct {
     const ast = @import("ast");
 
         fn isTerminalVerb(verb: []const u8) bool {

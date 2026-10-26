@@ -1,0 +1,165 @@
+// Koru Standard Library: the `idx` part of grid.kz — index-typed cells.
+// Joined via `~part idx` in grid.kz; merged into the grid module at load.
+//
+// `0[<grid>]` — a field typed by a grid's own name is AN INDEX INTO THAT
+// GRID: `nd: 0[tn]` is "a cell holding an index into tn". The declaration
+// buys three things the bare `[i64]` spelling cannot express:
+//
+//   WIDTH — the cell is the narrowest unsigned int covering the target's
+//           extent (grid.new emits `__koru_idx_<target>` =
+//           IntFittingRange(0, target.__koru_size)), so a `size:` bump
+//           re-derives the storage rather than silently overflowing it.
+//
+//   CERTIFICATION — the WRITE pays the bounds check once (stored wraps the
+//           value in the target's `__koru_at`), so the contents are `< size`
+//           by construction. A read of the target through the cell —
+//           `tn[que[i].nd]` — is then certified and re-collects no floor.
+//
+//   PROVENANCE THAT SURVIVES EMISSION — the const's NAME carries the
+//           target (`__koru_idx_tn`), so re-collection (scanLoweredFields)
+//           and the decl-site parse (scanFlowFields) recover the same fact
+//           from two different surfaces. One encoding, no drift.
+//
+// The arithmetic rule: an index value leaves its type the moment it feeds
+// `+`/`-`/`*` — the emitted cell is a plain int, so `nd + 1` is an int and
+// `tn[nd + 1]` floors again, as it must: the proof was about `nd`, not
+// about arithmetic on it. Storing the result back re-earns the proof
+// through the checked write.
+
+const grid_idx = struct {
+    // WHICH GRID does `grid.field` index? `null` when the field is an
+    // ordinary typed cell — the common case costs one field-name scan.
+    fn idxTarget(refs: []const grid_read.GridRef, grid_name: []const u8, field: []const u8) ?[]const u8 {
+        const r = grid_read.find(refs, grid_name) orelse return null;
+        for (r.idx) |ix| {
+            if (std.mem.eql(u8, ix.field, field)) return ix.target;
+        }
+        return null;
+    }
+
+    // THE READ-SIDE QUESTION: is this RAW index text a certified index into
+    // `gname`? True only when the text is itself a cell read `G[..].f` and
+    // `f` was declared `0[gname]` — its contents came through the checked
+    // write, so the floor is already paid. A bare name or an arithmetic
+    // result is not a cell read and answers false.
+    fn certifies(refs: []const grid_read.GridRef, idx_raw: []const u8, gname: []const u8) bool {
+        const tr = grid_read.parseTarget(idx_raw, refs) orelse return false;
+        // The field read must be the WHOLE text: `que[0].nd + 1` parses the
+        // same `grid[..].field` prefix but the provenance died at the `+`.
+        // Only a text ending exactly at `.<field>` is still the certified
+        // cell value itself.
+        if (idx_raw.len <= tr.field.len or !std.mem.endsWith(u8, idx_raw, tr.field)) return false;
+        if (idx_raw[idx_raw.len - tr.field.len - 1] != '.') return false;
+        const tgt = idxTarget(refs, tr.grid, tr.field) orelse return false;
+        return std.mem.eql(u8, tgt, gname);
+    }
+
+    // THE DECL-SIDE QUESTION: is this field TYPE a grid name? Self-ref
+    // (`0[tn]` inside `tn`'s own block) counts; so does any grid already
+    // collected. `pool` flags a target whose extent arrives at alloc —
+    // its index cannot size a cell at declaration, so `new` refuses it.
+    const DeclTarget = struct { target: []const u8, pool: bool };
+    fn declTarget(refs: []const grid_read.GridRef, ty: []const u8, self_name: []const u8) ?DeclTarget {
+        if (grid_read.find(refs, ty)) |r| return .{ .target = ty, .pool = r.pool };
+        if (std.mem.eql(u8, ty, self_name)) return .{ .target = ty, .pool = false };
+        return null;
+    }
+
+    // The emitted `const __koru_idx_<t> = IntFittingRange(0, <extent>)`
+    // line. The extent is a lazily-resolved reference to the target's own
+    // `__koru_size` — Zig resolves container decls out of order, so a
+    // later-declared or self target spells the same.
+    fn emitConst(buf: *std.ArrayList(u8), alloc: std.mem.Allocator, indent: []const u8, t: []const u8, self_name: []const u8, refs: []const grid_read.GridRef, in_cell: bool) void {
+        const ext = if (!std.mem.eql(u8, t, self_name))
+            std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_size", .{ (grid_read.find(refs, t) orelse unreachable).ns, t }) catch unreachable
+        else if (in_cell)
+            std.fmt.allocPrint(alloc, "__KoruGridT_{s}.__koru_size", .{t}) catch unreachable
+        else
+            "__koru_size";
+        // `size - 1`, not `size`: the write's `__koru_at` proves `< size`, so
+        // the largest value a cell ever holds is `size - 1` — fitting `size`
+        // would widen a 256-cell index to u16 where u8 is the true fit.
+        buf.appendSlice(alloc, std.fmt.allocPrint(alloc, "{s}const __koru_idx_{s} = @import(\"std\").math.IntFittingRange(0, {s} - 1);\n", .{ indent, t, ext }) catch unreachable) catch unreachable;
+    }
+
+    // The write unit's INPUT type for an index-typed field — the generated
+    // const inside the field's own grid struct.
+    fn paramType(alloc: std.mem.Allocator, refs: []const grid_read.GridRef, grid: []const u8, target: []const u8) []const u8 {
+        return std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_idx_{s}", .{ (grid_read.find(refs, grid) orelse unreachable).ns, grid, target }) catch unreachable;
+    }
+
+    // The write unit's ARGUMENT: the lowered value routed through the
+    // TARGET grid's `__koru_at` — an in-range int lands, an out-of-range
+    // one traps at the write, and `@intCast` narrows the proven usize back
+    // to the cell's width on the zig host. A value that is itself a
+    // certified `<target>` index — `rn[d].nd: rn[s].nd` — moves a proof
+    // rather than creating one, and passes bare.
+    fn certifyArg(alloc: std.mem.Allocator, refs: []const grid_read.GridRef, target: []const u8, raw: []const u8, lowered: []const u8) []const u8 {
+        if (certifies(refs, std.mem.trim(u8, raw, " "), target)) return lowered;
+        const tns = (grid_read.find(refs, target) orelse unreachable).ns;
+        return if (std.mem.eql(u8, CompilerEnv.lang, "js"))
+            std.fmt.allocPrint(alloc, "{s}__KoruGridT_{s}.__koru_at({s})", .{ tns, target, lowered }) catch unreachable
+        else
+            std.fmt.allocPrint(alloc, "@intCast({s}__KoruGridT_{s}.__koru_at({s}))", .{ tns, target, lowered }) catch unreachable;
+    }
+
+    // THE DECL-SITE PARSE — runs on the `std/grid:new` invocation's own
+    // block text before emission, so `0[tn]` is still readable. A type
+    // slot that names THIS grid (self-ref — `tn` fields in `tn`) or any
+    // grid already collected is an index field; anything else is an
+    // ordinary type and passes through untouched.
+    fn scanFlowFields(alloc: std.mem.Allocator, src: []const u8, self_name: []const u8, out: []const grid_read.GridRef) []const grid_read.IdxField {
+        var idxs = std.ArrayList(grid_read.IdxField).initCapacity(alloc, 2) catch unreachable;
+        if (src.len == 0) return idxs.items;
+        const braced = std.fmt.allocPrint(alloc, "{{{s}}}", .{src}) catch unreachable;
+        const cols = @import("struct_literal").parseFields(alloc, braced) catch return idxs.items;
+        for (cols) |c| {
+            const v = std.mem.trim(u8, c.value, " ");
+            const lb = std.mem.indexOfScalar(u8, v, '[') orelse continue;
+            if (v.len == 0 or v[v.len - 1] != ']') continue;
+            const ty = std.mem.trim(u8, v[lb + 1 .. v.len - 1], " ");
+            if (std.mem.eql(u8, ty, self_name) or grid_read.find(out, ty) != null) {
+                idxs.append(alloc, .{ .field = std.mem.trim(u8, c.name, " "), .target = ty }) catch unreachable;
+            }
+        }
+        return idxs.items;
+    }
+
+    // THE RE-COLLECTION PARSE — runs on EMITTED struct text when a read or
+    // write is lowered, where `0[tn]` has already become
+    // `nd: [N]__koru_idx_tn = ...` (column layout) or
+    // `nd: __koru_idx_tn = ...` (row cell). Both share one shape: a member
+    // line whose field name precedes a `__koru_idx_<target>` spelling. The
+    // `const __koru_idx_tn = IntFittingRange...` marker lines match the
+    // same shape but name `const` as their field — the `:` check refuses
+    // them, and a field/target pair already collected is skipped.
+    fn scanLoweredFields(alloc: std.mem.Allocator, block: []const u8) []const grid_read.IdxField {
+        var idxs = std.ArrayList(grid_read.IdxField).initCapacity(alloc, 2) catch unreachable;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, block, at, "__koru_idx_")) |p| {
+            var te = p + "__koru_idx_".len;
+            while (te < block.len and isKebabChar(block[te])) te += 1;
+            const target = block[p + "__koru_idx_".len .. te];
+            var ls = p;
+            while (ls > 0 and block[ls - 1] != '\n') ls -= 1;
+            var fs = ls;
+            while (fs < block.len and block[fs] == ' ') fs += 1;
+            var fe = fs;
+            while (fe < block.len and isKebabChar(block[fe])) fe += 1;
+            if (fe < block.len and block[fe] == ':' and fe > fs) {
+                const field = block[fs..fe];
+                var dup = false;
+                for (idxs.items) |ix| {
+                    if (std.mem.eql(u8, ix.field, field)) dup = true;
+                }
+                if (!dup) idxs.append(alloc, .{ .field = field, .target = target }) catch unreachable;
+            }
+            at = te;
+        }
+        return idxs.items;
+    }
+
+    fn isKebabChar(c: u8) bool {
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '-';
+    }
+};

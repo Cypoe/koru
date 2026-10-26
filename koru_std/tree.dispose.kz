@@ -1,0 +1,327 @@
+// Koru Standard Library: the `dispose` part of tree.kz.
+// Joined via `~part dispose` in tree.kz; merged into the tree module.
+//
+// `std/tree:dispose(t)` — consume the `owned!` root, recursive free. The
+// transform resolves WHICH node type `t` is (the enclosing tor's param
+// signature, or the in-flow invocation that bound it), synthesizes
+// `dispose-<Node>` + the module-scope `__koru_tree_free_<Node>` walker on
+// first use, and rewrites the site to call it. The obligation checker owns
+// "consumed twice" and "never disposed" — this transform only routes.
+
+~[comptime|transform]pub tor dispose {
+    expr: Expression,
+    invocation: *const Invocation,
+    item: *const std/compiler:Item,
+    program: *const std/compiler:Program,
+    reporter: *std/compiler:ErrorReporter,
+    allocator: std.mem.Allocator
+} -> SiteResult
+
+~proc dispose|zig {
+    const ast = @import("ast");
+
+    const flow = if (item.* == .flow) &item.flow else @panic("std/tree:dispose: expected a flow site");
+    var handle: []const u8 = "";
+    for (invocation.args) |arg| {
+        if (std.mem.eql(u8, arg.name, "expr")) handle = stripQuotesLocal(std.mem.trim(u8, arg.value, " \t"));
+    }
+    if (handle.len == 0) {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:dispose takes the node binding: dispose(t)", .{});
+    }
+    const home = TerminalRef_scopeOfFlow(program, flow);
+
+    const node_name = resolveNodeTypeOf(allocator, program, flow, handle, home) orelse {
+        return ast.refuse(allocator, reporter, .KORU184, flow.location, flow.module, "std/tree:dispose({s}): can't resolve which node kind '{s}' is — bind it from a std/tree:mint, a tor returning *X<owned!>, or declare the parameter `*X<...>` for a node-registered X", .{ handle, handle });
+    };
+
+    // Synthesize dispose-<Node> + the recursive free fns for every node type
+    // reachable through its edges.
+    const synth_name = std.fmt.allocPrint(allocator, "dispose-{s}", .{node_name}) catch unreachable;
+    var units = std.ArrayList(ast.Item).initCapacity(allocator, 8) catch unreachable;
+    if (!hasSynthTor(program, synth_name)) {
+        var seen = std.ArrayList([]const u8).initCapacity(allocator, 8) catch unreachable;
+        ensureFreeFns(allocator, program, home, node_name, flow.location, &units, &seen);
+        const pair = synthDispose(allocator, flow, node_name, synth_name);
+        units.append(allocator, pair[0]) catch unreachable;
+        units.append(allocator, pair[1]) catch unreachable;
+    }
+
+    // Rewrite: std/tree:dispose(t) -> <module>:dispose-Node(t)
+    const new_args = allocator.alloc(ast.Arg, invocation.args.len) catch unreachable;
+    for (invocation.args, 0..) |a, i| {
+        if (i == 0 and std.mem.eql(u8, a.name, "expr")) {
+            new_args[i] = .{ .name = allocator.dupe(u8, "t") catch unreachable, .value = allocator.dupe(u8, a.value) catch unreachable, .had_explicit_label = true };
+        } else {
+            new_args[i] = a;
+        }
+    }
+    const segs = allocator.alloc([]const u8, 1) catch unreachable;
+    segs[0] = synth_name;
+    var new_inv = invocation.*;
+    new_inv.path = ast.DottedPath{
+        .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+        .segments = segs,
+    };
+    new_inv.args = new_args;
+    // Swap ONLY the node — the wrapper continuation owns binds/produces.
+    return .{ .replacement_node = .{ .node = ast.Node{ .invocation = new_inv } }, .appended = units.toOwnedSlice(allocator) catch unreachable };
+}
+
+/// `*X<...>` / `?*X<...>` type text → the X. Pointer-to-named-type only;
+/// anything else isn't a node handle.
+fn ptrInner(t0: []const u8) ?[]const u8 {
+    var t = std.mem.trim(u8, t0, " \t");
+    if (t.len > 0 and t[0] == '?') t = std.mem.trim(u8, t[1..], " \t");
+    if (t.len > 0 and t[0] == '*') t = std.mem.trim(u8, t[1..], " \t") else return null;
+    // Strip any module qualifier — `app/lib:Node` resolves by name in-home.
+    if (std.mem.lastIndexOfScalar(u8, t, ':')) |ci| t = t[ci + 1 ..];
+    if (t.len == 0) return null;
+    return t;
+}
+
+/// Which registered node kind does `handle` carry? Two honest sources:
+/// the enclosing tor's parameter signature (`t: ?*X<...>`), or the
+/// in-flow invocation that bound it (`|> make(...): t` where make's
+/// declared return is `*X<owned!>`). Anything else refuses at the caller.
+fn resolveNodeTypeOf(
+    allocator: std.mem.Allocator,
+    program: *const astz.Program,
+    flow: *const astz.Flow,
+    handle: []const u8,
+    home: []const u8,
+) ?[]const u8 {
+    // (a) the enclosing tor's own input — the impl_of event's fields.
+    if (flow.impl_of) |ip| {
+        if (ip.segments.len > 0) {
+            const tor_name = ip.segments[ip.segments.len - 1];
+            if (findEventInputType(allocator, program, flow.module, tor_name, handle)) |ty| {
+                if (ptrInner(ty)) |x| {
+                    if (isDeclaredNode(program, allocator, x, home)) return x;
+                }
+            }
+        }
+    }
+    // (b) the chain sibling that bound it. Transforms see a cloned site —
+    // pointer identity into program.items never holds — so scan the
+    // module's flows for the binding name itself (the same handle-routing
+    // doctrine std/list uses: bindings are chain-scoped; a name the program
+    // never bound refuses at the shape check, never misroutes silently).
+    if (findProducerAcrossFlows(program, flow.module, handle)) |prod| {
+        // The producer may BE the lane verb — `std/tree:mint(X) {…}: t`
+        // declares its node type in the expr arg, not in a return type
+        // (the transform's own signature returns SiteResult).
+        if (prod.path.segments.len == 1 and std.mem.eql(u8, prod.path.segments[0], "mint")) {
+            if (prod.path.module_qualifier) |mq| {
+                if (std.mem.eql(u8, mq, "std.tree") or std.mem.eql(u8, mq, "std/tree")) {
+                    for (prod.args) |a| {
+                        if (std.mem.eql(u8, a.name, "expr")) {
+                            const x = stripQuotesLocal(std.mem.trim(u8, a.value, " \t"));
+                            if (isDeclaredNode(program, allocator, x, home)) return x;
+                        }
+                    }
+                }
+            }
+        }
+        const seg = prod.path.segments[prod.path.segments.len - 1];
+        if (findEventReturnType(allocator, program, flow.module, seg)) |rt| {
+            if (ptrInner(rt)) |x| {
+                if (isDeclaredNode(program, allocator, x, home)) return x;
+            }
+        }
+    }
+    return null;
+}
+
+fn findProducerAcrossFlows(
+    program: *const astz.Program,
+    module: []const u8,
+    handle: []const u8,
+) ?*const astz.Invocation {
+    return findProducerInItems(program.items, module, handle);
+}
+
+fn findProducerInItems(
+    items: []const astz.Item,
+    module: []const u8,
+    handle: []const u8,
+) ?*const astz.Invocation {
+    for (items) |*entry| {
+        switch (entry.*) {
+            .flow => |*f| {
+                if (std.mem.eql(u8, f.module, module)) {
+                    if (bindingProducerIn(&f.body, handle)) |p| return p;
+                }
+            },
+            .module_decl => |*m| {
+                if (findProducerInItems(m.items, module, handle)) |p| return p;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// The declared input type of `param` on tor `tor_name` in `module`.
+fn findEventInputType(allocator: std.mem.Allocator, program: *const astz.Program, module: []const u8, tor_name: []const u8, param: []const u8) ?[]const u8 {
+    _ = allocator;
+    return findEventInputTypeIn(program.items, module, tor_name, param);
+}
+
+fn findEventInputTypeIn(items: []const astz.Item, module: []const u8, tor_name: []const u8, param: []const u8) ?[]const u8 {
+    for (items) |*entry| {
+        switch (entry.*) {
+            .event_decl => |*ed| {
+                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], tor_name)) {
+                    const mq = ed.path.module_qualifier orelse module;
+                    if (std.mem.eql(u8, mq, module) or std.mem.eql(u8, mq, "")) {
+                        for (ed.input.fields) |f| {
+                            if (std.mem.eql(u8, f.name, param)) return f.type;
+                        }
+                    }
+                }
+            },
+            .module_decl => |*m| {
+                if (findEventInputTypeIn(m.items, module, tor_name, param)) |t| return t;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// The declared return type of tor `tor_name` in `module`.
+fn findEventReturnType(allocator: std.mem.Allocator, program: *const astz.Program, module: []const u8, tor_name: []const u8) ?[]const u8 {
+    _ = allocator;
+    return findEventReturnTypeIn(program.items, module, tor_name);
+}
+
+fn findEventReturnTypeIn(items: []const astz.Item, module: []const u8, tor_name: []const u8) ?[]const u8 {
+    for (items) |*entry| {
+        switch (entry.*) {
+            .event_decl => |*ed| {
+                if (ed.path.segments.len == 1 and std.mem.eql(u8, ed.path.segments[0], tor_name)) {
+                    const mq = ed.path.module_qualifier orelse module;
+                    if (std.mem.eql(u8, mq, module) or std.mem.eql(u8, mq, "")) {
+                        if (ed.return_type) |rt| return rt;
+                    }
+                }
+            },
+            .module_decl => |*m| {
+                if (findEventReturnTypeIn(m.items, module, tor_name)) |t| return t;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// The invocation that produced `handle` in this flow's chain —
+/// `|> producer(...): handle`. Continuations carry the binding; the node
+/// inside is the producer.
+fn findBindingProducer(allocator: std.mem.Allocator, flow: *const astz.Flow, handle: []const u8) ?*const astz.Invocation {
+    _ = allocator;
+    return bindingProducerIn(&flow.body, handle);
+}
+
+fn bindingProducerIn(cont: *const astz.Continuation, handle: []const u8) ?*const astz.Invocation {
+    // The `: name` bind rides the continuation that WRAPS the invocation —
+    // cont.binding — and (defensively) the invocation's own return_binding.
+    if (cont.node) |*n| {
+        if (n.* == .invocation) {
+            const inv = &n.invocation;
+            if (cont.binding) |b| {
+                if (std.mem.eql(u8, b, handle)) return inv;
+            }
+            if (inv.return_binding) |rb| {
+                if (std.mem.eql(u8, rb, handle)) return inv;
+            }
+        }
+    }
+    for (cont.continuations) |*c| {
+        if (bindingProducerIn(c, handle)) |p| return p;
+    }
+    return null;
+}
+
+/// Emit `__koru_tree_free_<X>` for X and every node type reachable through
+/// its edges — once each (`seen` dedupes; a self-edge names the fn already
+/// being emitted).
+fn ensureFreeFns(
+    allocator: std.mem.Allocator,
+    program: *const astz.Program,
+    home: []const u8,
+    node_name: []const u8,
+    loc: errsz.SourceLocation,
+    out: *std.ArrayList(astz.Item),
+    seen: *std.ArrayList([]const u8),
+) void {
+    for (seen.items) |s| {
+        if (std.mem.eql(u8, s, node_name)) return;
+    }
+    seen.append(allocator, node_name) catch unreachable;
+    const decl = findNodeDecl(program, allocator, node_name, home) orelse return;
+    var body = std.ArrayList(u8).initCapacity(allocator, 256) catch unreachable;
+    body.appendSlice(allocator, std.fmt.allocPrint(allocator, "fn __koru_tree_free_{s}(__koru_t: ?*{s}) void {{\n    if (__koru_t) |__koru_n| {{\n", .{ node_name, node_name }) catch unreachable) catch unreachable;
+    for (decl.fields) |f| {
+        if (f.kind == .edge) {
+            body.appendSlice(allocator, std.fmt.allocPrint(allocator, "        __koru_tree_free_{s}(__koru_n.{s});\n", .{ f.edge_type, f.name }) catch unreachable) catch unreachable;
+            ensureFreeFns(allocator, program, home, f.edge_type, loc, out, seen);
+        }
+    }
+    body.appendSlice(allocator, "        koru_allocator().destroy(__koru_n);\n    }\n}\n") catch unreachable;
+    out.append(allocator, astz.Item{ .inline_code = astz.InlineCode{
+        .code = body.toOwnedSlice(allocator) catch unreachable,
+        .location = loc,
+        .module = allocator.dupe(u8, home) catch unreachable,
+    } }) catch unreachable;
+}
+
+/// `dispose-<Node> { t: ?*Node<!owned> }` + `|zig` body. Consuming `t`
+/// settles the root debt; the children moved inside at mint, so the Zig
+/// walk freeing them is the discharge doing real work, not a dodge.
+fn synthDispose(
+    allocator: std.mem.Allocator,
+    flow: *const astz.Flow,
+    node_name: []const u8,
+    synth_name: []const u8,
+) [2]astz.Item {
+    const path = astz.DottedPath{
+        .module_qualifier = allocator.dupe(u8, flow.module) catch unreachable,
+        .segments = blk: {
+            const segs = allocator.alloc([]const u8, 1) catch unreachable;
+            segs[0] = allocator.dupe(u8, synth_name) catch unreachable;
+            break :blk segs;
+        },
+    };
+    const in = allocator.alloc(astz.Field, 1) catch unreachable;
+    in[0] = .{
+        .name = allocator.dupe(u8, "t") catch unreachable,
+        .type = std.fmt.allocPrint(allocator, "?*{s}", .{node_name}) catch unreachable,
+        .phantom = allocator.dupe(u8, "!owned") catch unreachable,
+    };
+    const ed = astz.Item{ .event_decl = astz.EventDecl{
+        .path = path,
+        .input = astz.Shape{ .fields = in },
+        .branches = &.{},
+        .return_type = null,
+        .is_public = false,
+        .is_implicit_flow = false,
+        .annotations = &.{},
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } };
+    const pd = astz.Item{ .proc_decl = astz.ProcDecl{
+        .path = path,
+        .body = astz.Source{
+            .text = std.fmt.allocPrint(allocator, "__koru_tree_free_{s}(t);", .{node_name}) catch unreachable,
+            .location = flow.location,
+            .scope = .{ .bindings = &.{} },
+            .phantom_type = null,
+        },
+        .annotations = &.{},
+        .target = allocator.dupe(u8, "zig") catch unreachable,
+        .location = flow.location,
+        .module = allocator.dupe(u8, flow.module) catch unreachable,
+    } };
+    return .{ ed, pd };
+}

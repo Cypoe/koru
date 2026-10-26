@@ -10,8 +10,8 @@
 // Mirrors std/realize the way target.kz does: vocabulary declared first,
 // consumer second. The walk's engine is src/emit_walk.zig while the
 // bootstrap compiler is Zig; this file is the pipeline's address for it —
-// target-of routes the compile target onto per-target emit tors the way
-// compiler.materialize.kz does upstream, and emit-c is the C lane's arm.
+// std/compiler's target-of routes the compile target onto per-target emit
+// tors, and emit-c is the C lane's arm.
 //
 // The walk the engine performs (the visitor_emitter shape, generalized):
 //
@@ -58,25 +58,6 @@ pub const Walk = struct {
 
 const std = @import("std");
 const ast = @import("ast");
-
-// Route the compile target onto an emission arm — the per-target emit tor
-// is selected by arm tag, not by an if-chain inside one proc. `other` is
-// not a fallback: only declared targets land here.
-~[comptime] pub tor target-of { ctx: std/compiler:CompilerContext }
-| zig
-| js
-| cs
-| c
-| other
-
-~proc target-of|zig {
-    _ = ctx;
-    if (std.mem.eql(u8, CompilerEnv.lang, "js")) return .{ .js = .{} };
-    if (std.mem.eql(u8, CompilerEnv.lang, "cs")) return .{ .cs = .{} };
-    if (std.mem.eql(u8, CompilerEnv.lang, "c")) return .{ .c = .{} };
-    if (std.mem.eql(u8, CompilerEnv.lang, "zig")) return .{ .zig = .{} };
-    return .{ .other = .{} };
-}
 
 // The C lane's pipeline address — selected under --lang=c. The lane is a
 // composed chain of pass tors over one emission session: open builds the

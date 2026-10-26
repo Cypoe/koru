@@ -1,0 +1,65 @@
+// Koru Standard Library: Tree — owned heap nodes, `.k`-spellable
+// ===============================================================
+//
+// `std/tree:node(Node) { fields }` declares a heap-node KIND in the shared
+// proto registry (kind=node); `std/tree:mint` / `std/tree:dispose` are the
+// value verbs. An edge field is OWNERSHIP: one parent per node, dispose is a
+// recursive free, and a node's lifetime is one interval rooted at a binding.
+// Graphs refuse — shared edges need refcounts or explicit unshare verbs,
+// which is a different lane (`std/graph`), not a stretched tree.
+//
+// SURFACE:
+//   std/tree:node(Node) { item: i64, left: ?Node, right: ?Node }
+//   std/tree:mint(Node) { item: v, left: l, right: r } -> *Node<owned!>
+//   std/tree:dispose(t)
+//
+// Field grammar is proto's `name: Type`; the field type's REGISTRY KIND
+// decides its role — the disambiguation is nominal, never syntactic:
+//
+//     scalar / proto-terminal / proto-compound  → payload (embedded;
+//                                                 compounds expand inline —
+//                                                 the acyclic rule is for
+//                                                 embedding, not pointing)
+//     node-registered (incl. Self)              → edge (materialized as a
+//                                                 reference; cycles legal)
+//     ?T                                        → optional (`param: ?Type`
+//                                                 convention — a `?` payload
+//                                                 may be absent, a `?` edge
+//                                                 may be null or omitted at
+//                                                 mint)
+//
+// Zig materialization: payload fields embed their material; edge fields are
+// `?*T` (optional) or `*T` (required — the node is never a leaf, which is
+// what "required child" means). Same name registered as proto AND as node
+// is a collision at declaration — one type namespace per home (the
+// class/struct rule); the checker's declared-type scan owns that wall.
+//
+// The lane keeps mint/dispose honest by leaning on the obligation checker:
+// `mint-Node`'s edge params are `?*T<!owned>` (consumes the child's debt into
+// the node) and its return is `*Node<owned!>` — an edge arg must be a fresh
+// mint or `null` because a second consume of an owned binding is already a
+// refusal. `dispose-Node(t: ?*Node<!owned>)` settles the root debt; the
+// children's debts moved inside it at mint, so the recursive Zig free is the
+// whole story — one interval, one settle.
+//
+// v1 CUTS (loud refusals, not gaps): payload fields are scalar/terminal/
+// `ref(T)`/owned-leaf only — proto-compound payload embeds are refused
+// pending a decided spelling for how they lower; `walk`/`fold` traversal
+// verbs are a later rung (a plain recursive tor is the honest spelling
+// meanwhile — see the binarytrees port).
+
+const std = @import("std");
+const astz = @import("ast");
+const af = @import("ast_functional");
+const errsz = @import("errors");
+
+// The shared spine: field classification resolves through proto's registry
+// machinery (scalar vocabulary, terminal/compound declaration scans). The
+// import is load-bearing — it puts `koru_proto` into the aggregate this
+// module's transform bodies compile against.
+~import std/proto
+
+~part registry
+~part node
+~part mint
+~part dispose

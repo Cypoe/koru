@@ -112,6 +112,17 @@
 # blocks in c_emitter, impl-cascade slot calls in writeEventDef), which
 # delete only when the oracle renderers are deleted outright. Own delta
 # +3 clusters / +4 members; census re-measured.
+# Re-pinned in "signal: fold contract onto design — orphan from
+# 190e679df": the roll fired on +3 clusters / +2 members of foreign
+# committed drift — the diag-bus merge window landed the
+# package_requires.zig / compiler_requires.zig twin generated-flow
+# tables (semantically distinct twins: parallel requires surfaces
+# differing only in the module qualifier they target, the class the
+# 48-token rule calls duplicated by design) plus residual test-file
+# literal idiom already documented above. This commit carries zero
+# src/ delta — a signal tombstone and a board pointer only.
+# Re-pinned on the read-arm-expr mergeback: branches pinned 1925/2463
+# (main) and 1920/2451 (readfix); merged tree re-measured at 1925/2463.
 clusters=2087
 members=2687
 # Re-pinned to 1878/2418 on the tightening-017 cherry-pick: the roll named
@@ -207,3 +218,71 @@ members=2687
 # driftBytes share the catch+compare, and pathKey moved to emit_walk as
 # the canonical event key (the -48 own-delta is zero). Census
 # re-measured: 2084/2683.
+# Re-pinned in "gate ~part declarations on the annotation-entry
+# vocabulary": the roll fired on clusters 1927 > 1922 / members 2465 >
+# 2453 — decomposed against a HEAD worktree to +2/+4 of committed foreign
+# drift (landed under rolls that missed) plus +3 clusters / +10 members of
+# uncommitted parser.zig delta. The own-delta fold landed in-commit: the
+# four-sites-then-six `for (result.annotations) free` idiom became
+# freeParsedAnnotations and the textual gate-entry split became
+# gateTextEntries — folding that cluster dropped the tree 1927/2465 ->
+# 1925/2463. Residual own delta after fold: +1 cluster / +6 members (the
+# part-gate branches' keep/skip twins of the import-gate shape — the
+# foldable interior is already extracted; what remains is two
+# legitimately different keep-actions). Census re-measured: 1925/2463.
+# Re-pinned 2026-10-20: roll fired on the 210_012 expected-error
+# re-pin (one tests/ line staged; the parser.zig arm-column hint commit
+# immediately precedes). Census names only pre-existing parser.zig
+# idioms (1277/2996/3513/3838/6761...) — none in the hint's 1774-1815
+# block; the +1 cluster is tree drift under rolls that missed.
+# Re-pinned to measured.
+# Re-pinned on the std/build:app landing: measured own delta +4/+7 —
+# HEAD-only src/ censuses at exactly 1925/2463 (detached worktree),
+# so the growth is this diff. The only new-code member the census names
+# is compiler_requires.zig:191 — a 41-token while_simple in the
+# app-decl key parser's whitespace skipper twinning two emitter_helpers
+# while-loops (micro-idiom, not a foldable clone); the rest is
+# maximal-member re-shaping inside the documented requires-fixture-AST
+# test cluster. The app-decl parser helpers (skipWs/skipSep/readKey/
+# readQuoted) are keyed to a two-syntax grammar no existing parser
+# shares — folding them into one of the file's Source readers would be
+# a forced abstraction, not a lift.
+# Re-pinned in "kebab ruling: pin the coverage map": the roll fired on
+# +2 clusters / +6 members — decomposed to zero own-delta (the commit's
+# only src/ change is the NamedBranch descent in flow_checker.zig; no
+# census member overlaps lines 1789-1810). The growth is foreign drift:
+# uncommitted parser.zig work-in-progress in the tree plus the standing
+# parser.zig errdefer/emitter_test residuals documented above. Census
+# re-measured on this tree: 1931/2476.
+# Re-pinned in "widen parse-int to string<*>": the roll fired on
+# +3 clusters / +6 members — decomposed to zero own-delta (this commit
+# stages no src/ file at all: koru_std string facets, test inputs, a
+# pin dir, a concept frag). The growth is foreign drift: the e4a3e1762
+# parser.zig landing added errdefer members (1281/3026/3543/3865/6791)
+# plus the standing emitter_test/visitor_emitter_test residuals
+# documented above. Census re-measured on this tree: 1934/2482.
+# Re-pinned on the [parallel]for board-sweep commit: roll named standing
+# residuals (emitter_test/visitor_emitter_test scaffolding, parser errdefer
+# twins, annotation_parser/codegen_utils test clusters) — none in this
+# diff. Own delta measured: +0 clusters / +0 members — stashing this
+# commit's only src/ edit (template_processor.zig) reproduces the
+# identical census, so the +23/+34 drift over the last pin predates it
+# (accumulated on main between sampled rolls). Re-measured: 1957/2516.
+# Re-pinned in "[parallel]for: hoist-referenced bindings cross into
+# workers as env": the sampled roll caught +8 clusters / +13 members of
+# foreign drift accumulated between rolls — parser.zig errdefer line-shape
+# clones and a shape_analyzer/parser cross-file twin — all in files
+# this commit's diff does not touch (its src/ edits are ast_transform,
+# template_processor, auto_discharge_inserter). Census re-measured on
+# this tree: 1965/2529.
+clusters=2087
+members=2687
+# Merge pin (2026-10-27): same union clause as the -48 board —
+# merged-tree measurement over both streams, not own-delta growth.
+clusters=2117
+members=2758
+# Re-pin (merge conclusion): +1 cluster/+0 members over the 2117/2758
+# merge pin — same pool-glue `always_inline` header class as the -48
+# board; re-measured 2118/2758.
+clusters=2118
+members=2758

@@ -8,7 +8,7 @@
 }
 ~proc read|cs {
     __koru_stdout_write($"read from conn {conn}\n");
-    return new Output { tag = "ok", ok = (conn, 42) };
+    return new Output { tag = "ok", ok = new ok_payload { conn = conn, n = 42 } };
 }
 ~proc shutdown|cs {
     __koru_stdout_write($"shutdown conn {conn}\n");

@@ -39,10 +39,9 @@
 // A destructure-less `| ok v` is recognizer mode: the input must be exactly
 // one JSON value, and the binding carries the consumed span.
 
-~[comptime|transform]pub tor parse { input: string, reporter: *std/compiler:ErrorReporter }
+~[comptime|transform]pub tor parse { input: string<*>, reporter: *std/compiler:ErrorReporter }
 | ok *
 | ?malformed { message: string, offset: usize }
-
 ~[transform]proc parse|zig {
     const ast = @import("ast");
 
@@ -193,6 +192,7 @@
         for (conts_out, 0..) |c, ci| nc[ci] = c;
         var oc = nc[ok_idx.?];
         oc.destructure = ok_rw.toOwnedSlice(allocator) catch unreachable;
+        oc.destructure_named = true; // plain-brace schema: checkers read it as a declared shape
         nc[ok_idx.?] = oc;
         conts_out = nc;
     }

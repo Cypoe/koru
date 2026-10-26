@@ -145,6 +145,23 @@
 # c_emitter appear in no cluster (the walk's decl predicates deliberately
 # twin the oracle's shape rules during dual-answer -- the sanctioned
 # migration class, slated to collapse when the walk goes sole-source).
+# Re-pinned in "fmt: unbound fmt.blk / ln refuse KORU180 at the
+# transform": the roll fired on +2 clusters / +2 members of foreign
+# committed drift — the diag-bus merge window (main.zig +293,
+# errors.zig +40) and the same documented twins it names
+# (continuation_codegen x emitter_helpers port pair, emitter_test
+# scaffolding). This commit's own src/ delta is one predicate line plus
+# a comment edit — no foldable new surface.
+# Re-pinned 844/947 -> 846/950 on the cs-library commit: the roll named
+# the documented classes — containsTokenLocal x containsToken (the
+# intentional continuation_codegen port pair), emitter_test test_decl +
+# simple_var_decl scaffolding, package_requires/compiler_requires fixture
+# ASTs, phantom_semantic_checker test items. This diff's only src/ delta
+# is cs_emitter.zig's library-visibility line; no census offender is in
+# it — the +2/+3 is drift landed between re-pins.
+# Re-pinned on the read-arm-expr mergeback: branches pinned 846/950 (main)
+# and 844/947 (readfix); merged tree re-measured at 844/950 — the merge
+# adds no census offenders of its own.
 clusters=913
 members=1035
 # Re-pinned to 820/911 on the call-site |variant commit: the sampled roll
@@ -170,3 +187,68 @@ members=1035
 # same sanctioned per-target twin class; the text each arm writes
 # differs, the shape is the mechanism. Remaining growth is the
 # consciously-retained test-scaffolding class.
+# Re-pinned 2026-10-20: roll fired on the KORU010 arm-column hint
+# commit (src/parser.zig error-text + two parser tests). Census names
+# zero parser.zig lines in its top-20 — the +2/+2 is committed src/
+# drift since ffc019f2d's same-day pin (continuation_codegen /
+# emitter_helpers / emitter_test idioms). Re-pinned to measured.
+# Re-pinned on the std/build:app landing: measured own delta +1/+2 —
+# HEAD-only src/ censuses at exactly 844/950 (detached worktree), so
+# the growth is this diff. The census names zero lines of new code at
+# this tier; the delta is maximal-member re-shaping inside the
+# documented requires-fixture-AST test cluster in compiler_requires.zig.
+# Re-pinned 845/952 -> 846/952 on the std/build:app icon key: measured
+# own delta +1 cluster — HEAD-only src/ censuses at exactly 845/952
+# (stash-measure-restore). The new member is the icon field's
+# optional-free/key arms twinning the version idiom in
+# compiler_requires.zig — field handling follows the established
+# pattern field-for-field; no foldable clone surfaced.
+# Re-pinned on the KORU182 member-kebab commit: roll named the standing
+# residuals (emitter_test/visitor_emitter_test/glob_matcher_spec_test
+# scaffolding, requires-fixture twins, phantom_semantic_checker idioms,
+# the continuation_codegen x emitter_helpers port pair) — none in this
+# diff. Own delta measured: +0 clusters / +1 member — flow_checker.zig's
+# recordFieldHeads brace-strip (`trim; if {..} strip; trim`, 1857-1859)
+# twins template_processor:533-535's identical idiom. Three lines, rank
+# #137 at 52 tokens — folding a trim-brace idiom across two modules is
+# not a lift (frag-dedup-is-lift-then-delete). Re-measured on this tree:
+# 846/953.
+# Re-pinned on the [parallel]for partition commit: roll named the standing
+# residuals (emitter_test/visitor_emitter_test scaffolding, requires-fixture
+# twins, cs/js emitter port pairs) — none in this diff. Own delta measured:
+# +0 clusters / +0 members — stashing this commit's src/ edits reproduces
+# the identical census, so the +9/+10 drift over the last pin predates it
+# (accumulated on main between sampled rolls). The named foldable pairs
+# (cs_emitter fn_decl x js_emitter, if_simple x js_emitter) are the
+# per-target dialect duplication the baseline already documents.
+# Re-measured on this tree: 855/963.
+# Re-pinned on the proof-participation docs commit: the roll fired on a
+# docs-only diff — own delta +0. The +3 members over the last pin
+# accumulated on main between sampled rolls; the census's top offenders
+# are unchanged from the note above (cs_emitter emitAssignment /
+# if_simple x js_emitter — the per-target dialect duplication this
+# baseline already documents). Re-measured on this tree: 854/966.
+clusters=854
+members=966
+# Merge pin (2026-10-27): union of the two branch histories — the ccomp
+# branch's 913/1035 and main's 854/966 are measurements of different
+# trees; the merged tree takes the higher pin and re-measures on the
+# next sampled roll rather than under-pinning into false regrowth.
+clusters=913
+members=1035
+# Merge pin (2026-10-27): the origin/main merge regrew both boards by
+# union — main had pinned 854/966 (-48) and 1965/2529 (-32) on its own
+# tree; the ccomp branch measured 913/1035 and 2087/2687. The merged
+# tree measures the sum of both streams files, not new own-delta
+# slop: 914/1050 and 2117/2758.
+clusters=914
+members=1050
+# Re-pin (merge conclusion): +1 cluster/+2 members over the 914/1050
+# merge pin. The growth is the pool-glue marking — `static
+# __attribute__((always_inline))` header spelled at the walk's
+# decl+def sites and the oracle's def site, the same conscious
+# dual-answer class the transition already carries (the oracle half
+# is being deleted piecemeal). Re-measured 915/1052 on the merged,
+# pool-C-lane tree.
+clusters=915
+members=1052

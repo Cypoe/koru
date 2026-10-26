@@ -2,7 +2,6 @@
 // Joined via `~part helpers` in json.parse.kz; merged into the json.parse
 // module at load. Holds the transform's helper container so the driver
 // stays under the line wall.
-
 const ParseH = struct {
     const std2 = @import("std");
     const ast2 = @import("ast");
@@ -200,7 +199,7 @@ const ParseH = struct {
                 return null;
             }
             var ty: *const JTy = undefined;
-            var nf = f;
+            var nf = f; nf.path = f.name; // `:` carries the schema spec — the binding is the payload name, never spec text
             if (f.sub.len > 0) {
                 var sub_rw = std2.ArrayList(ast2.DestructureField){};
                 const sub = convFields(ctx, f.sub, &sub_rw) orelse return null;
@@ -208,18 +207,19 @@ const ParseH = struct {
                 const idx = ctx.shapes.items.len;
                 ctx.shapes.append(ctx.a, sub) catch unreachable;
                 ty = dupTy(ctx, .{ .obj = idx });
-            } else if (f.type_text) |t| {
+            } else if (f.type_text orelse (if (!std2.mem.eql(u8, f.path, f.name)) f.path else null)) |t| {
                 ty = parseTyText(ctx, t) orelse return null;
+                // `{...}` spec written inline (plain-brace surface): bind leaves.
+                if (ty.* == .obj) SubH.expand(ctx, &nf, ty);
             } else {
                 ty = dupTy(ctx, .raw);
             }
-            if (f.sub.len == 0) nf.type_text = zigTy(ctx, ty);
+            if (nf.sub.len == 0) nf.type_text = zigTy(ctx, ty);
             rw.append(ctx.a, nf) catch unreachable;
             out.append(ctx.a, .{ .name = f.name, .ty = ty }) catch unreachable;
         }
         return out.toOwnedSlice(ctx.a) catch unreachable;
     }
-
     /// The Zig type spelling of a JTy in the emitted code.
     fn zigTy(ctx: *Ctx, ty: *const JTy) []const u8 {
         return switch (ty.*) {
@@ -244,7 +244,7 @@ const ParseH = struct {
         switch (ty.*) {
             .raw => {
                 ctx.n += 1;
-                w(out, ctx, "{{ const __rst{d} = p.*; if (!__jskip{s}(s, p, e)) return null; {s} = s[__rst{d}..p.*]; }} ", .{ ctx.n, ctx.sfx, dst, ctx.n });
+                w(out, ctx, "{{ const __rst{d} = p.*; if (!__jskip{s}(s, p, e, a)) return null; {s} = s[__rst{d}..p.*]; }} ", .{ ctx.n, ctx.sfx, dst, ctx.n });
             },
             .str => {
                 w(out, ctx, "{s} = __jstr{s}(s, p, e, a) orelse return null; ", .{ dst, ctx.sfx });

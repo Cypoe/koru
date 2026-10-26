@@ -6,13 +6,15 @@
 // reached-gating for module events, same fail-loud contract — with every
 // output site retargeted to C# 9 (net9.0):
 //
-//   - event decls → `static class <name>_event { static dynamic
-//     handler(dynamic __koru_input) { … } }` nested in `main_module`.
-//   - the handler boundary is `dynamic` on purpose: `new { f = arg }` gives
-//     the call site the same duck-typed record JS gives an object literal —
-//     `result.tag`, `result.done` read back untyped. Records/generics are the
-//     real design conversation; the vertical only needs the shape to compile
-//     and run.
+//   - event decls → `static class <name>_event { static <Out>
+//     handler(<Input> __koru_input) { … } }` nested in `main_module`, where
+//     <Input>/<Out> are the generated Input/Output structs — and a
+//     named-record payload gets its own generated `<b>_payload` nested
+//     struct, a resume sum its `<b>_resume`. `dynamic` survives only where
+//     a member genuinely cannot be named (wildcard shapes, `*T` handles,
+//     `Source` params, the closure fallback); the contract elsewhere is
+//     static — a wrong-typed cross-assembly call fails C# compilation, not
+//     the runtime binder (220_054).
 //   - `|cs` proc bodies, spliced verbatim (opaque host code) after binding
 //     input fields as `var field = __koru_input.field;`.
 //   - top-level flows → `flowN()` static methods; `Program.Main` invokes them.
@@ -79,19 +81,27 @@ pub fn emit(allocator: std.mem.Allocator, program: *const ast.Program, library: 
     // handler-scope hoist in emitEventDecl.
     try collectCsCells(&em, program.items);
 
-    try em.write("static class main_module {\n");
+    // A library build is consumed cross-assembly — `internal` (the C#
+    // default) would make every `public` event class unreachable through
+    // the .dll. Program mode stays internal: nothing outside references it.
+    try em.write(if (library) "public static class main_module {\n" else "static class main_module {\n");
     // The stdout/stderr surface lives INSIDE main_module so the unqualified
     // `__koru_stdout_write(…)` a |cs transform emits resolves from every flow
     // and proc body. Write (not WriteLine): the transform appends its own
     // newline, mirroring the JS helpers.
     try em.write(
-        \\  public static void __koru_stdout_write(dynamic s) => global::System.Console.Out.Write(s);
-        \\  public static void __koru_stderr_write(dynamic s) => global::System.Console.Error.Write(s);
+        \\  public static void __koru_stdout_write(object s) => global::System.Console.Out.Write(s);
+        \\  public static void __koru_stderr_write(object s) => global::System.Console.Error.Write(s);
         \\  // The mutable handle carrier — `*String`-style resources are
         \\  // `new __KoruBox { data = … }` because C# anonymous types are
         \\  // read-only: `s.data = …` (std/string append/clear, handle
-        \\  // mutation generally) needs a settable member.
-        \\  public class __KoruBox { public dynamic data; }
+        \\  // mutation generally) needs a settable member. `object`, not
+        \\  // `dynamic`: the field is storage — every `x.data` read reaches
+        \\  // it through a dynamic-typed handle (`*T` Input fields, the
+        \\  // `dynamic` borrow locals below), so the member itself only
+        \\  // needs to hold the value, and `object` keeps the DLR out of
+        \\  // the store/load path.
+        \\  public class __KoruBox { public object data; }
         \\  // Textification for `{{ … }}` operands: C# bool ToStrings as
         \\  // `True` where Koru prints `true`, and the operand's static type
         \\  // is unknown at this boundary — a `(x) is bool` inline test would
@@ -1248,13 +1258,16 @@ const Emitter = struct {
 
         // The envelope is the tor's contract, whoever writes the body:
         // handler returns `Output` for a branch tor, `<T>` for a bare
-        // `-> T`, dynamic only when the decl itself cannot name a type.
-        // That includes opaque |cs text — host-authored impls must produce
-        // `new Output { tag = "done", … }` / `return <T>;` and the compiler
-        // enforces it (an anonymous `new { tag, done }` is now a type
-        // error, not a convention). Input is typed regardless (zig passes
-        // `Input` to opaque procs too); the wildcard-input shape stays
-        // dynamic because its members cannot be named at decl time.
+        // `-> T`, `object` when the decl cannot name a type — storage, not
+        // binding (a `dynamic` return would let a consumer's member read
+        // compile against a member that is not there and detonate at the
+        // DLR call-site cache). That includes opaque |cs text — host-authored
+        // impls must produce `new Output { tag = "done", … }` /
+        // `return <T>;` and the compiler enforces it (an anonymous
+        // `new { tag, done }` is now a type error, not a convention). Input
+        // is typed regardless (zig passes `Input` to opaque procs too); the
+        // wildcard-input shape stays dynamic because its members cannot be
+        // named at decl time.
         const typed_input = !ev.input.is_wildcard;
         const input_cs: []const u8 = if (typed_input) "Input" else "dynamic";
         const output_cs: []const u8 = if (has_terminal)
@@ -1262,7 +1275,7 @@ const Emitter = struct {
         else if (ev.return_type) |rt|
             csType(rt)
         else
-            "dynamic";
+            "object";
 
         var name_buf: [256]u8 = undefined;
         const ev_name = self.eventClassName(&name_buf, ev);
@@ -1276,7 +1289,7 @@ const Emitter = struct {
             try self.write("    public struct Input {\n");
             var has_init = false;
             for (ev.input.fields) |field| {
-                try self.writeFmt("      public {s} ", .{csType(field.type)});
+                try self.writeFmt("      public {s} ", .{csInputFieldType(field)});
                 try self.writeBinding(field.name);
                 if (field.default) |dflt| {
                     try self.write(" = ");
@@ -1300,6 +1313,12 @@ const Emitter = struct {
             }
             try self.write("    }\n");
         }
+        // Generated payload/resume types, nested in the class — impl text
+        // (and transform-authored text) spells them bare the way it spells
+        // `Output` bare; main_module scope reaches them as
+        // `<ev>_event.<b>_payload`. A record payload is a real nominal
+        // struct; a resume sum carries `tag` plus one member per arm.
+        try self.emitNestedTypeDecls(ev);
         if (has_effect) {
             // IOps is the `comptime __H: type` analogue: each call site hands
             // a STRUCT implementing every arm, and `handler<H>` monomorphizes
@@ -1313,15 +1332,25 @@ const Emitter = struct {
             for (ev.branches) |*b| {
                 if (b.kind != .effect) continue;
                 if (optionalResumingArm(b)) {
-                    try self.write("      global::System.Func<dynamic, dynamic> ");
+                    // The nullable-Func exception keeps its surface but not
+                    // its blindness: in/out spell the same types the method
+                    // arms do, so a wrong-typed invoke fails compilation.
+                    if (armIsPayloadless(b)) {
+                        try self.writeFmt("      global::System.Func<{s}> ", .{try armReturnCsType(self.allocator, ev_name, b, false)});
+                    } else {
+                        try self.writeFmt("      global::System.Func<{s}, {s}> ", .{
+                            try armParamCsType(self.allocator, ev_name, b, false),
+                            try armReturnCsType(self.allocator, ev_name, b, false),
+                        });
+                    }
                     try self.writeBinding(b.name);
                     try self.write(" { get; }\n");
                 } else {
-                    try self.writeFmt("      {s} ", .{armReturnCsType(b)});
+                    try self.writeFmt("      {s} ", .{try armReturnCsType(self.allocator, ev_name, b, false)});
                     try self.writeBinding(b.name);
                     try self.write("(");
                     if (!armIsPayloadless(b)) {
-                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
+                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, ev_name, b, false)});
                     }
                     try self.write(");\n");
                 }
@@ -1344,11 +1373,11 @@ const Emitter = struct {
                     try self.writeBinding(b.name);
                     try self.write(";\n");
                 } else {
-                    try self.writeFmt("{s} ", .{armReturnCsType(b)});
+                    try self.writeFmt("{s} ", .{try armReturnCsType(self.allocator, ev_name, b, false)});
                     try self.writeBinding(b.name);
                     try self.write("(");
                     if (!armIsPayloadless(b)) {
-                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
+                        try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, ev_name, b, false)});
                     }
                     try self.write(") => ops.");
                     try self.writeBinding(b.name);
@@ -1387,14 +1416,14 @@ const Emitter = struct {
             .immediate => |ii| if (ii.value.is_bare_return)
                 (if (ev.return_type) |rt| ImplOut{ .bare = csType(rt) } else .dynamic)
             else if (has_terminal)
-                .tagged
+                ImplOut{ .tagged = "Output" }
             else
                 .dynamic,
             // Host-authored bodies get the same typed contract — see the
             // envelope comment above. Produces inside a preamble/subflow's
             // generated continuations emit `new Output { … }` alongside.
             else => if (has_terminal)
-                .tagged
+                ImplOut{ .tagged = "Output" }
             else if (ev.return_type) |rt|
                 ImplOut{ .bare = csType(rt) }
             else
@@ -1492,6 +1521,50 @@ const Emitter = struct {
         try self.write("    }\n  }\n");
     }
 
+    /// The generated types nested inside an `<ev>_event` class:
+    ///
+    ///   `<b>_payload` — one struct per named-record payload, on terminal
+    ///     branches AND effect arms. `dynamic`/`object`/anonymous-object
+    ///     spellings all fail the same test: they cannot be NAMED in a
+    ///     signature, so a record arm param or Output member could only
+    ///     ever be typed by giving the record a nominal type. Field types
+    ///     come from csType — unknown shapes stay `dynamic` because the
+    ///     field's whole job is being membered through.
+    ///   `<b>_resume` — the resume-sum for `! arm | r1 T1 | r2 T2`: `tag`
+    ///     discriminates, one member per arm carries its declared type
+    ///     (`object` when the arm declares none — storage, not binding).
+    ///
+    /// Both spellings are what transform-authored HostShape text and the
+    /// emitter's own constructors reference; decl and use agree by sharing
+    /// payloadStructNameBuf / resumeStructRef.
+    fn emitNestedTypeDecls(self: *Emitter, ev: *const ast.EventDecl) CsEmitError!void {
+        for (ev.branches) |*b| {
+            if (payloadIsRecord(b)) {
+                var pnb: [300]u8 = undefined;
+                try self.writeFmt("    public struct {s} {{\n", .{payloadStructNameBuf(&pnb, b.name)});
+                for (b.payload.fields) |f| {
+                    try self.writeFmt("      public {s} ", .{csType(f.type)});
+                    try self.writeBinding(f.name);
+                    try self.write(";\n");
+                }
+                try self.write("    }\n");
+            }
+            if (b.kind != .effect) continue;
+            if (b.resume_arms) |arms| {
+                var rnb: [300]u8 = undefined;
+                const lowered = Emitter.lowerIdentBuf(&rnb, b.name);
+                try self.writeFmt("    public struct {s}_resume {{\n      public string tag;\n", .{lowered});
+                for (arms) |ra| {
+                    const mt = if (ra.type) |rt| csType(rt) else "object";
+                    try self.writeFmt("      public {s} ", .{mt});
+                    try self.writeBinding(ra.name);
+                    try self.write(";\n");
+                }
+                try self.write("    }\n");
+            }
+        }
+    }
+
     /// The handler-scope fall-through for impl bodies the emitter cannot
     /// prove return on every path — pasted |cs text and subflow
     /// continuations with conditional produces. `return default;` is the one
@@ -1543,8 +1616,18 @@ const Emitter = struct {
             return;
         }
 
-        const tagged = self.impl_out == .tagged;
-        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\"", .{ indent, if (tagged) "Output " else "", bc.branch_name });
+        // `tagged` carries the ENVELOPE name — "Output" inside the event
+        // class, the qualified `<ev>_event.<arm>_resume` in an arm body.
+        // Everything else produces anonymously the way it always has.
+        const env: []const u8 = switch (self.impl_out) {
+            .tagged => |e| e,
+            else => "",
+        };
+        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\"", .{
+            indent,
+            if (env.len > 0) try std.fmt.allocPrint(self.allocator, "{s} ", .{env}) else "",
+            bc.branch_name,
+        });
         if (bc.plain_value) |pv| {
             try self.write(", ");
             try self.writeBinding(csPayloadName(bc.branch_name));
@@ -1553,27 +1636,32 @@ const Emitter = struct {
         } else if (bc.fields.len > 0) {
             try self.write(", ");
             try self.writeBinding(csPayloadName(bc.branch_name));
-            // The Output member is a named TUPLE when the branch declared a
-            // record payload — `b = (f: v, …)` — and `dynamic` otherwise
-            // (the anonymous object still answers there).
+            // A record field-set on a branch whose decl carries named
+            // payload fields constructs the generated `<b>_payload`
+            // struct — `b = new b_payload { f = v, … }`. Anything else
+            // stays the anonymous object (a `dynamic`/wildcard member
+            // still answers there; a scalar member refuses at C# compile
+            // time, which is the honest outcome).
             const decl_b: ?*const ast.Branch = if (self.impl_event) |ie| blk: {
                 for (ie.branches) |*tb| {
                     if (tb.kind == .terminal and std.mem.eql(u8, tb.name, bc.branch_name)) break :blk tb;
                 }
                 break :blk null;
             } else null;
-            const tuple_member = if (decl_b) |tb|
-                (try recordPayloadCsType(self.allocator, tb)) != null
-            else
-                false;
-            try self.write(if (tuple_member) " = ( " else " = new { ");
+            const rec = if (decl_b) |tb| payloadIsRecord(tb) else false;
+            if (rec) {
+                var pnb: [300]u8 = undefined;
+                try self.writeFmt(" = new {s} {{ ", .{payloadStructNameBuf(&pnb, bc.branch_name)});
+            } else {
+                try self.write(" = new { ");
+            }
             for (bc.fields, 0..) |field, k| {
                 if (k > 0) try self.write(", ");
                 try self.writeBinding(field.name);
-                try self.write(if (tuple_member) ": " else " = ");
+                try self.write(" = ");
                 try self.writeCsExpr(if (field.expression_str) |e| e else field.type);
             }
-            try self.write(if (tuple_member) " )" else " }");
+            try self.write(" }");
         }
         try self.write(" };\n");
     }
@@ -1826,13 +1914,16 @@ const Emitter = struct {
         try self.writeFmt("  public static class {s}_event {{\n", .{self.eventClassName(&name_buf, event)});
         try self.write("    public struct Input {\n");
         for (event.input.fields) |field| {
-            try self.writeFmt("      public {s} ", .{csType(field.type)});
+            try self.writeFmt("      public {s} ", .{csInputFieldType(field)});
             try self.writeBinding(field.name);
             try self.write(";\n");
         }
-        try self.write("    }\n    public struct Output {\n      public string tag;\n      public dynamic ");
-        try self.writeBinding(branch.name);
+        try self.write("    }\n    public struct Output {\n      public string tag;\n      public ");
+        try self.write(try branchPayloadCsType(self.allocator, branch));
+        try self.write(" ");
+        try self.writeBinding(csPayloadName(branch.name));
         try self.write(";\n    }\n");
+        try self.emitNestedTypeDecls(event);
         try self.writeFmt("    public static Output handler(Input {s}) => new Output {{ tag = \"{s}\" }};\n  }}\n", .{ INPUT_PARAM, branch.name });
     }
 
@@ -1848,12 +1939,17 @@ const Emitter = struct {
         // compile time instead of the call frame it was written for.
         try self.write("    public struct Input {\n");
         for (event.input.fields) |field| {
-            try self.write("      public dynamic ");
+            try self.writeFmt("      public {s} ", .{csInputFieldType(field)});
             try self.writeBinding(field.name);
             try self.write(";\n");
         }
         try self.write("    }\n");
-        try self.writeFmt("    public static dynamic handler(dynamic {s}) {{\n", .{INPUT_PARAM});
+        // Wildcard inputs keep the dynamic param — their call sites hand an
+        // anonymous object no `Input` member list can name.
+        try self.writeFmt("    public static object handler({s} {s}) {{\n", .{
+            if (event.input.is_wildcard) "dynamic" else "Input",
+            INPUT_PARAM,
+        });
         try self.writeFmt(
             "      throw new global::System.Exception(\"{s}:{s} has no C# implementation — its body resolves only to a non-cs target (|zig / [comptime]), directly or through a callee\");\n",
             .{ module.logical_name, name },
@@ -2025,25 +2121,27 @@ const Emitter = struct {
             if (std.mem.eql(u8, b.name, head)) break b;
         } else return false;
 
-        const tagged = self.impl_out == .tagged;
+        const env: []const u8 = switch (self.impl_out) {
+            .tagged => |e| e,
+            else => "",
+        };
+        const env_pre = if (env.len > 0) try std.fmt.allocPrint(self.allocator, "{s} ", .{env}) else "";
         if (branch.payload.fields.len == 0 and !branch.payload.is_wildcard) {
             if (payload.len != 0) return false; // shape mismatch — let the checker speak
-            try self.writeFmt("{s}return new {s}{{ tag = \"{s}\" }};\n", .{ indent, if (tagged) "Output " else "", head });
+            try self.writeFmt("{s}return new {s}{{ tag = \"{s}\" }};\n", .{ indent, env_pre, head });
             return true;
         }
         if (payload.len == 0) return false;
 
-        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\", ", .{ indent, if (tagged) "Output " else "", head });
+        try self.writeFmt("{s}return new {s}{{ tag = \"{s}\", ", .{ indent, env_pre, head });
         try self.writeBinding(csPayloadName(head));
         try self.write(" = ");
-        // A record-brace payload on a branch whose decl carries named fields
-        // spells the named tuple the Output member declares — the same
+        // A record-brace payload on a branch whose decl carries named
+        // fields constructs the generated `<b>_payload` struct — the same
         // ruling emitBranchConstructorReturn makes for `-> b {f: v}`.
-        // `dynamic` members still take the anonymous object.
-        if (payload[0] == '{' and
-            (try recordPayloadCsType(self.allocator, branch)) != null)
-        {
-            try self.writeRecordTuple(payload);
+        // `dynamic`/wildcard members still take the anonymous object.
+        if (payload[0] == '{' and payloadIsRecord(branch)) {
+            try self.writeRecordPayloadInit(head, payload);
         } else {
             try self.writeProduceValue(payload);
         }
@@ -2051,16 +2149,17 @@ const Emitter = struct {
         return true;
     }
 
-    /// `{ k: v, … }` produce text → the named tuple literal `( k: v, … )` —
-    /// kebab field names mangle through writeBinding, values lower through
+    /// `{ k: v, … }` produce text → `new <b>_payload { k = v, … }` — kebab
+    /// field names mangle through writeBinding, values lower through
     /// writeCsExpr. Top-level comma split; nested braces/brackets/parens and
     /// string literals don't split.
-    fn writeRecordTuple(self: *Emitter, payload: []const u8) CsEmitError!void {
+    fn writeRecordPayloadInit(self: *Emitter, branch_name: []const u8, payload: []const u8) CsEmitError!void {
         var inner = std.mem.trim(u8, payload, " \t");
         if (inner.len >= 2 and inner[0] == '{' and inner[inner.len - 1] == '}') {
             inner = std.mem.trim(u8, inner[1 .. inner.len - 1], " \t");
         }
-        try self.write("(");
+        var pnb: [300]u8 = undefined;
+        try self.writeFmt("new {s} {{ ", .{payloadStructNameBuf(&pnb, branch_name)});
         var pos: usize = 0;
         var field_i: usize = 0;
         while (pos <= inner.len) {
@@ -2089,13 +2188,13 @@ const Emitter = struct {
             const colon = std.mem.indexOfScalar(u8, part, ':') orelse part.len;
             const fname = std.mem.trim(u8, part[0..colon], " \t");
             const fval = std.mem.trim(u8, part[@min(colon + 1, part.len)..], " \t");
-            if (fname.len > 0 and colon < part.len) {
-                try self.writeBinding(fname);
-                try self.write(": ");
-            }
-            try self.writeCsExpr(fval);
+            if (fname.len == 0) continue;
+            try self.writeBinding(fname);
+            try self.write(" = ");
+            // No colon is the pun `{x}` — the value is the binding itself.
+            try self.writeCsExpr(if (colon < part.len) fval else fname);
         }
-        try self.write(")");
+        try self.write(" }");
     }
 
     /// Emit a flow's `preamble_code` — host DECLARATION text a comptime
@@ -2512,21 +2611,23 @@ const Emitter = struct {
         if (terminal_count >= 2 and !callee_bare_return) needs_result = true;
         if (namedReturnBinding(inv) != null) needs_result = true;
 
-        // Build the Handlers object from the EFFECT continuations — an
-        // anonymous object whose members are `Func<dynamic, dynamic>`
-        // delegates. Lambdas capture the enclosing flow's locals the way a
-        // JS object literal's methods close over theirs, so the call site's
-        // names reach the handler body unchanged. The id is monotonic so
-        // nested frames get distinct names.
+        // Build the Handlers struct from the EFFECT continuations — a
+        // generated `Handlers_N` implementing the event's IOps interface.
+        // Lambdas capture the enclosing flow's locals the way a JS object
+        // literal's methods close over theirs, so the call site's names
+        // reach the handler body unchanged. The id is monotonic so nested
+        // frames get distinct names.
         var handlers_name: ?[]const u8 = null;
         defer if (handlers_name) |hn| self.allocator.free(hn);
 
         if (ev_has_effect) {
             // Arm bodies produce RESUME values, not the enclosing tor's
-            // Output — force the dynamic produce path while they emit. The
-            // struct decl lands in ops_buf; `init_buf` collects the call
-            // site's `new H { … }` entries — `__cap_<n>` capture copies and
-            // the Func values a forwarded or optional-resuming arm keeps.
+            // Output — emitOpsStructDecl installs each arm's envelope
+            // itself; `.dynamic` here is only the default under which the
+            // ops/init text emits. The struct decl lands in ops_buf;
+            // `init_buf` collects the call site's `new H { … }` entries —
+            // `__cap_<n>` capture copies and the Func values a forwarded or
+            // optional-resuming arm keeps.
             const saved_out = self.impl_out;
             defer self.impl_out = saved_out;
             self.impl_out = .dynamic;
@@ -2578,7 +2679,10 @@ const Emitter = struct {
                 if (ai >= borrow_box.len) break;
                 if (borrowTarget(arg.value)) |t| {
                     const bname = try std.fmt.allocPrint(self.allocator, "__koru_borrow_{d}", .{self.nextId()});
-                    try self.writeFmt("{s}var {s} = new __KoruBox {{ data = ", .{ indent, bname });
+                    // `dynamic`, not `var`: `var` would infer __KoruBox and
+                    // pin `.data` reads to `object`, breaking member chains
+                    // in spliced text that expects the dynamic handle.
+                    try self.writeFmt("{s}dynamic {s} = new __KoruBox {{ data = ", .{ indent, bname });
                     try self.writeBinding(t);
                     try self.write(" };\n");
                     borrow_box[ai] = bname;
@@ -2890,18 +2994,15 @@ const Emitter = struct {
         indent: []const u8,
         track: bool,
     ) CsEmitError!void {
+        // Flat paths: `{ pos.x }` → `var x = base.pos.x`.
         for (fields) |field| {
             if (std.mem.eql(u8, field.name, "_")) continue;
-            if (field.sub.len > 0) {
-                const path = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base, field.name });
-                defer self.allocator.free(path);
-                try self.emitDestructureBindings(field.sub, path, indent, track);
-                continue;
-            }
             try self.writeFmt("{s}var ", .{indent});
             try self.writeBinding(field.name);
             try self.write(" = ");
-            try self.writeMember(base, field.name);
+            try self.write(base);
+            try self.write(".");
+            try self.write(field.path);
             try self.write(";\n");
             if (track) try self.registerLocal(field.name);
         }
@@ -3239,7 +3340,7 @@ const Emitter = struct {
                         wb_param[wb_count] = try self.allocator.dupe(u8, spelled);
                         wb_count += 1;
                     }
-                    try self.writeFmt("{s}var __koru_p_{s} = new __KoruBox {{ data = ", .{ inner, spelled });
+                    try self.writeFmt("{s}dynamic __koru_p_{s} = new __KoruBox {{ data = ", .{ inner, spelled });
                     try self.writeBinding(t);
                     try self.write(" };\n");
                     continue;
@@ -3252,10 +3353,14 @@ const Emitter = struct {
             for (ev.input.fields) |field| {
                 var nb: [300]u8 = undefined;
                 const spelled = spelledName(&nb, field.name) orelse field.name;
-                try self.writeFmt("{s}var __koru_p_{s} = ", .{ inner, spelled });
                 const ft = csType(field.type);
-                if (findArgForField(inv.args, field.name)) |a| {
-                    if (borrowTarget(a.value)) |t| {
+                const arg_field = findArgForField(inv.args, field.name);
+                const borrow = if (arg_field) |a| borrowTarget(a.value) else null;
+                // `dynamic` decl for the box: `var` would pin `.data` to
+                // `object` in the spliced body (see the borrow hoist above).
+                try self.writeFmt("{s}{s} __koru_p_{s} = ", .{ inner, if (borrow != null) "dynamic" else "var", spelled });
+                if (arg_field) |a| {
+                    if (borrow) |t| {
                         if (wb_count < 16) {
                             wb_target[wb_count] = t;
                             wb_param[wb_count] = try self.allocator.dupe(u8, spelled);
@@ -3584,6 +3689,9 @@ const Emitter = struct {
         const saved_buf = self.buf;
         defer self.buf = saved_buf;
 
+        // The struct lands at main_module scope — outside the event class —
+        // so every generated type it names spells the qualified
+        // `<ev>_event.<b>_…` reference.
         var ev_name_buf: [256]u8 = undefined;
         const ev_name = self.eventClassName(&ev_name_buf, ev);
 
@@ -3594,12 +3702,26 @@ const Emitter = struct {
             if (b.kind != .effect) continue;
             const installed = continuationForBranch(continuations, b.name) != null;
 
+            // The arm body's produce envelope: a resume-sum arm produces
+            // `new <ev>_event.<b>_resume { tag = "r", … }`, qualified so the
+            // reference resolves inside the struct AND inside whichever
+            // scope the init lambda lands in.
+            const arm_env: ?[]const u8 = if (b.resume_arms != null)
+                try resumeStructRef(self.allocator, ev_name, b.name, true)
+            else
+                null;
+            defer if (arm_env) |e| self.allocator.free(e);
+
             // Optional RESUMING arm: presence is observable, so it keeps the
-            // nullable Func surface — prop here, closure-bodied init below.
+            // nullable Func surface — prop here, closure-bodied init below —
+            // but the Func is TYPED to the arm's signature now: a wrong-typed
+            // invoke fails at C# compile time instead of the runtime binder.
             if (optionalResumingArm(b)) {
-                try self.write("    public global::System.Func<dynamic");
-                if (!armIsPayloadless(b)) try self.write(", dynamic");
-                try self.write("> ");
+                const ret = try armReturnCsType(self.allocator, ev_name, b, true);
+                const param_t = try armParamCsType(self.allocator, ev_name, b, true);
+                try self.write("    public global::System.Func<");
+                if (!armIsPayloadless(b)) try self.writeFmt("{s}, ", .{param_t});
+                try self.writeFmt("{s}> ", .{ret});
                 try self.writeBinding(b.name);
                 try self.write(" { get; set; }\n");
                 if (installed) {
@@ -3608,12 +3730,17 @@ const Emitter = struct {
                     self.buf = init_buf;
                     try self.write(init_indent);
                     try self.writeBinding(b.name);
-                    try self.write(" = (global::System.Func<dynamic");
-                    if (!armIsPayloadless(b)) try self.write(", dynamic");
-                    try self.write(">)(");
+                    try self.write(" = (global::System.Func<");
+                    if (!armIsPayloadless(b)) try self.writeFmt("{s}, ", .{param_t});
+                    try self.writeFmt("{s}>)(", .{ret});
                     if (!armIsPayloadless(b)) try self.write(param);
                     try self.write(" => ");
-                    try self.emitArmBodyBlock(continuations, b.name, b, param, init_indent, .null_t);
+                    {
+                        const saved_io = self.impl_out;
+                        defer self.impl_out = saved_io;
+                        self.impl_out = if (arm_env) |e| ImplOut{ .tagged = e } else .dynamic;
+                        try self.emitArmBodyBlock(continuations, b.name, b, param, init_indent, if (std.mem.eql(u8, ret, "void")) .none else .default_t);
+                    }
                     try self.write("),\n");
                     self.buf = &self.ops_buf;
                 }
@@ -3625,10 +3752,10 @@ const Emitter = struct {
                 // noop member; omitted REQUIRED arm — no member at all, so
                 // CS0535 names the call site the way `@hasDecl` failure does.
                 if (b.is_optional) {
-                    try self.writeFmt("    public {s} ", .{armReturnCsType(b)});
+                    try self.writeFmt("    public {s} ", .{try armReturnCsType(self.allocator, ev_name, b, true)});
                     try self.writeBinding(b.name);
                     try self.write("(");
-                    if (!armIsPayloadless(b)) try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, b)});
+                    if (!armIsPayloadless(b)) try self.writeFmt("{s} __koru_arg", .{try armParamCsType(self.allocator, ev_name, b, true)});
                     try self.write(") { }\n");
                 }
                 continue;
@@ -3641,18 +3768,18 @@ const Emitter = struct {
             // closure that already answered them).
             const param = try std.fmt.allocPrint(self.allocator, "__koru_arm_{d}", .{self.nextId()});
             defer self.allocator.free(param);
-            const ret = armReturnCsType(b);
-            const tail: ArmTail = if (std.mem.eql(u8, ret, "void"))
-                .none
-            else if (std.mem.eql(u8, ret, "dynamic"))
-                .null_t
-            else
-                .default_t;
+            const ret = try armReturnCsType(self.allocator, ev_name, b, true);
+            const tail: ArmTail = if (std.mem.eql(u8, ret, "void")) .none else .default_t;
 
             var body_buf: std.ArrayList(u8) = .empty;
             defer body_buf.deinit(self.allocator);
             self.buf = &body_buf;
-            try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", tail);
+            {
+                const saved_io = self.impl_out;
+                defer self.impl_out = saved_io;
+                self.impl_out = if (arm_env) |e| ImplOut{ .tagged = e } else .dynamic;
+                try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", tail);
+            }
             self.buf = &self.ops_buf;
 
             var scan = try self.scanArmBody(body_buf.items, ev, param);
@@ -3662,9 +3789,11 @@ const Emitter = struct {
                 // Forwarder: the method is the static surface, the Func field
                 // is the body — the lambda captures whatever the scan could
                 // not prove, at the delegate-invoke cost measured before.
-                // The field is `Func<dynamic>` regardless of the method's
-                // return, so a void arm's body re-emits with the null tail a
-                // `Func` conversion still requires.
+                // The field stays `Func<dynamic>` regardless of the method's
+                // return — this IS the unclassifiable fallback, and a
+                // dynamic return converts implicitly at the forward call —
+                // so a void arm's body re-emits with the null tail a `Func`
+                // conversion still requires.
                 try self.write("    public global::System.Func<dynamic");
                 if (!armIsPayloadless(b)) try self.write(", dynamic");
                 try self.write("> __koru_fn_");
@@ -3673,16 +3802,15 @@ const Emitter = struct {
                 try self.writeFmt("    public {s} ", .{ret});
                 try self.writeBinding(b.name);
                 try self.write("(");
-                if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, b), param });
+                if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, ev_name, b, true), param });
                 try self.write(") => __koru_fn_");
                 try self.writeBinding(b.name);
                 try self.write("(");
                 if (!armIsPayloadless(b)) {
-                    // The Func's arg is dynamic — a boxed tuple's element
-                    // names erase at runtime, so the body (written for the
-                    // anonymous shape) reads `.f` through a REAL object.
-                    // The method takes the tuple and re-wraps per field.
-                    if (try recordPayloadCsType(self.allocator, b)) |_| {
+                    // The Func's arg is dynamic — the body (written for the
+                    // anonymous shape) reads `.f` through a REAL object, so
+                    // the method re-wraps the typed payload struct's fields.
+                    if (payloadIsRecord(b)) {
                         try self.write("new { ");
                         for (b.payload.fields, 0..) |f, i| {
                             if (i > 0) try self.write(", ");
@@ -3703,14 +3831,21 @@ const Emitter = struct {
                 try self.write(" = (");
                 if (!armIsPayloadless(b)) try self.write(param);
                 try self.write(") => ");
-                if (tail == .null_t) {
-                    try self.write(body_buf.items);
-                } else {
+                {
+                    // The Func field is `Func<dynamic*>` — the body ALWAYS
+                    // re-emits with the null tail (`return null;`), and
+                    // anonymously: a `=> r` produce in a body the dynamic
+                    // Func carries keeps the anonymous-object spelling.
                     var fn_buf: std.ArrayList(u8) = .empty;
                     defer fn_buf.deinit(self.allocator);
                     const saved = self.buf;
                     self.buf = &fn_buf;
-                    try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", .null_t);
+                    {
+                        const saved_io = self.impl_out;
+                        defer self.impl_out = saved_io;
+                        self.impl_out = .dynamic;
+                        try self.emitArmBodyBlock(continuations, b.name, b, param, "      ", .null_t);
+                    }
                     self.buf = saved;
                     try self.write(fn_buf.items);
                     self.buf = init_buf;
@@ -3730,7 +3865,7 @@ const Emitter = struct {
             try self.writeFmt("    public {s} ", .{ret});
             try self.writeBinding(b.name);
             try self.write("(");
-            if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, b), param });
+            if (!armIsPayloadless(b)) try self.writeFmt("{s} {s}", .{ try armParamCsType(self.allocator, ev_name, b, true), param });
             try self.write(") ");
             try self.write(rewritten);
             try self.write("\n");
@@ -4077,10 +4212,11 @@ const Emitter = struct {
     /// The payload passed to an arm fire, in C# spelling:
     ///   payloadless arm → nothing (`ask()`)
     ///   identity / wildcard payload → the single arg's value (`each(i * i)`)
-    ///   named-field payload → the tuple literal (`(tx: v, n: v)`) the arm's
-    ///     signature declares — a single unnamed arg IS the record already and
-    ///     passes bare; the optional-resuming Func surface keeps `new { … }`
-    ///     (a boxed tuple's element names erase under `dynamic`).
+    ///   named-field payload → `new <arm>_payload { f = v, … }` — the
+    ///     generated struct the arm's signature declares. The struct is
+    ///     nested in the firing tor's event class, resolved through
+    ///     impl_event and spelled qualified so the reference is legal at
+    ///     either scope the fire text can land in.
     fn emitArmFirePayload(self: *Emitter, arm: *const ast.Branch, inv: *const ast.Invocation) CsEmitError!void {
         if (arm.payload.fields.len == 0 and !arm.payload.is_wildcard) return;
 
@@ -4091,24 +4227,52 @@ const Emitter = struct {
             return;
         }
 
-        if (!optionalResumingArm(arm) and arm.payload.fields.len >= 2) {
+        if (payloadIsRecord(arm)) {
+            var evb: [256]u8 = undefined;
+            const ev_name: []const u8 = if (self.impl_event) |ie|
+                self.eventClassName(&evb, ie)
+            else
+                "";
+            const ptype = try payloadStructRef(self.allocator, ev_name, arm.name, ev_name.len > 0);
+            defer self.allocator.free(ptype);
+            // A single POSITIONAL arg is the whole record — `token({k: v})`.
+            // A braced literal spells the struct's member-init directly; a
+            // named value (a tuple-typed local, the old record spelling)
+            // converts field-by-field — C# tuples keep element names, so
+            // `rec.kind` reads straight off it.
             if (inv.args.len == 1 and inv.args[0].name.len == 0) {
-                try self.writeCsExpr(inv.args[0].value);
+                const v = std.mem.trim(u8, inv.args[0].value, " \t\r\n");
+                if (v.len > 0 and v[0] == '{') {
+                    try self.writeRecordPayloadInit(arm.name, v);
+                    return;
+                }
+                try self.writeFmt("new {s} {{ ", .{ptype});
+                for (arm.payload.fields, 0..) |f, i| {
+                    if (i > 0) try self.write(", ");
+                    try self.writeBinding(f.name);
+                    try self.write(" = (");
+                    try self.writeCsExpr(v);
+                    try self.write(").");
+                    try self.writeBinding(f.name);
+                }
+                try self.write(" }");
                 return;
             }
-            try self.write("(");
-            for (arm.payload.fields, 0..) |f, i| {
-                if (i > 0) try self.write(", ");
-                try self.writeBinding(f.name);
-                try self.write(": ");
+            try self.writeFmt("new {s} {{ ", .{ptype});
+            var wrote = false;
+            for (arm.payload.fields) |f| {
                 const arg = findArgForField(inv.args, f.name);
+                if (wrote) try self.write(", ");
+                try self.writeBinding(f.name);
+                try self.write(" = ");
                 if (arg) |a| {
                     try self.writeCsExpr(a.value);
                 } else {
                     try self.writeFmt("default({s})", .{csType(f.type)});
                 }
+                wrote = true;
             }
-            try self.write(")");
+            try self.write(" }");
             return;
         }
 
@@ -4130,13 +4294,79 @@ const Emitter = struct {
 /// carrying `tag` plus one field per terminal branch.
 const ImplOut = union(enum) {
     dynamic,
-    tagged, // `=> b` → `new Output { tag = "b", … }` (Output resolves inside the event class)
+    /// `=> b` → `new <env> { tag = "b", … }`. The envelope name is the
+    /// whole point: `"Output"` inside an event class, the qualified
+    /// `"<ev>_event.<arm>_resume"` inside arm bodies (ops structs and
+    /// lambdas live at main_module scope, outside the class).
+    tagged: []const u8,
     bare: []const u8, // `-> expr` → `return (<T>)(<expr>)` — T is the C# spelling
 };
 
 // The Koru→C# type spelling lives in codegen_utils — shared with the
 // `@as` builtin lowering so the two sites can never drift on it.
 const csType = codegen_utils.csType;
+
+/// The declared C# type of an Input field. `Expression` params transport
+/// the argument's SOURCE TEXT — the call site emits a string literal, so
+/// the honest member type is `string`, not the escape-hatch `dynamic`.
+/// `Source` params stay `dynamic`: the call site hands an anonymous
+/// `new { text = "…" }` record and the body members `.text` off it —
+/// exactly the late binding `dynamic` exists for.
+fn csInputFieldType(field: ast.Field) []const u8 {
+    if (field.is_expression) return "string";
+    if (field.is_source) return "dynamic";
+    return csType(field.type);
+}
+
+/// A named-record payload — one or more declared fields that are not the
+/// `__type_ref` identity marker — gets a generated `<b>_payload` struct
+/// nested in the event class. Wildcard and payloadless shapes do not.
+fn payloadIsRecord(b: *const ast.Branch) bool {
+    if (b.payload.is_wildcard or b.payload.fields.len == 0) return false;
+    return !(b.payload.fields.len == 1 and
+        std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"));
+}
+
+/// `<b>_payload` into a caller buffer — kebab/dot folded, and NOT routed
+/// through csPayloadName: the `tag`→`__ktag` escape is a MEMBER-position
+/// fix, while the struct name `tag_payload` never collides (the `_payload`
+/// suffix also escapes keywords, so no @-mangle is needed). The same
+/// spelling codegen_utils.HostShape.csMember + "_payload" produces for
+/// transform-authored text — the two must agree.
+fn payloadStructNameBuf(buf: []u8, bname: []const u8) []const u8 {
+    const lowered = Emitter.lowerIdentBuf(buf, bname);
+    const n = lowered.len;
+    @memcpy(buf[n .. n + "_payload".len], "_payload");
+    return buf[0 .. n + "_payload".len];
+}
+
+/// The payload struct's name as a REFERENCE — bare `<b>_payload` inside
+/// the event class, `<ev>_event.<b>_payload` at main_module scope.
+fn payloadStructRef(allocator: std.mem.Allocator, ev_name: []const u8, bname: []const u8, qualified: bool) CsEmitError![]const u8 {
+    var nb: [300]u8 = undefined;
+    const pname = if (bname.len + "_payload".len <= nb.len)
+        payloadStructNameBuf(&nb, bname)
+    else
+        return CsEmitError.OutOfMemory;
+    if (qualified) {
+        return std.fmt.allocPrint(allocator, "{s}_event.{s}", .{ ev_name, pname });
+    }
+    return allocator.dupe(u8, pname);
+}
+
+/// The resume-sum struct's name as a reference — same scoping rule.
+fn resumeStructRef(allocator: std.mem.Allocator, ev_name: []const u8, bname: []const u8, qualified: bool) CsEmitError![]const u8 {
+    var nb: [300]u8 = undefined;
+    const lowered = if (bname.len <= nb.len - "_resume".len) blk: {
+        const l = Emitter.lowerIdentBuf(&nb, bname);
+        @memcpy(nb[l.len .. l.len + "_resume".len], "_resume");
+        break :blk nb[0 .. l.len + "_resume".len];
+    } else return CsEmitError.OutOfMemory;
+    if (qualified) {
+        return std.fmt.allocPrint(allocator, "{s}_event.{s}", .{ ev_name, lowered });
+    }
+    return allocator.dupe(u8, lowered);
+}
 
 /// An arm whose ABSENCE is observable — `! ?ask -> T`. It alone keeps the
 /// nullable-Func surface: `ask != null` in impl text is the presence read,
@@ -4148,61 +4378,50 @@ fn optionalResumingArm(b: *const ast.Branch) bool {
 }
 
 /// The C# return type of an arm's METHOD. `-> T` → T's spelling, a resume
-/// sum → dynamic (the arm-tag object), void otherwise. A produce inside a
-/// void arm is refused by the C# compiler — the same refusal zig's
-/// `fn tick() void` hands a `return .{ .done = … }`.
-fn armReturnCsType(b: *const ast.Branch) []const u8 {
-    if (b.resume_arms != null) return "dynamic";
+/// sum → the generated `<b>_resume` struct (the arm-tag object made
+/// nominal), void otherwise. A produce inside a void arm is refused by the
+/// C# compiler — the same refusal zig's `fn tick() void` hands a
+/// `return .{ .done = … }`. `qualified` picks the reference spelling:
+/// bare inside the event class, `<ev>_event.`-prefixed outside.
+fn armReturnCsType(allocator: std.mem.Allocator, ev_name: []const u8, b: *const ast.Branch, qualified: bool) CsEmitError![]const u8 {
+    if (b.resume_arms != null) return try resumeStructRef(allocator, ev_name, b.name, qualified);
     if (b.resume_type) |rt| return csType(rt);
     return "void";
 }
 
-/// A named-field record payload's C# type — the named TUPLE
-/// `(dynamic tx, long n)`. C# anonymous `new { … }` types are unnameable,
-/// which is what kept these payloads on `dynamic`; the tuple is the record
-/// shape a signature CAN carry, typed members included. null for
-/// payloadless, wildcard, identity, and single-field payloads — C# has no
-/// 1-tuple.
-fn recordPayloadCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError!?[]const u8 {
-    if (b.payload.is_wildcard or b.payload.fields.len < 2) return null;
-    var buf = std.ArrayList(u8).initCapacity(allocator, 8 + b.payload.fields.len * 16) catch
-        return CsEmitError.OutOfMemory;
-    try buf.append(allocator, '(');
-    for (b.payload.fields, 0..) |f, i| {
-        if (i > 0) try buf.appendSlice(allocator, ", ");
-        try buf.appendSlice(allocator, csType(f.type));
-        try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, codegen_utils.HostShape.csMember(allocator, f.name));
-    }
-    try buf.append(allocator, ')');
-    return buf.items;
-}
-
 /// The C# parameter type of an arm's METHOD — identity payloads take the
-/// declared type; named-field payloads take the record's tuple spelling;
-/// wildcard and single-field payloads stay `dynamic`.
-fn armParamCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError![]const u8 {
+/// declared type; named-field payloads take the generated `<b>_payload`
+/// struct; wildcard stays `dynamic` (its members cannot be named).
+/// `qualified` picks the reference spelling — see armReturnCsType.
+fn armParamCsType(allocator: std.mem.Allocator, ev_name: []const u8, b: *const ast.Branch, qualified: bool) CsEmitError![]const u8 {
     if (b.payload.fields.len == 1 and
         std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
     {
         return csType(b.payload.fields[0].type);
     }
-    if (try recordPayloadCsType(allocator, b)) |t| return t;
+    if (payloadIsRecord(b)) return try payloadStructRef(allocator, ev_name, b.name, qualified);
     return "dynamic";
 }
 
 /// The C# type of a terminal branch's payload member in `Output`. `| done
 /// i64` is an identity payload — one `__type_ref` field — so `done` is
-/// `long`; a record payload spells the same tuple an arm param does; a
-/// wildcard stays `dynamic`.
+/// `long`; a record payload is the generated `<b>_payload` struct; a
+/// wildcard stays `dynamic` (its members cannot be named); a payloadless
+/// branch's member is `object` — it exists so `result.b` reads compile,
+/// and storage is all it needs.
 fn branchPayloadCsType(allocator: std.mem.Allocator, b: *const ast.Branch) CsEmitError![]const u8 {
     if (b.payload.fields.len == 1 and
         std.mem.eql(u8, b.payload.fields[0].name, "__type_ref"))
     {
         return csType(b.payload.fields[0].type);
     }
-    if (try recordPayloadCsType(allocator, b)) |t| return t;
-    return "dynamic";
+    if (payloadIsRecord(b)) {
+        var nb: [256]u8 = undefined;
+        const lowered = if (b.name.len <= nb.len) Emitter.lowerIdentBuf(&nb, b.name) else b.name;
+        return std.fmt.allocPrint(allocator, "{s}_payload", .{lowered});
+    }
+    if (b.payload.is_wildcard) return "dynamic";
+    return "object";
 }
 
 /// Find the tor's branch decl for `name` — the fire-signature decl a

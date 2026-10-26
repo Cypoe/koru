@@ -3829,8 +3829,10 @@ pub const AutoDischargeInserter = struct {
             .branch = try self.allocator.dupe(u8, original.branch),
             .binding = if (original.binding) |b| try self.allocator.dupe(u8, b) else null,
             .destructure = try ast.copyDestructure(self.allocator, original.destructure),
+            .produce = try ast.copyDestructure(self.allocator, original.produce),
             .binding_annotations = original.binding_annotations,
             .condition = if (original.condition) |c| try self.allocator.dupe(u8, c) else null,
+            .post_condition = if (original.post_condition) |c| try self.allocator.dupe(u8, c) else null,
             .node = .{ .invocation = disposal_invocation },
             .indent = original.indent,
             .continuations = continuations,
@@ -3855,8 +3857,10 @@ pub const AutoDischargeInserter = struct {
             .branch = try self.allocator.dupe(u8, target.branch),
             .binding = if (target.binding) |b| try self.allocator.dupe(u8, b) else null,
             .destructure = try ast.copyDestructure(self.allocator, target.destructure),
+            .produce = try ast.copyDestructure(self.allocator, target.produce),
             .binding_annotations = target.binding_annotations,
             .condition = if (target.condition) |c| try self.allocator.dupe(u8, c) else null,
+            .post_condition = if (target.post_condition) |c| try self.allocator.dupe(u8, c) else null,
             .node = target.node,
             .indent = target.indent,
             .continuations = new_conts,
@@ -3987,6 +3991,8 @@ pub const AutoDischargeInserter = struct {
                 .binding = if (original.binding) |b| try self.allocator.dupe(u8, b) else null,
                 .binding_annotations = original.binding_annotations,
                 .condition = if (original.condition) |c| try self.allocator.dupe(u8, c) else null,
+                .post_condition = if (original.post_condition) |c| try self.allocator.dupe(u8, c) else null,
+                .produce = try ast.copyDestructure(self.allocator, original.produce),
                 .node = original.node, // Keep original invocation!
                 .indent = original.indent,
                 .continuations = new_continuations,
@@ -4384,6 +4390,7 @@ pub const AutoDischargeInserter = struct {
                 .name = try self.allocator.dupe(u8, branch.name),
                 .body = new_body,
                 .binding = if (branch.binding) |b| try self.allocator.dupe(u8, b) else null,
+                .produce = try ast.copyDestructure(self.allocator, branch.produce),
                 .is_optional = branch.is_optional,
                 .annotations = cloned_anns,
                 .marks = cloned_marks,
@@ -5031,6 +5038,35 @@ pub const AutoDischargeInserter = struct {
                     if (arms_changed) {
                         if (try self.refreshInlineBody(&inv, out[i].continuations, cont.location, all_items, impl_event)) |new_inv| {
                             out[i].node = .{ .invocation = new_inv };
+                        }
+                    } else {
+                        // [parallel] bodies bake `__cells`/`__env` at
+                        // process-template-procs, which runs BEFORE the
+                        // .main-stage transforms (capture's captured{} →
+                        // .assignment dissolution) — and nothing downstream
+                        // re-renders unless the arm list changed. Re-render
+                        // once so the partitioner sees the dissolved writes
+                        // (400_224). The `@par-rerendered` mark keeps this
+                        // out of the fixpoint — a second pass would re-render
+                        // forever (__site differs) and exhaust the budget.
+                        var is_parallel = false;
+                        for (inv.annotations) |ann| {
+                            if (std.mem.eql(u8, ann, "parallel")) is_parallel = true;
+                        }
+                        var already = false;
+                        for (inv.marks) |m| {
+                            if (std.mem.eql(u8, m, "@par-rerendered")) already = true;
+                        }
+                        if (is_parallel and !already) {
+                            if (try self.refreshInlineBody(&inv, out[i].continuations, cont.location, all_items, impl_event)) |new_inv| {
+                                var stamped = new_inv;
+                                const grown = try self.allocator.alloc([]const u8, stamped.marks.len + 1);
+                                @memcpy(grown[0..stamped.marks.len], stamped.marks);
+                                grown[stamped.marks.len] = "@par-rerendered";
+                                stamped.marks = grown;
+                                out[i].node = .{ .invocation = stamped };
+                                changed = true;
+                            }
                         }
                     }
                 },

@@ -13,9 +13,9 @@
 // - Tors are the interface (SEMANTIC level)
 // - Zig threading is hidden in procs (TECHNICAL level)
 // - Progressive disclosure allows simple AND powerful usage
-//
 // Inspired by test 2005_multi_consumer_async
-// ============================================================================
+// STATUS: DUBIOUS (ruled 2026-10-23) — threads-as-values is a design faux-pas;
+// kept as possible internal plumbing for a future parallel scope surface.
 
 const std = @import("std");
 

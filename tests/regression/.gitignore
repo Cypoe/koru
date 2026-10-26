@@ -62,6 +62,10 @@
 !**/banner.txt
 !**/hello.txt
 
+# Keep bundle fixtures — .icns is the app-icon input the bundle tests carry
+# (908_); binary, but the test IS the bytes it packages.
+!**/*.icns
+
 # Keep suite profiles — named test selections, one glob per line
 !profiles/*.txt
 
@@ -110,3 +114,13 @@
 # `vendored/` so the blanket `*.zig` artifact ignore above still holds elsewhere.
 !**/vendored/**
 !**/vendor.lock
+
+# Keep mounted-scope module sources (440_056 and successors). A `module/` dir
+# is the checked-in .dylib source the test compiles and mounts at runtime —
+# the fixture, not emitted output. Scoped to `module/` for the same reason
+# `vendored/` is.
+!**/module/*.zig
+
+# Generated .app bundles (must come last — !*/ above would otherwise
+# un-ignore the directory and let git descend into it)
+*.app

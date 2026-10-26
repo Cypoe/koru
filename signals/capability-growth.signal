@@ -1,0 +1,6 @@
+name: capability-growth
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `capability-added` — declare that name. (orphan drained by the commit that minted it)

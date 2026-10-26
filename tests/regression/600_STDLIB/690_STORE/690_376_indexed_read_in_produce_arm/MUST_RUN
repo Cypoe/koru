@@ -1,0 +1,4 @@
+A produce arm must not be where an indexed read goes to die: the walk
+either lowers `arena[h].item` here or the test compiles to a backend
+error that names `arena` undeclared. Running proves the host call got a
+row value, not raw source text.

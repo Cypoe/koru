@@ -1,0 +1,2 @@
+spawned room-42
+drained 1 cell(s)

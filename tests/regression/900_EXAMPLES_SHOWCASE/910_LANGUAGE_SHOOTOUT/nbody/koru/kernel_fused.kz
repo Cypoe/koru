@@ -69,7 +69,7 @@ var iterations: usize = 50000000;
     ! as acc |> for(0..5)
         ! each i |> captured { energy: acc.energy + 0.5*c[i].mass*(c[i].vx*c[i].vx+c[i].vy*c[i].vy+c[i].vz*c[i].vz) }
             |> for(i+1..5)
-                ! each j |> captured { energy: acc.energy - c[i].mass*c[j].mass / @sqrt((c[i].x-c[j].x)*(c[i].x-c[j].x)+(c[i].y-c[j].y)*(c[i].y-c[j].y)+(c[i].z-c[j].z)*(c[i].z-c[j].z)) }
+                ! each j |> captured { energy: acc.energy - c[i].mass*c[j].mass / @sqrt((c[i].x - c[j].x)*(c[i].x - c[j].x)+(c[i].y - c[j].y)*(c[i].y - c[j].y)+(c[i].z - c[j].z)*(c[i].z - c[j].z)) }
     | captured final |> std/io:print.blk {
             {{ final.energy:d:.9 }}
         }

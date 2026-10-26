@@ -295,39 +295,6 @@ const CODEGEN_INLINE_PREFIX = "__koru_inline_";
 var splice_frame_codes: [64][]const u8 = undefined;
 var splice_frame_depth: usize = 0;
 
-/// Identifier-boundary token scan — port of emitter_helpers.containsToken
-/// (private there): skips strings, chars, and line comments.
-fn containsTokenLocal(body: []const u8, token: []const u8) bool {
-    var i: usize = 0;
-    var q: u8 = 0;
-    while (i < body.len) : (i += 1) {
-        const c = body[i];
-        if (q != 0) {
-            if (c == '\\') {
-                i += 1;
-            } else if (c == q) {
-                q = 0;
-            }
-            continue;
-        }
-        if (c == '"' or c == '\'') {
-            q = c;
-            continue;
-        }
-        if (c == '/' and i + 1 < body.len and body[i + 1] == '/') {
-            while (i < body.len and body[i] != '\n') i += 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, body[i..], token)) {
-            const before_ok = i == 0 or !(std.ascii.isAlphanumeric(body[i - 1]) or body[i - 1] == '_' or body[i - 1] == '.');
-            const after = i + token.len;
-            const after_ok = after >= body.len or !(std.ascii.isAlphanumeric(body[after]) or body[after] == '_');
-            if (before_ok and after_ok) return true;
-        }
-    }
-    return false;
-}
-
 /// Token-boundary replace of `from` with `to` — for renaming a spliced
 /// effect binding that would shadow a producer-scope local.
 fn replaceIdent(allocator: std.mem.Allocator, body: []const u8, from: []const u8, to: []const u8) ![]const u8 {
@@ -373,8 +340,8 @@ fn replaceIdent(allocator: std.mem.Allocator, body: []const u8, from: []const u8
     return buf.toOwnedSlice(allocator) catch unreachable;
 }
 
-/// `const <name> = <prefix>.<name>; _ = &<name>;` per leaf — the string-side
-/// port of emitDestructureConsts for the `! each {a, b}` binding shape.
+/// `const <local> = <prefix>.<path>; _ = &<local>;` per bound name — the
+/// string-side port of emitDestructureConsts for the `! each {a, b}` shape.
 fn appendDestructureConsts(
     buf: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -383,20 +350,16 @@ fn appendDestructureConsts(
 ) !void {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, "_")) continue;
-        if (f.sub.len > 0) {
-            var path_buf: [256]u8 = undefined;
-            const sub_prefix = std.fmt.bufPrint(&path_buf, "{s}.{s}", .{ prefix, f.name }) catch {
-                @panic("destructure path too long");
-            };
-            try appendDestructureConsts(buf, allocator, f.sub, sub_prefix);
-            continue;
-        }
         try buf.appendSlice(allocator, "const ");
         try codegen_utils.appendBranchName(buf, allocator, f.name);
+        if (f.type_text) |t| {
+            try buf.appendSlice(allocator, ": ");
+            try buf.appendSlice(allocator, t);
+        }
         try buf.appendSlice(allocator, " = ");
         try buf.appendSlice(allocator, prefix);
         try buf.appendSlice(allocator, ".");
-        try codegen_utils.appendBranchName(buf, allocator, f.name);
+        try buf.appendSlice(allocator, f.path);
         try buf.appendSlice(allocator, "; _ = &");
         try codegen_utils.appendBranchName(buf, allocator, f.name);
         try buf.appendSlice(allocator, "; ");
@@ -536,9 +499,9 @@ fn resolveInlineMarkers(
             // The binding lands inside every enclosing splice frame still on
             // the stack — a name that occurs as a token in ANY of them would
             // be shadowed, not just one in the immediate producer's text.
-            const producer_shadow = containsTokenLocal(code, binding) or blk: {
+            const producer_shadow = codegen_utils.containsToken(code, binding) or blk: {
                 for (splice_frame_codes[0..splice_frame_depth]) |frame| {
-                    if (containsTokenLocal(frame, binding)) break :blk true;
+                    if (codegen_utils.containsToken(frame, binding)) break :blk true;
                 }
                 break :blk false;
             };

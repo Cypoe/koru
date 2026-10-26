@@ -7,3 +7,19 @@ marker when the pin is promotable.
 The `%` half of this shape landed 2026-09-17 (010_063 and 320_144/145/146
 pin it); `/` still needs the operand type, so it is the ruling in
 NEEDS_RULING that is outstanding, not the mechanism.
+
+
+---
+
+RULED 2026-10-24, under the host-leak doctrine (frag-the-host-is-an-emission-detail,
+challenge 029): Koru owns `/`. A raw Zig error reaching the user is a host
+leak; the surface semantic is the language's to own.
+
+- Signed integer `/` lowers to `@divTrunc` — matching comptime_eval's
+  "C-parity choice" already in the tree. The comptime-vs-runtime
+  disagreement closes in comptime's favor; refusing would have inverted it.
+- Float `/` stays `/` — exact division, no change.
+
+Owed: the type oracle at the emit site (the NEEDS_RULING's named work) —
+the emitter must know signed-int vs float to pick the lowering. This pin
+flips green when that lands; the semantic is decided.

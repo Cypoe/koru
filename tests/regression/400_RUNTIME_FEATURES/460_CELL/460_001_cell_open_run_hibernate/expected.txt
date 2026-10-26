@@ -1,2 +1,2 @@
-cell said: r1
+cell said: {"branch":"","value":"assistant"}
 assistant hibernated

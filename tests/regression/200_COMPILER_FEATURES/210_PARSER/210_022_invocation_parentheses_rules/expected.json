@@ -9,7 +9,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -18,7 +18,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 1,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -27,7 +27,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 3,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -46,7 +46,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 4,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -66,7 +66,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 5,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -75,7 +75,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 7,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -87,7 +87,7 @@
                 "fields": [
                     {
                         "name": "source",
-                        "type": "Source<HTML>",
+                        "type": "Source",
                         "is_source": true,
                         "is_file": false,
                         "is_embed_file": false,
@@ -103,7 +103,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 8,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -119,14 +119,14 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                                 "line": 12,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
 
                                 ]
                             },
-                            "phantom_type": null
+                            "phantom_type": "HTML"
                         }
                     }
                 ],
@@ -140,7 +140,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 9,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -149,7 +149,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 13,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -171,7 +171,7 @@
                     },
                     {
                         "name": "source",
-                        "type": "Source<HTML>",
+                        "type": "Source",
                         "is_source": true,
                         "is_file": false,
                         "is_embed_file": false,
@@ -187,7 +187,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 14,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -207,14 +207,14 @@
                             "location": {
                                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                                 "line": 18,
-                                "col": 0
+                                "col": 1
                             },
                             "scope": {
                                 "bindings": [
 
                                 ]
                             },
-                            "phantom_type": null
+                            "phantom_type": "HTML"
                         }
                     }
                 ],
@@ -228,7 +228,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 15,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -237,7 +237,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 19,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -256,7 +256,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 20,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -275,7 +275,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 21,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -298,7 +298,7 @@
                     "location": {
                         "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                         "line": 22,
-                        "col": 0
+                        "col": 1
                     },
                     "step":                     {
                         "type": "invocation",
@@ -320,7 +320,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 22,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -329,7 +329,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 24,
-                "col": 0
+                "col": 1
             }
         },
         {
@@ -338,7 +338,7 @@
             "location": {
                 "file": "tests/regression/200_COMPILER_FEATURES/210_PARSER/210_022_invocation_parentheses_rules/input.kz",
                 "line": 25,
-                "col": 0
+                "col": 1
             }
         }
     ]
