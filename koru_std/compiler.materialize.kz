@@ -1,9 +1,8 @@
 // Compiler target routing + artifact materialization
 //
 // target-of reads the compile target (--lang / CompilerEnv.lang) and
-// selects the matching emission arm; emit-js / emit-cs are the non-zig
-// target emitters; the emit-*-artifact chains spell what emission does
-// with the code string once it exists — write the artifact, validate
+// selects the matching emission arm; the emit-*-artifact chains spell
+// what emission does with the code string — write the artifact, validate
 // it, invoke the host toolchain. Ordinary tors in the pipeline: a user
 // emission override can drop, reorder, or interpose on any of them.
 // Emit-only pipelines and custom Stage-D verbs are user-space
@@ -15,7 +14,7 @@
 ~pub tor emit-zig-artifact { ctx: CompilerContext, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
 
 ~emit-zig-artifact = emit-zig(ctx): e
-|> write-artifact(e.ctx, e.code, name: "output_emitted.zig", dir): w
+|> write-artifact(e.ctx, e.code, name: e.artifact, dir): w
 |> std/compiler:has-flag(flag: "deep-check"): h
 |> std/compiler:branch(cond: h)
 | yes |> validate-emitted(w.ctx, w.code): v -> v
@@ -24,12 +23,12 @@
 ~pub tor emit-js-artifact { ctx: CompilerContext, dir: ?string } -> { ctx: CompilerContext, code: string }
 
 ~emit-js-artifact = emit-js(ctx): e
-|> write-artifact(e.ctx, e.code, name: "output_emitted.js", dir): w -> w
+|> write-artifact(e.ctx, e.code, name: e.artifact, dir): w -> w
 
 ~pub tor emit-cs-artifact { ctx: CompilerContext, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
 
 ~emit-cs-artifact = emit-cs(ctx): e
-|> write-artifact(e.ctx, e.code, name: "output_emitted.cs", dir): w
+|> write-artifact(e.ctx, e.code, name: e.artifact, dir): w
 |> host-build-cs(w.ctx, w.code, output, dir): v -> v
 
 // The C lane's artifact chain — std/emit:emit-c walks; ccomp is the regression-invoked oracle, not koruc.
@@ -110,27 +109,22 @@
 | c
 | other
 
+// Every arm answers its catalog claim — absent catalog is advisory; a
+// missing row on a loaded catalog is drift (the arm still wins).
 ~proc target-of|zig {
     const emit_walk = @import("emit_walk");
-    if (std.mem.eql(u8, CompilerEnv.lang, "js")) return .{ .js = .{} };
-    if (std.mem.eql(u8, CompilerEnv.lang, "cs")) return .{ .cs = .{} };
-    if (std.mem.eql(u8, CompilerEnv.lang, "c")) {
-        // The `c` arm answers a catalog claim — absent catalog is
-        // advisory; a missing row on a loaded catalog is drift (arm wins).
-        if (emit_walk.targetDeclared(ctx.allocator, "c")) |declared| {
-            if (!declared) @import("codegen_utils").driftLog("std/target drift: --lang=c routed without a target(c) row (arm wins)", .{});
-        }
-        return .{ .c = .{} };
-    }
-    if (std.mem.eql(u8, CompilerEnv.lang, "zig")) return .{ .zig = .{} };
+    if (std.mem.eql(u8, CompilerEnv.lang, "js")) { emit_walk.auditTargetArm(ctx.allocator, "js"); return .{ .js = .{} }; }
+    if (std.mem.eql(u8, CompilerEnv.lang, "cs")) { emit_walk.auditTargetArm(ctx.allocator, "cs"); return .{ .cs = .{} }; }
+    if (std.mem.eql(u8, CompilerEnv.lang, "c")) { emit_walk.auditTargetArm(ctx.allocator, "c"); return .{ .c = .{} }; }
+    if (std.mem.eql(u8, CompilerEnv.lang, "zig")) { emit_walk.auditTargetArm(ctx.allocator, "zig"); return .{ .zig = .{} }; }
     return .{ .other = .{} };
 }
 
 // JS code emission tor - selected by target-of under --lang=js
-~pub tor emit-js { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
+~pub tor emit-js { ctx: CompilerContext } -> { ctx: CompilerContext, code: string, artifact: string }
 
 // C# code emission tor - selected by target-of under --lang=cs
-~pub tor emit-cs { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
+~pub tor emit-cs { ctx: CompilerContext } -> { ctx: CompilerContext, code: string, artifact: string }
 
 // Implementation of JS code emission — selected by the target-of arm under
 // --lang=js. Emits runnable JS for the event-pump subset. CompilerEnv is
@@ -150,11 +144,12 @@
         std.debug.print("error[KORU047]: JS emission failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
+    const artifact = @import("emit_walk").targetField(ctx.allocator, "js", "artifact") orelse "output_emitted.js";
 
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";
-    return .{ .ctx = updated_ctx, .code = js_code };
+    return .{ .ctx = updated_ctx, .code = js_code, .artifact = artifact };
 }
 
 // Implementation of C# emission — same fail-loud contract as the JS
@@ -166,9 +161,10 @@
         std.debug.print("error[KORU047]: CS emission failed: {s}\n", .{@errorName(err)});
         std.process.exit(1);
     };
+    const artifact = @import("emit_walk").targetField(ctx.allocator, "cs", "artifact") orelse "output_emitted.cs";
 
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";
-    return .{ .ctx = updated_ctx, .code = cs_code };
+    return .{ .ctx = updated_ctx, .code = cs_code, .artifact = artifact };
 }

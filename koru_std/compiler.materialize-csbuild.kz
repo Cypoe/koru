@@ -4,12 +4,7 @@
 // artifact at the -o path. Ordinary pipeline tor — swappable by a user
 // emission override like every other materialization step.
 // ============================================================
-
-// Stage D for the C# target: a minimal csproj IS the driver — dotnet has no
-// file-based run, so the apphost lands at exactly the path koruc was asked
-// for via AssemblyName. `koruc lib` flips OutputType to Library — the
-// artifact is a callable .dll (ASP.NET-loadable), not an apphost.
-~pub tor host-build-cs { ctx: CompilerContext, code: string, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
+~pub tor host-build-cs { ctx: CompilerContext, code: string, output: ?string, dir: ?string, name: ?string } -> { ctx: CompilerContext, code: string }
 
 ~proc host-build-cs|zig {
     const emitter_helpers = @import("emitter_helpers");
@@ -19,7 +14,8 @@
     var buf: [512]u8 = undefined;
 
     const output_exe = if (output) |o| allocator.dupe(u8, o) catch unreachable else emitter_helpers.outputExeName(allocator);
-    const cs_src = if (dir) |d| std.fs.path.join(allocator, &.{ d, "output_emitted.cs" }) catch unreachable else "output_emitted.cs";
+    const cs_name = name orelse @import("emit_walk").targetField(allocator, "cs", "artifact") orelse "output_emitted.cs";
+    const cs_src = if (dir) |d| std.fs.path.join(allocator, &.{ d, cs_name }) catch unreachable else cs_name;
     const cs_out_dir = std.fs.path.dirname(output_exe) orelse ".";
     // `koruc lib MyLib.dll` must not produce MyLib.dll.dll — the assembly
     // name is the stem, the extension is the toolchain's to add.

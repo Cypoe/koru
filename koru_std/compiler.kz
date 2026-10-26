@@ -1542,7 +1542,7 @@ const emitFlowWithMocks = struct {
 | failed string
 
 // Zig code emission tor - the final step of compilation!
-~pub tor emit-zig { ctx: CompilerContext } -> { ctx: CompilerContext, code: string }
+~pub tor emit-zig { ctx: CompilerContext } -> { ctx: CompilerContext, code: string, artifact: string }
 
 // Comptime evaluation pass - executes tors with Program/Source parameters
 ~pub tor evaluate-comptime { ctx: CompilerContext } -> CompilerContext
@@ -1679,11 +1679,12 @@ const emitFlowWithMocks = struct {
 
     // Get the emitted code
     const visitor_code = code_emitter.getOutput();
+    const artifact = @import("emit_walk").targetField(ctx.allocator, "zig", "artifact") orelse "output_emitted.zig";
 
     var updated_ctx = ctx;
     updated_ctx.passes_completed += 1;
     updated_ctx.current_pass = "emission";
-    return .{ .ctx = updated_ctx, .code = visitor_code };
+    return .{ .ctx = updated_ctx, .code = visitor_code, .artifact = artifact };
 }
 
 // Parser service implementation - wraps the Koru parser for comptime use

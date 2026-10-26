@@ -862,3 +862,13 @@ pub fn targetDeclared(allocator: std.mem.Allocator, target: []const u8) ?bool {
     const t = targetFields(allocator, target) orelse return null;
     return t.count() > 0;
 }
+
+/// Route-time audit for one arm: an emission arm answers a catalog claim.
+/// Absent catalog is advisory (silent); a missing row on a loaded catalog
+/// is drift — logged while the arm still wins, matching the dual-answer
+/// phasing before the catalog becomes sole source.
+pub fn auditTargetArm(allocator: std.mem.Allocator, lang: []const u8) void {
+    if (targetDeclared(allocator, lang)) |declared| {
+        if (!declared) codegen_utils.driftLog("std/target drift: --lang={s} routed without a target({s}) row (arm wins)", .{ lang, lang });
+    }
+}

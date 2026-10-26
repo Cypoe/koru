@@ -14,7 +14,7 @@
 // artifact at the -o name. Failures exit non-zero — the compile's verdict
 // IS the build's verdict. `output` overrides the -o argv name; `dir` is
 // where write-artifact staged output_emitted.zig.
-~pub tor host-build-zig { ctx: CompilerContext, code: string, output: ?string, dir: ?string } -> { ctx: CompilerContext, code: string }
+~pub tor host-build-zig { ctx: CompilerContext, code: string, output: ?string, dir: ?string, name: ?string } -> { ctx: CompilerContext, code: string }
 
 ~proc host-build-zig|zig {
     const emitter_helpers = @import("emitter_helpers");
@@ -24,7 +24,8 @@
     var buf: [512]u8 = undefined;
 
     const output_exe = if (output) |o| allocator.dupe(u8, o) catch unreachable else emitter_helpers.outputExeName(allocator);
-    const emitted_src = if (dir) |d| std.fs.path.join(allocator, &.{ d, "output_emitted.zig" }) catch unreachable else "output_emitted.zig";
+    const emitted_name = name orelse @import("emit_walk").targetField(allocator, "zig", "artifact") orelse "output_emitted.zig";
+    const emitted_src = if (dir) |d| std.fs.path.join(allocator, &.{ d, emitted_name }) catch unreachable else emitted_name;
 
     // Cross target: build:config, then KORU_BACKEND_TARGET for hosts
     // whose glibc predates zig's native baseline — declared wins.

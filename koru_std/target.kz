@@ -101,11 +101,10 @@ pub const Catalog = struct {
 // (drift prints, the emitter wins) until the corpus proves the rows, at
 // which point the flip rung makes the catalog the sole source.
 
-~std/target:target(c) {
-    "facet": ".kc",
-    "artifact": "output_emitted.c",
-    "toolchain": "ccomp -fstruct-passing"
-}
+~std/target:target(c) { "facet": ".kc", "artifact": "output_emitted.c", "toolchain": "ccomp -fstruct-passing" }
+~std/target:target(zig) { "artifact": "output_emitted.zig", "toolchain": "zig build" }
+~std/target:target(js) { "facet": ".kjs", "artifact": "output_emitted.js", "toolchain": "node" }
+~std/target:target(cs) { "facet": ".kcs", "artifact": "output_emitted.cs", "toolchain": "dotnet build" }
 
 // The flat spelling table — codegen_utils.cTypeOf verbatim. Constructive
 // spellings (`*X`, `[]T`, `{...}` records, proto `struct Name`) are rule
