@@ -528,7 +528,10 @@ against the emitter's own claim.
 
 Subset — anything else is `none` (loud refusal, never a guess):
 `main` is a flat sequence of `koru_flow_N();` calls ending in
-`return …`; each `static void koru_flow_N(void) {…}` body is a flat
+`return …`, plus the lane's named runtime prologue
+(`__koru_argc = argc`, `__koru_argv = argv` — stdout-free statics,
+skipped; any other statement refuses); each `static void
+koru_flow_N(void) {…}` body is a flat
 statement list of `__koru_stdout_write("…")` /
 `__koru_stdout_write_i64(⟨int⟩)`; claim count must equal the call
 count and they zip in order. A `;` inside a C string literal breaks
@@ -586,7 +589,9 @@ def cBodyWrites (body : String) : Option String :=
 
 /-- `main`'s ordered `koru_flow_N()` calls — the execution order the
 claims must zip against. Subset is a flat statement list; `return …`
-terminates. -/
+terminates; the emitter's named runtime prologue (the `__koru_argc`/
+`__koru_argv` bindings — stdout-free statics) is skipped by exact
+match, so a prologue that changes shape refuses loudly. -/
 def cMainCalls (src : String) : Option (List String) :=
   match src.splitOn "int main" with
   | [_, rest] =>
@@ -598,6 +603,7 @@ def cMainCalls (src : String) : Option (List String) :=
                 let s := st.trimAscii.copy
                 if s.isEmpty then some none
                 else if s.startsWith "return" then some none
+                else if s == "__koru_argc = argc" || s == "__koru_argv = argv" then some none
                 else if s.startsWith "koru_flow_" && s.endsWith "()" then
                   some (some (s.dropEnd 2).copy)
                 else none).map (·.filterMap id)

@@ -85,3 +85,20 @@ breaks the signature, a stranger's key breaks the pin, a moved tree
 breaks the digests. Collapsing them into "signature ok" would let a
 forged-but-well-formed receipt ride a stranger's honest signature — the
 same hole as a gate that only counted what it was shown.
+
+## Evolve — the emitter's output grammar is the same drift (2026-10-27)
+
+The c-refine leg ran the pattern from the satisfier side: `66db525d9`
+grew `main`'s emitted shape (the `__koru_argc`/`__koru_argv` prologue)
+while `cMainCalls` still enumerated "flow calls and `return`" — two
+lists of what may appear in `main`, one in the lane's
+`mainPrologueText`, one in the kernel, diverged four days before anyone
+armed the leg and read the red. The check did its honest half: it
+refused `outside-subset` rather than guessing. But the repair's shape
+is the belief's point — not "make the check lenient" (a broad skip on
+`__koru_*` would let a stray stdout write in `main` ride the hole) but
+extend the enumeration *by name*: an exact-match skip on the two
+prologue statements, so a prologue that changes shape refuses loudly
+again. The emitter's grammar and the checker's subset are one
+enumeration maintained in two places; the named whitelist is how "grow
+the fence" stays distinct from "lower the fence."
