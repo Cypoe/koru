@@ -62,7 +62,6 @@
 //     coordinator must still be able to see untransformed watch bodies).
 //   - Validation happens IN the transforms (loud refusal), not the
 //     shape checker — checkers run after transforms (capture precedent).
-
 const std = @import("std");
 const ast_find = @import("ast");
 const codegen_utils_store = @import("codegen_utils");
@@ -682,6 +681,7 @@ fn storeRefsText(alloc: std.mem.Allocator, text: []const u8, name: []const u8, p
 ~part leaf
 ~part index
 ~part indexwalk
+~part oindex
 ~part idecls
 ~part qnone
 ~part qmiss

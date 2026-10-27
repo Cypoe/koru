@@ -1894,14 +1894,14 @@
         // the verbs maintain it inside their own emit. The map values are
         // handles, so swap-remove moves no entry (the moved row's handle is
         // unchanged); `take` owes only the taken row's own removal.
-        var index_col: ?[]const u8 = null;
+        var index_col: ?[]const u8 = null; var index_ordered = false;
         var index_idx: usize = 0;
         switch (StoreIndexDecls.fieldSpec(allocator, reporter, program, store_name, field_names, field_types, field_char_caps, field_owned_info)) {
             .refuse => |r| return .{ .transformed = .{ .replacement = r } },
             .indexed => |spec| {
                 pc.appendSlice(allocator, spec.field) catch unreachable;
                 index_col = spec.col;
-                index_idx = spec.idx;
+                index_idx = spec.idx; index_ordered = spec.ordered;
             },
             .none => {},
         }
@@ -2277,7 +2277,7 @@
             // `std/indexes:store` — the row is live, so it claims its key
             // (getOrPut-keep: a duplicate keeps the lower-dense holder).
             if (index_col) |icol| {
-                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, icol)) catch unreachable;
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, icol, index_ordered)) catch unreachable;
             }
             for (inserted_arms.items, 0..) |arm, ai| {
                 const head = std.fmt.allocPrint(allocator, "{s}__store_inserted_{s}_{d}_event.handler({{ ", .{ emit_ns, store_name, ai }) catch unreachable;
@@ -2367,7 +2367,7 @@
             const bump = std.fmt.allocPrint(allocator, "__koru_store_{s}.len += 1;\n", .{store_name}) catch unreachable;
             ap.appendSlice(allocator, bump) catch unreachable;
             if (index_col) |icol| {
-                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, false, store_name, icol, icol)) catch unreachable;
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, false, store_name, icol, icol, index_ordered)) catch unreachable;
             }
             for (inserted_arms.items, 0..) |arm, ai| {
                 const head = std.fmt.allocPrint(allocator, "{s}__store_inserted_{s}_{d}_event.handler(new {s}__store_inserted_{s}_{d}_event.Input {{ ", .{ emit_ns, store_name, ai, emit_ns, store_name, ai }) catch unreachable;
@@ -2475,7 +2475,7 @@
             // (getOrPut-keep: a duplicate keeps the lower-dense holder).
             if (index_col) |icol| {
                 const iec = codegen_utils_store.escapeZigIdentifier(allocator, icol) catch icol;
-                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, iec)) catch unreachable;
+                ap.appendSlice(allocator, StoreIndex.insertPut(allocator, host_is_js, store_name, icol, iec, index_ordered)) catch unreachable;
             }
             // `inserted` lifecycle interceptors fire as part of the write (the
             // store's contract), before standing query enters observe settled
@@ -2928,7 +2928,7 @@
                 // claimant), claim the new when it is now the lowest.
                 if (index_col != null and i == index_idx) {
                     const vv = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
-                    wr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, wr, vv);
+                    wr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, wr, vv, index_ordered);
                 }
                 atext.appendSlice(allocator, wr) catch unreachable;
                 for (updated_arms.items, 0..) |ua, ai| {
@@ -3146,7 +3146,7 @@
                     // bundled apply arm (an owned-containing store still
                     // writes its scalar columns through this targeted path).
                     if (index_col != null and i == index_idx) {
-                        fwr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, index_col.?, fwr, "value");
+                        fwr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, index_col.?, fwr, "value", index_ordered);
                     }
                     fatext.appendSlice(allocator, fwr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
@@ -3336,7 +3336,7 @@
                     // maintenance rides the shared col_arm verbatim.
                     if (index_col != null and i == index_idx) {
                         const ev = std.fmt.allocPrint(allocator, "value_{d}", .{i}) catch unreachable;
-                        ewr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, ewr, ev);
+                        ewr = storeIndexWriteWrap(allocator, host_is_js, store_name, index_col.?, esc_fname, ewr, ev, index_ordered);
                     }
                     ab.appendSlice(allocator, ewr) catch unreachable;
                     for (updated_arms.items, 0..) |ua, ai| {
@@ -4739,7 +4739,7 @@
             // close belongs to the row drain (emitted only under has_owned).
             const td_close: []const u8 = if (has_owned) "}\n" else "";
             const td_tail = if (index_col) |icol|
-                std.fmt.allocPrint(allocator, "{s}{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, StoreIndex.clearDrop(allocator, host_is_js, store_name, icol), store_name, if (host_is_cs) "" else "return;" }) catch unreachable
+                std.fmt.allocPrint(allocator, "{s}{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, StoreIndex.clearDrop(allocator, host_is_js, store_name, icol, index_ordered), store_name, if (host_is_cs) "" else "return;" }) catch unreachable
             else
                 std.fmt.allocPrint(allocator, "{s}__koru_store_{s}.len = 0;\n{s}", .{ td_close, store_name, if (host_is_cs) "" else "return;" }) catch unreachable;
             td.appendSlice(allocator, td_tail) catch unreachable;

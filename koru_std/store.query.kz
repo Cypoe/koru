@@ -311,10 +311,10 @@
     // One route decision serves both arms — `! first` answers the bucket's
     // lowest dense live member, `! query` walks it. Before the projection so
     // a routed site drops the guard-only columns.
-    var index_icol: []const u8 = ""; var index_rhs: ?[]const u8 = null;
-    var q_index_icol: []const u8 = ""; var q_index_rhs: ?[]const u8 = null; var q_bucket_stable = false;
+    var index_icol: []const u8 = ""; var index_rhs: ?[]const u8 = null; var index_ord = false; var index_op: CmpOp = .eq;
+    var q_index_icol: []const u8 = ""; var q_index_rhs: ?[]const u8 = null; var q_bucket_stable = false; var q_index_ord = false; var q_index_op: CmpOp = .eq;
     switch (StoreIndexWalk.planQueryRoute(allocator, program, is_first, is_view, store_name, guard_z, srf_prefix, &body_clone, row_bind)) { .scan => {},
-        .first => |r| { index_icol = r.icol; index_rhs = r.key; }, .query => |r| { q_index_icol = r.icol; q_index_rhs = r.key; q_bucket_stable = r.stable; },
+        .first => |r| { index_icol = r.icol; index_rhs = r.key; index_ord = r.ordered; index_op = r.op; }, .query => |r| { q_index_icol = r.icol; q_index_rhs = r.key; q_bucket_stable = r.stable; q_index_ord = r.ordered; q_index_op = r.op; },
         .refuse => |op| return .{ .transformed = ast.refuse(allocator, reporter, .KORU161, flow.location, flow.module, StoreIndex.MSG_unlowered_key, .{ store_name, op }) }, }
     if (index_rhs != null or q_index_rhs != null) @memcpy(used_cols, body_cols);
     const scan_guard: ?[]const u8 = if (index_rhs == null and q_index_rhs == null) guard_z else null;
@@ -697,9 +697,9 @@
         // `! first` answers the bucket's lowest dense live row — no loop,
         // no `break`. `! query` takes the bucket walk (stable or survival).
         if (index_rhs) |kr|
-            loop.appendSlice(allocator, StoreIndex.firstHead(allocator, host_is_js, cellq, store_name, index_icol, kr)) catch unreachable
+            loop.appendSlice(allocator, StoreIndex.firstHead(allocator, host_is_js, cellq, store_name, index_icol, kr, index_ord, index_op)) catch unreachable
         else if (q_index_rhs) |kr|
-            loop.appendSlice(allocator, StoreIndexWalk.memberHead(allocator, host_is_js, cellq, store_name, q_index_icol, kr, q_bucket_stable)) catch unreachable
+            loop.appendSlice(allocator, StoreIndexWalk.memberHead(allocator, host_is_js, cellq, store_name, q_index_icol, kr, q_bucket_stable, q_index_ord, q_index_op)) catch unreachable
         else if (q_may_remove) {
             // Removal-tolerant sweep: len is re-read each iteration and the
             // cursor only advances when the body left len unchanged (690_031).
@@ -714,7 +714,7 @@
         if (index_rhs != null)
             loop.appendSlice(allocator, StoreIndex.firstClose(allocator, host_is_js, none_call)) catch unreachable
         else if (q_index_rhs != null)
-            loop.appendSlice(allocator, siwMemberClose(allocator, host_is_js, cellq, store_name, q_index_icol, q_bucket_stable)) catch unreachable
+            loop.appendSlice(allocator, siwMemberClose(allocator, host_is_js, cellq, store_name, q_index_icol, q_bucket_stable, q_index_ord, q_index_op)) catch unreachable
         else if (is_first) {
             loop.appendSlice(allocator, ");\nbreak;\n}\n") catch unreachable;
             loop.appendSlice(allocator, none_call) catch unreachable;

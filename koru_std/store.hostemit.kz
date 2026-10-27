@@ -79,7 +79,7 @@ fn bulkEmit(alloc: std.mem.Allocator, prog: *const ast_find.Program, store: []co
 /// that stopped carrying it) and JOINS the new one at the end — a
 /// write that moves membership is a join for ordering purposes.
 /// `__koru_iold` is captured before the write.
-fn storeIndexWriteWrap(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8, write: []const u8, value: []const u8) []const u8 {
+fn storeIndexWriteWrap(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8, write: []const u8, value: []const u8, ordered: bool) []const u8 { if (ordered) return StoreOrderedIndex.writeWrap(alloc, store_name, icol, ecol, write, value);
     if (storeHostTarget() == .cs)
         return std.fmt.allocPrint(alloc,
             \\long __koru_iold = (long)(__koru_store_{s}.{s}[__koru_r]);
@@ -144,7 +144,7 @@ fn storeIndexWriteWrap(alloc: std.mem.Allocator, host_is_js: bool, store_name: [
 /// bucket granularity. A bucket that lost its key (cleared, or
 /// emptied by moves) ends the walk; the pointer is re-fetched
 /// because the body can rehash the map by inserting under a new key.
-fn siwMemberClose(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, stable: bool) []const u8 {
+fn siwMemberClose(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, stable: bool, ordered: bool, op: CmpOp) []const u8 { if (ordered and !stable) return StoreOrderedIndex.memberClose(alloc, cellq, store_name, icol, op);
     if (stable) return std.fmt.allocPrint(alloc, ");\n}}\n}}\n}}\n", .{}) catch unreachable;
     if (storeHostTarget() == .cs)
         return std.fmt.allocPrint(alloc, ");\nglobal::System.Collections.Generic.List<long> __koru_ib2;\nif (!{s}__koru_store_{s}.__index_{s}.TryGetValue(__koru_ik, out __koru_ib2)) break;\nif (__koru_bi < __koru_ib2.Count && __koru_ib2[__koru_bi] == __koru_bh) __koru_bi += 1;\n}}\n}}\n", .{ cellq, store_name, icol }) catch unreachable;

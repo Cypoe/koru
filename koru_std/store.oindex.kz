@@ -1,0 +1,299 @@
+// Koru Standard Library: the `oindex` part of store.kz.
+// Joined via `~part oindex` in store.kz; merged into the module at load.
+//
+// The ordered index — `std/indexes:ordered(<store>, <col>)`. Same AST-data
+// declaration slot and one-decl-per-store rule as `std/indexes:store`; the
+// difference is the backing structure: a sorted directory of
+// `{ key, members }` entries instead of a key→bucket hash map. `==` is a
+// binary search; a range guard is a bound plus a walk — one maintenance
+// path serves both, which is why the declaration is a widening, not a
+// sibling. Zig-target only at this rung; fieldSpec refuses the decl on
+// js/cs before any of this code is reached.
+// ------------------------------------------------------------------
+
+/// The comparison a routed guard names. `eq` is the only route an
+/// equality index serves; the ordered directory serves all five.
+const CmpOp = enum { eq, lt, le, gt, ge };
+
+const StoreOrderedIndex = struct {
+    /// The declaration's column AND kind — `ordered` when claimed by
+    /// `std/indexes:ordered`.
+    const DeclSpec = struct { col: []const u8, ordered: bool };
+    fn specOf(alloc: std.mem.Allocator, program: *const ast_find.Program, store_name: []const u8) ?DeclSpec {
+        const ds = StoreIndexDecls.declsOf(alloc, program, store_name);
+        if (ds.len == 0 or ds[0].column == null) return null;
+        return .{ .col = ds[0].column.?, .ordered = ds[0].ordered };
+    }
+
+    /// Whether this store's index is the ordered kind — the bulk emitter's
+    /// single question.
+    fn orderedOf(alloc: std.mem.Allocator, program: *const ast_find.Program, store_name: []const u8) bool {
+        const ds = StoreIndexDecls.declsOf(alloc, program, store_name);
+        return ds.len > 0 and ds[0].ordered;
+    }
+
+    /// Zig text of a lower/upper bound over the sorted directory — leaves
+    /// `res` = first entry index whose key is `>=`/`<` boundary for
+    /// `key_var` (lower bound) or `>` boundary (upper when `upper` set).
+    /// `res_h`/`res_m` are scratch names minted from `res`. `store_expr`
+    /// is the bare store expression (cell-qualified or `__koru_store_<s>`);
+    /// the `.__index_<icol>` suffix is appended here.
+    fn zigBound(alloc: std.mem.Allocator, store_expr: []const u8, icol: []const u8, key_var: []const u8, res: []const u8, upper: bool) []const u8 {
+        return std.fmt.allocPrint(alloc,
+            \\var {s}: usize = 0;
+            \\var {s}_h = {s}.__index_{s}.items.len;
+            \\while ({s} < {s}_h) {{
+            \\    const {s}_m = {s} + ({s}_h - {s}) / 2;
+            \\    if ({s}.__index_{s}.items[{s}_m].key <{s} {s}) {s} = {s}_m + 1 else {s}_h = {s}_m;
+            \\}}
+            \\
+        , .{ res, res, store_expr, icol, res, res, res, res, res, res, store_expr, icol, res, if (upper) "=" else "", key_var, res, res, res, res }) catch unreachable;
+    }
+
+    /// Bounds text for a routed range: `__koru_ei`/`__koru_ee` as the
+    /// [lo, hi) entry window the walk visits. `gt`/`ge` search a start,
+    /// `lt`/`le` an end — the directory's sort does the rest.
+    fn rangeBounds(alloc: std.mem.Allocator, store_expr: []const u8, icol: []const u8, key_var: []const u8, op: CmpOp) []const u8 {
+        const lo = switch (op) {
+            .gt => zigBound(alloc, store_expr, icol, key_var, "__koru_ei", true),
+            .ge => zigBound(alloc, store_expr, icol, key_var, "__koru_ei", false),
+            .lt, .le => "var __koru_ei: usize = 0;\n",
+            else => unreachable,
+        };
+        const hi = switch (op) {
+            .lt => zigBound(alloc, store_expr, icol, key_var, "__koru_ee", false),
+            .le => zigBound(alloc, store_expr, icol, key_var, "__koru_ee", true),
+            .gt, .ge => std.fmt.allocPrint(alloc, "const __koru_ee = {s}.__index_{s}.items.len;\n", .{ store_expr, icol }) catch unreachable,
+            else => unreachable,
+        };
+        return std.fmt.allocPrint(alloc, "{s}{s}", .{ lo, hi }) catch unreachable;
+    }
+
+    /// The range arm of `StoreIndex.guardKey` — ONE `<`, `<=`, `>`, or `>=`
+    /// between the row's ordered column and a row-free key. `<`/`>`
+    /// preceded by `=`, `!`, `<`, `>`, or `-` are parts of other ops
+    /// (`==`, `!=`, `<=`, `>=`, `->`), never a comparison here.
+    fn guardRange(cond: []const u8, colref: []const u8) ?struct { op: CmpOp, key: []const u8 } {
+        var i: usize = 0;
+        while (i < cond.len) : (i += 1) {
+            const c = cond[i];
+            if (c != '<' and c != '>') continue;
+            if (i > 0 and (cond[i - 1] == '=' or cond[i - 1] == '<' or cond[i - 1] == '>' or cond[i - 1] == '!' or cond[i - 1] == '-')) continue;
+            const wide = i + 1 < cond.len and cond[i + 1] == '=';
+            if (wide and i + 2 < cond.len and cond[i + 2] == '=') return null;
+            const op: CmpOp = if (c == '<') (if (wide) CmpOp.le else CmpOp.lt) else (if (wide) CmpOp.ge else CmpOp.gt);
+            const lhs = std.mem.trim(u8, cond[0..i], " ");
+            const rhs = std.mem.trim(u8, cond[i + @as(usize, if (wide) 2 else 1) ..], " ");
+            var key: []const u8 = undefined;
+            var routed_op = op;
+            if (std.mem.eql(u8, lhs, colref)) {
+                key = rhs;
+            } else if (std.mem.eql(u8, rhs, colref)) {
+                key = lhs;
+                routed_op = switch (op) {
+                    .lt => .gt,
+                    .le => .ge,
+                    .gt => .lt,
+                    .ge => .le,
+                    else => unreachable,
+                };
+            } else return null;
+            for (key) |kc| {
+                switch (kc) {
+                    '=', '<', '>', '!', '&', '|', '"' => return null,
+                    else => {},
+                }
+            }
+            if (std.mem.indexOf(u8, key, " and ") != null or std.mem.indexOf(u8, key, " or ") != null) return null;
+            if (std.mem.indexOf(u8, key, "__koru_srf_") != null) return null;
+            return .{ .op = routed_op, .key = key };
+        }
+        return null;
+    }
+
+    /// `guardRoute`'s else-branch helper: on an ordered store, try the
+    /// range parse; on an equality store answer null immediately. Sets
+    /// `op` through the pointer so the caller stays one line.
+    fn rangeKey(cond: []const u8, colref: []const u8, ordered: bool, op: *CmpOp) ?[]const u8 {
+        if (!ordered) return null;
+        const rr = guardRange(cond, colref) orelse return null;
+        op.* = rr.op;
+        return rr.key;
+    }
+
+    // --- emit: the ordered arms of the verbs' maintenance ---
+
+    /// Insert: binary search for the key's entry, inserting a fresh one
+    /// at its sorted position when the key is new; the row's handle
+    /// appends to members — the newest member, join order.
+    fn insertPut(alloc: std.mem.Allocator, store_name: []const u8, icol: []const u8, ecol: []const u8) []const u8 {
+        const stx = std.fmt.allocPrint(alloc, "__koru_store_{s}", .{store_name}) catch unreachable;
+        const idx = std.fmt.allocPrint(alloc, "__koru_store_{s}.__index_{s}", .{ store_name, icol }) catch unreachable;
+        const bound = zigBound(alloc, stx, icol, "__koru_ik", "__koru_ep", false);
+        return std.fmt.allocPrint(alloc,
+            \\const __koru_ik = __koru_store_{s}.{s}[__koru_new_row];
+            \\{s}if (__koru_ep == {s}.items.len or {s}.items[__koru_ep].key != __koru_ik) {{
+            \\    {s}.insert(koru_allocator(), __koru_ep, .{{ .key = __koru_ik, .members = .{{}} }}) catch @panic("std/indexes: index insert ran out of memory");
+            \\}}
+            \\{s}.items[__koru_ep].members.append(koru_allocator(), __koru_store_{s}.__koru_handle_of(__koru_new_row)) catch @panic("std/indexes: index insert ran out of memory");
+            \\
+        , .{ store_name, ecol, bound, idx, idx, idx, idx, store_name }) catch unreachable;
+    }
+
+    /// `clear`: every entry's member list, then the directory itself.
+    fn clearDrop(alloc: std.mem.Allocator, store_name: []const u8, icol: []const u8) []const u8 {
+        return std.fmt.allocPrint(alloc,
+            \\{{
+            \\    for (__koru_store_{s}.__index_{s}.items) |*__koru_ce| __koru_ce.members.deinit(koru_allocator());
+            \\    __koru_store_{s}.__index_{s}.deinit(koru_allocator());
+            \\}}
+            \\
+        , .{ store_name, icol, store_name, icol }) catch unreachable;
+    }
+
+    /// A `stored` write to the indexed column: binary search both ways —
+    /// the row leaves the old key's members and joins the new one at the
+    /// end. An emptied entry is KEPT (readers skip empty members) — entries
+    /// never leave the directory, which keeps the survival walk's
+    /// key-cursor honest.
+    fn writeWrap(alloc: std.mem.Allocator, store_name: []const u8, icol: []const u8, ecol: []const u8, write: []const u8, value: []const u8) []const u8 {
+        return std.fmt.allocPrint(alloc,
+            \\const __koru_iold = __koru_store_{s}.{s}[__koru_r];
+            \\const __koru_ih = __koru_store_{s}.__koru_handle_of(__koru_r);
+            \\{s}if (__koru_iold != {s}) {{
+            \\    var __koru_ep: usize = 0;
+            \\    var __koru_ep_h = __koru_store_{s}.__index_{s}.items.len;
+            \\    while (__koru_ep < __koru_ep_h) {{
+            \\        const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;
+            \\        if (__koru_store_{s}.__index_{s}.items[__koru_ep_m].key < __koru_iold) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;
+            \\    }}
+            \\    if (__koru_ep < __koru_store_{s}.__index_{s}.items.len and __koru_store_{s}.__index_{s}.items[__koru_ep].key == __koru_iold) {{
+            \\        const __koru_ib = &__koru_store_{s}.__index_{s}.items[__koru_ep].members;
+            \\        for (__koru_ib.items, 0..) |__koru_im, __koru_mi| {{
+            \\            if (__koru_im == __koru_ih) {{ _ = __koru_ib.orderedRemove(__koru_mi); break; }}
+            \\        }}
+            \\    }}
+            \\    const __koru_ik = {s};
+            \\    __koru_ep = 0;
+            \\    __koru_ep_h = __koru_store_{s}.__index_{s}.items.len;
+            \\    while (__koru_ep < __koru_ep_h) {{
+            \\        const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;
+            \\        if (__koru_store_{s}.__index_{s}.items[__koru_ep_m].key < __koru_ik) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;
+            \\    }}
+            \\    if (__koru_ep == __koru_store_{s}.__index_{s}.items.len or __koru_store_{s}.__index_{s}.items[__koru_ep].key != __koru_ik) {{
+            \\        __koru_store_{s}.__index_{s}.insert(koru_allocator(), __koru_ep, .{{ .key = __koru_ik, .members = .{{}} }}) catch @panic("std/indexes: index write ran out of memory");
+            \\    }}
+            \\    __koru_store_{s}.__index_{s}.items[__koru_ep].members.append(koru_allocator(), __koru_ih) catch @panic("std/indexes: index write ran out of memory");
+            \\}}
+            \\
+        , .{ store_name, ecol, store_name, write, value, store_name, icol, store_name, icol, store_name, icol, store_name, icol, store_name, icol, value, store_name, icol, store_name, icol, store_name, icol, store_name, icol, store_name, icol, store_name, icol }) catch unreachable;
+    }
+
+    /// `! first`'s head — `==` is a binary search into the directory and
+    /// `! first` answers the FIRST LIVE MEMBER of the walk (join order),
+    /// not the lowest dense row; a range walks entries from its bound.
+    /// Opens exactly two blocks, matching `StoreIndex.firstClose`.
+    fn firstHead(alloc: std.mem.Allocator, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, op: CmpOp) []const u8 {
+        const stx = std.fmt.allocPrint(alloc, "{s}__koru_store_{s}", .{ cellq, store_name }) catch unreachable;
+        const idx = std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__index_{s}", .{ cellq, store_name, icol }) catch unreachable;
+        if (op == .eq) {
+            const bound = zigBound(alloc, stx, icol, "__koru_ik", "__koru_ep", false);
+            return std.fmt.allocPrint(alloc,
+                \\const __koru_ik = {s};
+                \\{s}if (__koru_ep < {s}.items.len and {s}.items[__koru_ep].key == __koru_ik) {{
+                \\    var __koru_si_opt: ?usize = null;
+                \\    for ({s}.items[__koru_ep].members.items) |__koru_bh| {{
+                \\        if ({s}__koru_store_{s}.__koru_row_of(__koru_bh)) |__koru_cand| {{ __koru_si_opt = __koru_cand; break; }}
+                \\    }}
+                \\    if (__koru_si_opt) |__koru_si| {{
+                \\
+            , .{ key, bound, idx, idx, idx, cellq, store_name }) catch unreachable;
+        }
+        const bounds = rangeBounds(alloc, stx, icol, "__koru_ik", op);
+        return std.fmt.allocPrint(alloc,
+            \\const __koru_ik = {s};
+            \\{s}if (__koru_ei < __koru_ee) {{
+            \\    var __koru_si_opt: ?usize = null;
+            \\    while (__koru_ei < __koru_ee and __koru_si_opt == null) : (__koru_ei += 1) {{
+            \\        for ({s}.items[__koru_ei].members.items) |__koru_bh| {{
+            \\            if ({s}__koru_store_{s}.__koru_row_of(__koru_bh)) |__koru_cand| {{ __koru_si_opt = __koru_cand; break; }}
+            \\        }}
+            \\    }}
+            \\    if (__koru_si_opt) |__koru_si| {{
+            \\
+        , .{ key, bounds, idx, cellq, store_name }) catch unreachable;
+    }
+
+    /// `! query`'s head. Stable (body cannot disturb the directory):
+    /// `==` binary-searches once and `for`s the members; a range walks
+    /// its [ei, ee) entry window. Survival: `==` re-searches every
+    /// iteration; a range tracks the entry by KEY (`__koru_ek`) and
+    /// re-searches because a mid-walk insert shifts positions.
+    fn memberHead(alloc: std.mem.Allocator, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, stable: bool, op: CmpOp) []const u8 {
+        const stx = std.fmt.allocPrint(alloc, "{s}__koru_store_{s}", .{ cellq, store_name }) catch unreachable;
+        const idx = std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__index_{s}", .{ cellq, store_name, icol }) catch unreachable;
+        if (stable) {
+            if (op == .eq) {
+                const bound = zigBound(alloc, stx, icol, "__koru_ik", "__koru_ep", false);
+                return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\n{s}if (__koru_ep < {s}.items.len and {s}.items[__koru_ep].key == __koru_ik) {{\nfor ({s}.items[__koru_ep].members.items) |__koru_bh| {{\n    const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse continue;\n", .{ key, bound, idx, idx, idx, cellq, store_name }) catch unreachable;
+            }
+            const bounds = rangeBounds(alloc, stx, icol, "__koru_ik", op);
+            return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\n{s}while (__koru_ei < __koru_ee) : (__koru_ei += 1) {{\n    for ({s}.items[__koru_ei].members.items) |__koru_bh| {{\n        const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse continue;\n", .{ key, bounds, idx, cellq, store_name }) catch unreachable;
+        }
+        if (op == .eq)
+            return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\nvar __koru_bi: usize = 0;\nwhile (true) {{\n    var __koru_ep: usize = 0;\n    var __koru_ep_h = {s}.items.len;\n    while (__koru_ep < __koru_ep_h) {{\n        const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;\n        if ({s}.items[__koru_ep_m].key < __koru_ik) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;\n    }}\n    if (__koru_ep >= {s}.items.len or {s}.items[__koru_ep].key != __koru_ik) break;\n    const __koru_ib = &{s}.items[__koru_ep].members;\n    if (__koru_bi >= __koru_ib.items.len) break;\n    const __koru_bh = __koru_ib.items[__koru_bi];\n    const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse {{ __koru_bi += 1; continue; }};\n", .{ key, idx, idx, idx, idx, idx, cellq, store_name }) catch unreachable;
+        const bounds = rangeBounds(alloc, stx, icol, "__koru_ik", op);
+        return std.fmt.allocPrint(alloc, "const __koru_ik = {s};\n{s}while (__koru_ei < __koru_ee and __koru_ei < {s}.items.len) {{\n    const __koru_ek = {s}.items[__koru_ei].key;\n    var __koru_bi: usize = 0;\n    while (true) {{\n        var __koru_ep: usize = 0;\n        var __koru_ep_h = {s}.items.len;\n        while (__koru_ep < __koru_ep_h) {{\n            const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;\n            if ({s}.items[__koru_ep_m].key < __koru_ek) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;\n        }}\n        if (__koru_ep >= {s}.items.len or {s}.items[__koru_ep].key != __koru_ek) break;\n        const __koru_ib = &{s}.items[__koru_ep].members;\n        if (__koru_bi >= __koru_ib.items.len) break;\n        const __koru_bh = __koru_ib.items[__koru_bi];\n        const __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh) orelse {{ __koru_bi += 1; continue; }};\n", .{ key, bounds, idx, idx, idx, idx, idx, idx, idx, cellq, store_name }) catch unreachable;
+    }
+
+    /// `! query`'s survival close — the ordered counterpart of
+    /// `siwMemberClose`'s non-stable arm. The bucket is re-located by
+    /// binary search (positions move mid-walk); the member cursor
+    /// advances only when the visited member still sits in its slot,
+    /// the same re-check contract the equality walk runs. For a range,
+    /// the member while closes, the entry cursor advances past the
+    /// finished key (upper bound — the entry may have shifted), then
+    /// the entry while and the outer block close.
+    fn memberClose(alloc: std.mem.Allocator, cellq: []const u8, store_name: []const u8, icol: []const u8, op: CmpOp) []const u8 {
+        const idx = std.fmt.allocPrint(alloc, "{s}__koru_store_{s}.__index_{s}", .{ cellq, store_name, icol }) catch unreachable;
+        const recheck = std.fmt.allocPrint(alloc,
+            \\__koru_ep = 0;
+            \\__koru_ep_h = {s}.items.len;
+            \\while (__koru_ep < __koru_ep_h) {{
+            \\    const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;
+            \\    if ({s}.items[__koru_ep_m].key < __koru_{s}) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;
+            \\}}
+            \\if (__koru_ep >= {s}.items.len or {s}.items[__koru_ep].key != __koru_{s}) break;
+            \\if (__koru_bi < {s}.items[__koru_ep].members.items.len and {s}.items[__koru_ep].members.items[__koru_bi] == __koru_bh) __koru_bi += 1;
+            \\
+        , .{ idx, idx, if (op == .eq) "ik" else "ek", idx, idx, if (op == .eq) "ik" else "ek", idx, idx }) catch unreachable;
+        if (op == .eq)
+            return std.fmt.allocPrint(alloc, ");\n{s}}}\n}}\n", .{recheck}) catch unreachable;
+        return std.fmt.allocPrint(alloc,
+            \\);\n{s}}}
+            \\var __koru_ea: usize = 0;
+            \\var __koru_ea_h = {s}.items.len;
+            \\while (__koru_ea < __koru_ea_h) {{
+            \\    const __koru_ea_m = __koru_ea + (__koru_ea_h - __koru_ea) / 2;
+            \\    if ({s}.items[__koru_ea_m].key <= __koru_ek) __koru_ea = __koru_ea_m + 1 else __koru_ea_h = __koru_ea_m;
+            \\}}
+            \\__koru_ei = __koru_ea;
+            \\}}
+            \\}}
+            \\
+        , .{ recheck, idx, idx }) catch unreachable;
+    }
+
+    /// Bulk join on an ordered store: the register-cached bucket trick
+    /// is the equality map's; the directory takes the straight-line
+    /// per-row binary search + insert-or-append — correctness at this
+    /// rung, the cache ported later if a measurement asks.
+    fn bulkRow(w: anytype, store: []const u8, handles: bool, ic: []const u8) void {
+        w.print("        var __koru_ep: usize = 0;\n        var __koru_ep_h = __koru_store_{s}.__index_{s}.items.len;\n        while (__koru_ep < __koru_ep_h) {{\n            const __koru_ep_m = __koru_ep + (__koru_ep_h - __koru_ep) / 2;\n            if (__koru_store_{s}.__index_{s}.items[__koru_ep_m].key < __koru_ik) __koru_ep = __koru_ep_m + 1 else __koru_ep_h = __koru_ep_m;\n        }}\n        if (__koru_ep == __koru_store_{s}.__index_{s}.items.len or __koru_store_{s}.__index_{s}.items[__koru_ep].key != __koru_ik) {{\n            __koru_store_{s}.__index_{s}.insert(koru_allocator(), __koru_ep, .{{ .key = __koru_ik, .members = .{{}} }}) catch @panic(\"std/indexes: index insert ran out of memory\");\n        }}\n", .{ store, ic, store, ic, store, ic, store, ic, store, ic }) catch unreachable;
+        if (handles) {
+            w.print("        __koru_store_{s}.__index_{s}.items[__koru_ep].members.append(koru_allocator(), if (__koru_g0) @as(i64, @intCast((__koru_bulk_base + __koru_bulk_j) | (@as(usize, __KoruStoreT_{s}.__koru_brand) << 24))) else (@as(i64, @intCast(__koru_bulk_slot | (@as(usize, __KoruStoreT_{s}.__koru_brand) << 24))) | (@as(i64, @intCast(__koru_store_{s}.__koru_hslot_gen[__koru_bulk_slot])) << 32))) catch @panic(\"std/indexes: index insert ran out of memory\");\n", .{ store, ic, store, store, store }) catch unreachable;
+        } else {
+            w.print("        __koru_store_{s}.__index_{s}.items[__koru_ep].members.append(koru_allocator(), __koru_store_{s}.__koru_handle_of(__koru_bulk_base + __koru_bulk_j)) catch @panic(\"std/indexes: index insert ran out of memory\");\n", .{ store, ic, store }) catch unreachable;
+        }
+    }
+};
