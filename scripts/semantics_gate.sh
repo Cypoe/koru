@@ -40,6 +40,14 @@ if [ "${1:-}" = "--cref" ]; then
     [ -f "$cref" ] || { echo "FAIL: cref C file missing: $cref"; exit 1; }
 fi
 cd "$DIR" || exit 1
+# Parallel runs share this directory — two concurrent gates would race on
+# FlowKernel.olean and .check.err (the cleanup below deletes them). Each
+# invocation gets a private workdir; corpus args are absolute paths, so
+# only the kernel sources and the pinned corpora need copying.
+WORK="$(mktemp -d)" || exit 1
+trap 'rm -rf "$WORK"' EXIT
+cp ./*.lean golden.txt forged.txt drift.txt "$WORK/" 2>/dev/null || true
+cd "$WORK" || exit 1
 # Role A — every .lean checks clean. FlowKernel.olean is built first so
 # `import FlowKernel` resolves through LEAN_PATH.
 if ! "$LEAN" -o FlowKernel.olean FlowKernel.lean >/dev/null 2>.check.err; then
@@ -52,7 +60,7 @@ if [ -s .check.err ]; then
 fi
 rm -f .check.err
 for f in *.lean; do
-    if ! LEAN_PATH="$DIR" "$LEAN" "$f" >/dev/null 2>.check.err; then
+    if ! LEAN_PATH="$WORK" "$LEAN" "$f" >/dev/null 2>.check.err; then
         fail=1
     fi
     if [ -s .check.err ]; then
@@ -64,13 +72,13 @@ for f in *.lean; do
 done
 # Role B — corpus conformance. Golden must match, forged must reject,
 # drift must fail the batch.
-if ! LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean golden.txt | tail -1; then
+if ! LEAN_PATH="$WORK" "$LEAN" --run FlowCheck.lean golden.txt | tail -1; then
     fail=1
 fi
-if ! LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean --forged forged.txt | tail -1; then
+if ! LEAN_PATH="$WORK" "$LEAN" --run FlowCheck.lean --forged forged.txt | tail -1; then
     fail=1
 fi
-if LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean drift.txt >/dev/null 2>&1; then
+if LEAN_PATH="$WORK" "$LEAN" --run FlowCheck.lean drift.txt >/dev/null 2>&1; then
     echo "FAIL: drift corpus accepted (duplicate claims but passed)"
     fail=1
 fi
@@ -84,9 +92,9 @@ for corpus in "$@"; do
         continue
     fi
     if [ -n "$cref" ]; then
-        LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean --cref "$cref" "$corpus" || fail=1
+        LEAN_PATH="$WORK" "$LEAN" --run FlowCheck.lean --cref "$cref" "$corpus" || fail=1
     else
-        LEAN_PATH="$DIR" "$LEAN" --run FlowCheck.lean "$corpus" || fail=1
+        LEAN_PATH="$WORK" "$LEAN" --run FlowCheck.lean "$corpus" || fail=1
     fi
 done
 rm -f FlowKernel.olean FlowCheck.olean FlowCheck.c

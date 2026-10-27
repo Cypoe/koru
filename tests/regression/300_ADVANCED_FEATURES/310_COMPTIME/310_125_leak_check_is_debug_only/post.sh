@@ -16,7 +16,11 @@ if ! grep -q 'koru_leak_check' output_emitted.zig; then
     exit 1
 fi
 
-if ! zig build-exe -O ReleaseFast -lc --name output_release output_emitted.zig 2>release_build.err; then
+target_args=()
+if [ -n "${KORU_BACKEND_TARGET:-}" ]; then
+    target_args=(-target "$KORU_BACKEND_TARGET")
+fi
+if ! zig build-exe -O ReleaseFast -lc "${target_args[@]}" --name output_release output_emitted.zig 2>release_build.err; then
     echo "FAIL: ReleaseFast rebuild of output_emitted.zig failed"
     sed -n '1,20p' release_build.err
     exit 1
