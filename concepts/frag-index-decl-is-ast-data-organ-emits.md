@@ -67,7 +67,7 @@ vocabulary lives in `std/indexes` (plural), not `std/index` — `index.kz`
 `std/indexes:grod` fails unclaimed. The glob road (700_EVENT_GLOBBING,
 resurrected same day) stays for genuinely-open families like `log.*`.
 
-## Ordered variant — widening, not a second mechanism (690_377 pin, 2026-10-26)
+## Ordered variant — widening, not a second mechanism (690_377, landed zig-target 2026-10-27)
 
 An ordered index (`std/indexes:ordered(<store>, <col>)`, spelling
 provisional) belongs in the SAME declaration slot this belief describes:
@@ -90,3 +90,16 @@ B-tree earns the slot only if the distinct-key domain outgrows a flat
 directory — the prompt for the pin was bbtree (2026-10-23), and its real
 contributions (inline keys, optimistic latch coupling, mmap layout)
 answer questions this seam does not ask.
+
+Landed shape (zig only; the js/cs cell emit refuses an ordered decl
+loudly rather than emit a silent fallback): one sorted
+`ArrayListUnmanaged(struct { key, members })` per indexed column —
+`==` is a binary search, a range is a bound plus a walk, insert and
+`stored` re-key each run a lower-bound probe, `take` leaves dead
+members the row-resolve skips, `clear` drops the directory. The
+survival walk tracks its entry by KEY (`__koru_ek`) and re-searches
+each iteration, because a mid-walk insert shifts positions; emptied
+entries are never removed so the key cursor stays honest. `explain`
+reports `ordered index <op> on <col>`. Open: js/cs arms, bulk's
+register-cached bucket trick ported to the directory, and whether a
+real workload ever measures out a B-tree.

@@ -134,11 +134,11 @@ const SPlan = struct {
         const ds = StoreIndexDecls.declsOf(alloc, program, store_name);
         if (ds.len == 0) return;
         if (ds.len > 1) {
-            entries.append(alloc, .{ .property = .{ .key = "status", .value = .{ .string = std.fmt.allocPrint(alloc, "refused: " ++ StoreIndexDecls.MSG_second_decl, .{ store_name, ds[1].column orelse "?", store_name, ds[0].column orelse "?" }) catch unreachable } } }) catch unreachable;
+            entries.append(alloc, .{ .property = .{ .key = "status", .value = .{ .string = std.fmt.allocPrint(alloc, "refused: " ++ StoreIndexDecls.MSG_second_decl, .{ if (ds[1].ordered) "ordered" else "store", store_name, ds[1].column orelse "?", store_name, ds[0].column orelse "?" }) catch unreachable } } }) catch unreachable;
             return;
         }
         const col = ds[0].column orelse {
-            entries.append(alloc, .{ .property = .{ .key = "status", .value = .{ .string = std.fmt.allocPrint(alloc, "refused: " ++ StoreIndexDecls.MSG_no_column, .{ store_name, store_name }) catch unreachable } } }) catch unreachable;
+            entries.append(alloc, .{ .property = .{ .key = "status", .value = .{ .string = std.fmt.allocPrint(alloc, "refused: " ++ StoreIndexDecls.MSG_no_column, .{ if (ds[0].ordered) "ordered" else "store", store_name, if (ds[0].ordered) "ordered" else "store", store_name }) catch unreachable } } }) catch unreachable;
             return;
         };
         const at = SH.hashesFor(alloc, sites, &.{@intFromPtr(ds[0].flow.inv())}) catch &.{};
@@ -229,7 +229,7 @@ const SPlan = struct {
 
         return switch (StoreIndex.guardRoute(alloc, program, s.name, guard_z, srf_prefix)) {
             .scan => std.fmt.allocPrint(alloc, "{s} {s} — {s}", .{ if (is_first) "! first" else "! query", row_bind, if (is_first) "sweep, stops at first match" else "sweep" }) catch unreachable,
-            .route => |r| std.fmt.allocPrint(alloc, "{s} {s} — index {s} on {s}", .{ if (is_first) "! first" else "! query", row_bind, if (is_first) "lookup" else "membership", r.icol }) catch unreachable,
+            .route => |r| if (r.ordered) std.fmt.allocPrint(alloc, "{s} {s} — ordered index {s} on {s}", .{ if (is_first) "! first" else "! query", row_bind, switch (r.op) { .eq => "==", .lt => "<", .le => "<=", .gt => ">", .ge => ">=" }, r.icol }) catch unreachable else std.fmt.allocPrint(alloc, "{s} {s} — index {s} on {s}", .{ if (is_first) "! first" else "! query", row_bind, if (is_first) "lookup" else "membership", r.icol }) catch unreachable,
             .refuse => |op| std.fmt.allocPrint(alloc, "refused: " ++ StoreIndex.MSG_unlowered_key, .{ s.name, op }) catch unreachable,
         };
     }

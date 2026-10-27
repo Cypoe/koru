@@ -53,7 +53,7 @@ const StoreIndex = struct {
 
     /// Insert: the fresh row joins its key's bucket — appended last, the
     /// newest member, so the bucket's order is the rows' join order.
-    fn insertPut(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8) []const u8 {
+    fn insertPut(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ecol: []const u8, ordered: bool) []const u8 { if (ordered) return StoreOrderedIndex.insertPut(alloc, store_name, icol, ecol);
         if (storeHostTarget() == .cs)
             // `__index_<col>` is a `Dictionary<long, List<long>>` (the cell
             // decl's cs arm) — TryGetValue is getOrPut, `.Add` is append.
@@ -82,7 +82,7 @@ const StoreIndex = struct {
     }
 
     /// `clear`: every bucket's backing list goes with the map.
-    fn clearDrop(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8) []const u8 {
+    fn clearDrop(alloc: std.mem.Allocator, host_is_js: bool, store_name: []const u8, icol: []const u8, ordered: bool) []const u8 { if (ordered) return StoreOrderedIndex.clearDrop(alloc, store_name, icol);
         if (storeHostTarget() == .cs)
             // GC reclaims the buckets — `Clear` is the whole job.
             return std.fmt.allocPrint(alloc, "__koru_store_{s}.__index_{s}.Clear();\n", .{ store_name, icol }) catch unreachable;
@@ -133,26 +133,26 @@ const StoreIndex = struct {
     /// guard shape — the sweep computes the same answer the slow way.
     const GuardRoute = union(enum) {
         scan,
-        route: struct { icol: []const u8, key: []const u8 },
+        route: struct { icol: []const u8, key: []const u8, op: CmpOp, ordered: bool },
         refuse: []const u8,
     };
 
     fn guardRoute(alloc: std.mem.Allocator, program: *const ast_find.Program, store_name: []const u8, guard_z: ?[]const u8, srf_prefix: []const u8) GuardRoute {
-        const icol = columnOf(alloc, program, store_name) orelse return .scan;
+        const spec = StoreOrderedIndex.specOf(alloc, program, store_name) orelse return .scan;
         const gz = guard_z orelse return .scan;
-        const mangled_icol = std.mem.replaceOwned(u8, alloc, icol, ".", "_") catch unreachable;
+        const mangled_icol = std.mem.replaceOwned(u8, alloc, spec.col, ".", "_") catch unreachable;
         const colref = std.fmt.allocPrint(alloc, "{s}{s}", .{ srf_prefix, mangled_icol }) catch unreachable;
-        const kr = guardKey(gz, colref) orelse return .scan;
+        var op: CmpOp = .eq; const kr = guardKey(gz, colref) orelse StoreOrderedIndex.rangeKey(gz, colref, spec.ordered, &op) orelse return .scan;
         var unknown_op: []const u8 = "";
         const key = storeLowerExpr(alloc, kr, &unknown_op) orelse return .{ .refuse = unknown_op };
-        return .{ .route = .{ .icol = icol, .key = key } };
+        return .{ .route = .{ .icol = spec.col, .key = key, .op = op, .ordered = spec.ordered } };
     }
 
     /// `! first`'s head — the lowest dense live member of the key's bucket
     /// is the row the sweep's first match would have found. Dead members
     /// (taken rows, never ejected) resolve to no row and skip. Opened as
     /// the block the projections and the body call still sit inside.
-    fn firstHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8) []const u8 {
+    fn firstHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, ordered: bool, op: CmpOp) []const u8 { if (ordered) return StoreOrderedIndex.firstHead(alloc, cellq, store_name, icol, key, op);
         if (storeHostTarget() == .cs)
             // `__koru_row_of` answers -1 for a dead member — `-1` is the
             // "no candidate yet" sentinel, not maxInt.

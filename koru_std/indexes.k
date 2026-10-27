@@ -9,7 +9,6 @@
 // Lives at `indexes` not `index`: `std/index` is unreachable — index.kz IS
 // the `std` root itself, and `index/` collides with it (KORU200).
 
-[norun]pub tor store {
-    expr: Expression,
-    source: Source
-}
+[norun]pub tor store { expr: Expression, source: Source }
+
+[norun]pub tor ordered { expr: Expression, source: Source }

@@ -42,3 +42,10 @@ kernel.pairwise.kz | while (i < {2d})        | measured exception — standalone
 kernel.pairwise.kz | while (j < {2d})        | same measured exception — inner leg of the triangular pair loop
 kernel.pairwise.kz | while (i < __koru_n)    | same measured exception — standalone `std/kernel:pairwise` transform, dynamic length
 kernel.pairwise.kz | while (j < __koru_n)    | same measured exception — inner leg of the triangular pair loop
+store.oindex.kz | while (__koru_ep < __koru_ep_h) | binary-search lower-bound probe over the sorted index directory: the probe halves its window until empty, so the trip count is the search itself, not a nameable bound
+store.oindex.kz | while (__koru_ea < __koru_ea_h) | same binary-search shape — the upper-bound probe that resumes an ordered range walk past a finished key
+store.oindex.kz | while (true) | survival member cursor over a routed index bucket: the entry is re-located by binary search each iteration because mid-walk inserts shift positions — the count is however many members remain, a data property
+store.oindex.kz | while (__koru_ei < __koru_ee and __koru_ei < {s}.items.len) | survival range walk over the sorted directory: entries are re-found by key across mutations, so the walk's bound is read live every iteration
+store.oindex.kz | while ({s} < {s}_h) | the binary-search template every ordered probe emits — window halves until empty; trip count is the search
+store.oindex.kz | while (__koru_ei < __koru_ee and __koru_si_opt == null) | ! first's find-first-live-member walk across directory entries; breaks at the first hit — the trip count is the position of the first live member, a data property
+store.oindex.kz | while (__koru_ei < __koru_ee) | stable range walk over the sorted directory — bounded by the routed window, but the bound is emitted text, not a counted induction the checker can name; kept while for parity with the survival arm that must re-read the bound live

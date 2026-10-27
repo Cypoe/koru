@@ -29,7 +29,7 @@ const StoreIndexWalk = struct {
     /// slice with a `for`: one map probe total, membership fixed for the
     /// duration. A body that CAN takes a `while` walk whose end is a live
     /// question — see memberClose. The key binds ONCE either way.
-    fn memberHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, stable: bool) []const u8 {
+    fn memberHead(alloc: std.mem.Allocator, host_is_js: bool, cellq: []const u8, store_name: []const u8, icol: []const u8, key: []const u8, stable: bool, ordered: bool, op: CmpOp) []const u8 { if (ordered) return StoreOrderedIndex.memberHead(alloc, cellq, store_name, icol, key, stable, op);
         if (storeHostTarget() == .cs) {
             if (stable)
                 return std.fmt.allocPrint(alloc, "long __koru_ik = (long)({s});\nglobal::System.Collections.Generic.List<long> __koru_ib;\nif ({s}__koru_store_{s}.__index_{s}.TryGetValue(__koru_ik, out __koru_ib)) {{\nforeach (var __koru_bh in __koru_ib) {{\n    var __koru_si = {s}__koru_store_{s}.__koru_row_of(__koru_bh);\n    if (__koru_si < 0) continue;\n", .{ key, cellq, store_name, icol, cellq, store_name }) catch unreachable;
@@ -201,8 +201,8 @@ const StoreIndexWalk = struct {
     /// scan runs once per site on the same body clone.
     const QueryRoute = union(enum) {
         scan,
-        first: struct { icol: []const u8, key: []const u8 },
-        query: struct { icol: []const u8, key: []const u8, stable: bool },
+        first: struct { icol: []const u8, key: []const u8, op: CmpOp, ordered: bool },
+        query: struct { icol: []const u8, key: []const u8, op: CmpOp, ordered: bool, stable: bool },
         refuse: []const u8,
     };
 
@@ -212,9 +212,9 @@ const StoreIndexWalk = struct {
             .scan => return .scan,
             .refuse => |op| return .{ .refuse = op },
             .route => |r| {
-                if (is_first) return .{ .first = .{ .icol = r.icol, .key = r.key } };
+                if (is_first) return .{ .first = .{ .icol = r.icol, .key = r.key, .op = r.op, .ordered = r.ordered } };
                 const stable = !bodyDisturbsBucket(alloc, program, flatItems(alloc, program.items), body, store_name, r.icol, row_bind);
-                return .{ .query = .{ .icol = r.icol, .key = r.key, .stable = stable } };
+                return .{ .query = .{ .icol = r.icol, .key = r.key, .op = r.op, .ordered = r.ordered, .stable = stable } };
             },
         }
     }
