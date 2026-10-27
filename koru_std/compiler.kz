@@ -37,8 +37,7 @@ const Source = ast.Source;
 const Allocator = std.mem.Allocator;
 // Compiler backend build requirements are defined below via requires
 
-// Simplified Koru Compiler Library
-// A working implementation that can actually be injected and used
+// Koru compiler library — the passes the injected backend runs.
 
 // ============================================================
 // BUILD REQUIREMENTS - Self-documenting build dependencies
@@ -1602,8 +1601,9 @@ const emitFlowWithMocks = struct {
 // helpers, and impl live in compiler.witness.kz (joined via ~part witness).
 ~part witness
 
-// Claims check (decl + impl in compiler.claims.kz).
+// Claims check — decl+pass in compiler.claims.kz, provers in claims-prover.
 ~part claims
+~part claims-prover
 
 // Semantic phantom type checking - validates type-state compatibility using
 // the default Koru semantic checker (module-qualified phantom states)

@@ -61,6 +61,23 @@ without a fold). 675_003 pins `proven`, 675_008 pins `unproven`
 671+690_3*+665 150/150 with the tightened engine. Goal absorption isn't
 checked — `terminates` has no goal; `honors` will need it.*
 
+*Update 2026-10-28: `honors` landed — the induction-shaped atom. The
+goal is a single linear comparison over the subject's fields. Base: the
+`#L` head's entry bindings become `field = expr` equalities with
+caller-scope names renamed to `~entry.*` free variables, so entailment
+succeeds exactly when the entry equations force it (literal entries pin
+the constants; open entries can still prove equation-implied goals).
+Step: `goal-as-IH ∧ arm-guard ⊢ goal[subs]` per back-edge; `==` goals
+discharge each direction (≠ is not one row). Entailment is one helper —
+`meet ∧ ¬goal` infeasible through the tightened FM — shared by both.
+675_010 pins `proven` on the counting fold, 675_011 pins `proven` where
+the IH is load-bearing (goal `i >= 0` under guard `i < limit`), 675_012
+pins `unproven` (goal `i < limit` fails the `i+1` step), 675_013/014
+pin the refusals. The prover readers moved to
+`compiler.claims-prover.kz` — the claims part holds pass + subject
+resolution, the prover part holds walkers + judgments; 675 range
+14/14, 671+690_3*+665 154/154 with all oracle legs armed.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

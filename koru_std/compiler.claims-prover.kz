@@ -1,0 +1,580 @@
+// Koru Standard Library: the `claims-prover` part of compiler.kz.
+// Joined via `~part claims-prover` in compiler.kz; merged into the
+// compiler module at load — the `spec` alias is declared by the claims
+// part. This part owns the prover readers: the fold walkers, the
+// per-atom judgments (`terminates`, `honors`), and the entailment
+// discharge — every verdict the claims pass can issue past `declared`.
+// ============================================================================
+// THE PROVER READER — `terminates` gets a judgment, not just a census
+// ============================================================================
+//
+// The shape the reader can judge, within the decidable fence: the
+// subject tor's impl is a single `std.control:if` dispatch whose
+// then/else bodies produce the tor's arms by pun (`live { i, limit }`
+// or scalar `done i` naming a field), and `#L`-folds over the subject
+// jump with `@L` args that are linear forms over the arm payload's
+// fields (`i: l.i + 1`, `l.limit`). The rank claim substitutes the
+// jump args into the declared linear form; per back-edge it proves —
+// via spec.linFeasible — the two entailments termination needs:
+//
+//   decrease:  meet ∧ (R − R' <= 0) infeasible  ⇒  R' > R−1, and over
+//              integers that means R' <= R − 1;
+//   bounded:   meet ∧ (R' < 0) infeasible       ⇒  R' >= 0.
+//
+// A feasible counterexample-region is `unproven`, never `refuted` —
+// real-feasible need not be integer-feasible, so the reader declines a
+// verdict rather than wrong-claim one. Anything the grammar cannot
+// read is `outside-P` with the constructor named — refusal is
+// graduation, the claim routes to guard.
+
+const ClaimVerdict = union(enum) {
+    proven: []const u8,
+    unproven: []const u8,
+    outside: []const u8,
+};
+
+const ArmMeet = struct {
+    arm: []const u8,
+    rows: std.ArrayListUnmanaged(spec.LinRow),
+    /// Scalar payload arm (`| again i64`): the produced plain_value when
+    /// it is exactly a step field — the binding maps to that field.
+    scalar_field: ?[]const u8 = null,
+};
+
+const BackEdge = struct {
+    arm: []const u8,
+    binding: ?[]const u8,
+    args: []const ast.Arg,
+    line: usize,
+    column: usize,
+};
+
+fn claimsImplFlow(items: []const ast.Item, ev: *const ast.EventDecl) ?*const ast.Flow {
+    const seg = ev.path.segments[ev.path.segments.len - 1];
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*fl| {
+                const io = fl.impl_of orelse continue;
+                if (io.segments.len == 0) continue;
+                if (!std.mem.eql(u8, io.segments[io.segments.len - 1], seg)) continue;
+                const qf = io.module_qualifier orelse "";
+                const qe = ev.path.module_qualifier orelse "";
+                if (std.mem.eql(u8, qf, qe)) return fl;
+            },
+            .module_decl => |*m| if (claimsImplFlow(m.items, ev)) |fl| return fl,
+            else => {},
+        }
+    }
+    return null;
+}
+
+// Any impl of the subject in ANY item kind — `immediate_impl` (bare
+// returns) carry `event_path`; flows carry `impl_of`.
+fn claimsAnyImpl(items: []const ast.Item, ev: *const ast.EventDecl) bool {
+    const seg = ev.path.segments[ev.path.segments.len - 1];
+    const qe = ev.path.module_qualifier orelse "";
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*fl| {
+                if (fl.impl_of) |io| {
+                    if (io.segments.len > 0 and std.mem.eql(u8, io.segments[io.segments.len - 1], seg)) {
+                        const qf = io.module_qualifier orelse "";
+                        if (std.mem.eql(u8, qf, qe)) return true;
+                    }
+                }
+            },
+            .immediate_impl => |*ii| {
+                if (ii.event_path.segments.len > 0 and std.mem.eql(u8, ii.event_path.segments[ii.event_path.segments.len - 1], seg)) {
+                    const qi = ii.event_path.module_qualifier orelse "";
+                    if (std.mem.eql(u8, qi, qe)) return true;
+                }
+            },
+            .module_decl => |*m| if (claimsAnyImpl(m.items, ev)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+// Guard → row set. `negate` answers the else-arm's set. `==`/`!=` split
+// honesty: `==` gives the then-arm both directions and the else-arm
+// nothing (≠ is not one row); `!=` mirrors that. A weaker meet stays
+// sound — it may fail to prove, it cannot prove wrong.
+fn claimsGuardRows(
+    alloc: std.mem.Allocator,
+    lhs: []const spec.LinPart,
+    rhs: []const spec.LinPart,
+    op: []const u8,
+    negate: bool,
+    src: []const u8,
+) []const spec.LinRow {
+    var rows = std.ArrayListUnmanaged(spec.LinRow){};
+    const lt = std.mem.eql(u8, op, "<");
+    const le = std.mem.eql(u8, op, "<=");
+    const gt = std.mem.eql(u8, op, ">");
+    const ge = std.mem.eql(u8, op, ">=");
+    const eq = std.mem.eql(u8, op, "==");
+    const ne = std.mem.eql(u8, op, "!=");
+    if (!negate) {
+        if (lt) rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, true, src)) catch unreachable;
+        if (le) rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, false, src)) catch unreachable;
+        if (gt) rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, true, src)) catch unreachable;
+        if (ge) rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, false, src)) catch unreachable;
+        if (eq) {
+            rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, false, src)) catch unreachable;
+            rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, false, src)) catch unreachable;
+        }
+    } else {
+        if (lt) rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, false, src)) catch unreachable;
+        if (le) rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, true, src)) catch unreachable;
+        if (gt) rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, false, src)) catch unreachable;
+        if (ge) rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, true, src)) catch unreachable;
+        if (ne) {
+            rows.append(alloc, spec.linNormalize(alloc, lhs, rhs, false, src)) catch unreachable;
+            rows.append(alloc, spec.linNormalize(alloc, rhs, lhs, false, src)) catch unreachable;
+        }
+        // == negated is ≠ — unrepresentable as one row; the meet gets nothing.
+    }
+    return rows.items;
+}
+
+// Read the subject impl's then/else dispatch into arm → meet rows.
+// Returns null on success, or the outside-P reason.
+fn claimsArmMeets(
+    alloc: std.mem.Allocator,
+    impl: *const ast.Flow,
+    fields: []const ast.Field,
+    subject: []const u8,
+    out: *std.ArrayListUnmanaged(ArmMeet),
+) ?[]const u8 {
+    const node = impl.body.node orelse
+        return "the subject's impl flow has no body";
+    if (node != .invocation) return "the subject's impl is not an if-dispatch";
+    const inv = &node.invocation;
+    if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "if"))
+        return "the subject's impl is not an if-dispatch";
+    if (inv.path.module_qualifier) |q| {
+        if (!std.mem.eql(u8, q, "std.control")) return "the subject's impl is not an if-dispatch";
+    }
+    if (inv.args.len == 0) return "the if carries no guard";
+    const guard_src = inv.args[0].value;
+    const split = spec.splitLinCmp(guard_src);
+    const cmp = switch (split) {
+        .one => |s| s,
+        else => return "the impl's guard is not a single linear comparison",
+    };
+    const lhs = spec.parseLinExpr(alloc, std.mem.trim(u8, guard_src[0..cmp.pos], " \t")) orelse
+        return "the guard's left side is not a linear form";
+    const rhs = spec.parseLinExpr(alloc, std.mem.trim(u8, guard_src[cmp.pos + cmp.op.len ..], " \t")) orelse
+        return "the guard's right side is not a linear form";
+    for (lhs) |p| {
+        if (p.name) |n| {
+            if (!claimsFieldListed(fields, n))
+                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
+            if (!claimsIntField(fields, n))
+                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+        }
+    }
+    for (rhs) |p| {
+        if (p.name) |n| {
+            if (!claimsFieldListed(fields, n))
+                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
+            if (!claimsIntField(fields, n))
+                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+        }
+    }
+
+    for (impl.body.continuations) |*cont| {
+        const negate = std.mem.eql(u8, cont.branch, "else");
+        if (!negate and !std.mem.eql(u8, cont.branch, "then"))
+            return std.fmt.allocPrint(alloc, "the impl dispatches on '{s}' — the fence reads then/else", .{cont.branch}) catch unreachable;
+        const bc_node = cont.node orelse
+            return std.fmt.allocPrint(alloc, "arm '{s}' produces nothing the fence reads", .{cont.branch}) catch unreachable;
+        if (bc_node != .branch_constructor)
+            return std.fmt.allocPrint(alloc, "arm '{s}' is not produced by a branch constructor", .{cont.branch}) catch unreachable;
+        const bc = &bc_node.branch_constructor;
+        var rows = std.ArrayListUnmanaged(spec.LinRow){};
+        for (claimsGuardRows(alloc, lhs, rhs, cmp.op, negate, guard_src)) |r| rows.append(alloc, r) catch unreachable;
+        var meet = ArmMeet{ .arm = bc.branch_name, .rows = rows };
+        if (bc.plain_value) |pv| {
+            const pv_t = std.mem.trim(u8, pv, " \t");
+            if (claimsFieldListed(fields, pv_t)) {
+                meet.scalar_field = pv_t;
+            } else {
+                return std.fmt.allocPrint(alloc, "arm '{s}' produces '{s}' — not a field of '{s}'", .{ bc.branch_name, pv_t, subject }) catch unreachable;
+            }
+        } else {
+            for (bc.fields) |f| {
+                const es = f.expression_str orelse
+                    return std.fmt.allocPrint(alloc, "arm '{s}' field '{s}' carries no produce expression", .{ bc.branch_name, f.name }) catch unreachable;
+                if (!claimsFieldListed(fields, f.name) or !std.mem.eql(u8, es, f.name))
+                    return std.fmt.allocPrint(alloc, "arm '{s}' produces '{s}': '{s}' — the fence reads pun produces only", .{ bc.branch_name, f.name, es }) catch unreachable;
+            }
+        }
+        if (cont.continuations.len != 0)
+            return std.fmt.allocPrint(alloc, "arm '{s}' continues past its produce — the fence reads terminal arms", .{cont.branch}) catch unreachable;
+        out.append(alloc, meet) catch unreachable;
+    }
+    return null;
+}
+
+// Direct-level back-edges of a fold; a jump to the same label nested
+// inside a branch body means the dispatch feeding it is outside the
+// fence (`| live l |> boom() | ok v |> @L(...)` — the inner call's
+// contract is not modeled).
+fn claimsCollectJumps(
+    alloc: std.mem.Allocator,
+    conts: []const ast.Continuation,
+    label: []const u8,
+    depth: usize,
+    out: *std.ArrayListUnmanaged(BackEdge),
+    nested: *bool,
+) void {
+    for (conts) |*cont| {
+        if (cont.node) |*n| {
+            if (n.* == .label_jump and std.mem.eql(u8, n.label_jump.label, label)) {
+                if (depth == 0) {
+                    out.append(alloc, .{
+                        .arm = cont.branch,
+                        .binding = cont.binding,
+                        .args = n.label_jump.args,
+                        .line = cont.location.line,
+                        .column = cont.location.column,
+                    }) catch return;
+                } else {
+                    nested.* = true;
+                }
+            }
+        }
+        claimsCollectJumps(alloc, cont.continuations, label, depth + 1, out, nested);
+    }
+}
+
+fn claimsFoldHeads(alloc: std.mem.Allocator, items: []const ast.Item, ev: *const ast.EventDecl, out: *std.ArrayListUnmanaged(*const ast.Flow)) void {
+    const seg = ev.path.segments[ev.path.segments.len - 1];
+    const qe = ev.path.module_qualifier orelse "";
+    for (items) |*item| {
+        switch (item.*) {
+            .flow => |*fl| {
+                if (fl.pre_label == null) continue;
+                const node = fl.body.node orelse continue;
+                if (node != .invocation) continue;
+                const ip = &node.invocation.path;
+                if (ip.segments.len == 0) continue;
+                if (!std.mem.eql(u8, ip.segments[ip.segments.len - 1], seg)) continue;
+                const qi = ip.module_qualifier orelse "";
+                if (!std.mem.eql(u8, qi, qe)) continue;
+                out.append(alloc, fl) catch return;
+            },
+            .module_decl => |*m| claimsFoldHeads(alloc, m.items, ev, out),
+            else => {},
+        }
+    }
+}
+
+// Map a jump arg's parsed parts into step-field scope: `l.i` → `i`.
+// Returns null (outside-P) on a bare binding, a field the subject does
+// not carry, or an unbound identifier.
+fn claimsMapArgParts(
+    alloc: std.mem.Allocator,
+    parts: []const spec.LinPart,
+    binding: []const u8,
+    scalar_field: ?[]const u8,
+    fields: []const ast.Field,
+) ?[]spec.LinPart {
+    var out = std.ArrayListUnmanaged(spec.LinPart){};
+    for (parts) |p| {
+        const n = p.name orelse {
+            out.append(alloc, p) catch unreachable;
+            continue;
+        };
+        if (scalar_field != null and std.mem.eql(u8, n, binding)) {
+            out.append(alloc, .{ .coef = p.coef, .name = scalar_field.? }) catch unreachable;
+            continue;
+        }
+        if (n.len > binding.len + 1 and std.mem.startsWith(u8, n, binding) and n[binding.len] == '.') {
+            const f = n[binding.len + 1 ..];
+            if (!claimsFieldListed(fields, f)) return null;
+            out.append(alloc, .{ .coef = p.coef, .name = f }) catch unreachable;
+            continue;
+        }
+        return null;
+    }
+    return out.items;
+}
+
+// `terminates` on `ev` with rank `rank_parts`: find the impl's arm
+// meets, find the folds, discharge each back-edge.
+fn proveTerminates(
+    alloc: std.mem.Allocator,
+    items: []const ast.Item,
+    ev: *const ast.EventDecl,
+    fields: []const ast.Field,
+    rank_parts: []const spec.LinPart,
+    subject: []const u8,
+) ClaimVerdict {
+    for (rank_parts) |p| {
+        if (p.name) |n| {
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "rank names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable };
+        }
+    }
+    const impl = claimsImplFlow(items, ev) orelse {
+        // An impl the reader cannot see as a flow — a bare return lands as
+        // `immediate_impl`, and a bare return is by construction not an
+        // if-dispatch — still names its shape rather than "missing".
+        if (claimsAnyImpl(items, ev))
+            return .{ .outside = "the subject's impl is not an if-dispatch" };
+        return .{ .outside = "the subject has no impl flow" };
+    };
+    var arm_meets = std.ArrayListUnmanaged(ArmMeet){};
+    if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
+        return .{ .outside = reason };
+
+    var folds = std.ArrayListUnmanaged(*const ast.Flow){};
+    claimsFoldHeads(alloc, items, ev, &folds);
+    if (folds.items.len == 0)
+        return .{ .unproven = std.fmt.allocPrint(alloc, "no #-fold invokes '{s}'", .{subject}) catch unreachable };
+
+    var nedges: usize = 0;
+    for (folds.items) |fl| {
+        const label = fl.pre_label.?;
+        var edges = std.ArrayListUnmanaged(BackEdge){};
+        var nested = false;
+        claimsCollectJumps(alloc, fl.body.continuations, label, 0, &edges, &nested);
+        if (nested)
+            return .{ .outside = "a back-edge sits inside a nested dispatch — the inner call's contract is not modeled" };
+
+        for (edges.items) |e| {
+            nedges += 1;
+            const binding = e.binding orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
+            var arm_rows: ?*const ArmMeet = null;
+            for (arm_meets.items) |*am| {
+                if (std.mem.eql(u8, am.arm, e.arm)) {
+                    arm_rows = am;
+                    break;
+                }
+            }
+            const arm = arm_rows orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' is not produced by the subject's impl", .{e.arm}) catch unreachable };
+
+            // Jump args → substitution over step-field names.
+            var subs = std.ArrayListUnmanaged(spec.LinSub){};
+            for (e.args) |a| {
+                if (!claimsFieldListed(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not a field of '{s}'", .{ label, a.name, subject }) catch unreachable };
+                if (!claimsIntField(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not an integer field", .{ label, a.name }) catch unreachable };
+                const parts = spec.parseLinExpr(alloc, a.value) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
+                const mapped = claimsMapArgParts(alloc, parts, binding, arm.scalar_field, fields) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' names something outside the payload", .{ label, a.name, a.value }) catch unreachable };
+                subs.append(alloc, .{ .name = a.name, .expr = mapped }) catch unreachable;
+            }
+            for (fields) |f| {
+                var covered = false;
+                for (subs.items) |s| {
+                    if (std.mem.eql(u8, s.name, f.name)) covered = true;
+                }
+                if (!covered)
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} does not rebind field '{s}'", .{ label, f.name }) catch unreachable };
+            }
+
+            // R' = rank ∘ args; diff = R − R' as parts over state fields.
+            const next_rank = spec.linSubstitute(alloc, rank_parts, subs.items);
+            var diff = std.ArrayListUnmanaged(spec.LinPart){};
+            for (rank_parts) |p| diff.append(alloc, p) catch unreachable;
+            for (next_rank) |p| diff.append(alloc, .{ .coef = -p.coef, .name = p.name }) catch unreachable;
+
+            const base_n = arm.rows.items.len;
+            var meet = std.ArrayListUnmanaged(spec.LinRow){};
+            for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
+
+            // decrease: meet ∧ (R − R' <= 0) must be empty.
+            meet.items.len = base_n;
+            meet.append(alloc, spec.linPartsRow(alloc, diff.items, false, "rank does not decrease")) catch unreachable;
+            switch (spec.linFeasible(alloc, meet.items)) {
+                .infeasible => {},
+                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank may not strictly decrease", .{e.arm}) catch unreachable },
+                .outside => return .{ .outside = "the rank-decrease meet exceeds the decidable fence" },
+            }
+            // bounded: meet ∧ (R' < 0) must be empty.
+            meet.items.len = base_n;
+            meet.append(alloc, spec.linPartsRow(alloc, next_rank, true, "rank below zero")) catch unreachable;
+            switch (spec.linFeasible(alloc, meet.items)) {
+                .infeasible => {},
+                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank can fall below zero", .{e.arm}) catch unreachable },
+                .outside => return .{ .outside = "the rank-bound meet exceeds the decidable fence" },
+            }
+        }
+    }
+    return .{ .proven = std.fmt.allocPrint(alloc, "rank decreases and stays bounded at {d} back-edge{s}", .{ nedges, if (nedges == 1) "" else "s" }) catch unreachable };
+}
+
+// `honors` on `ev` — the goal is a loop invariant: it holds at every
+// fold head. Two discharges, both through spec.linFeasible:
+//
+//   base: the `#L` head's entry invocation binds `field = expr` where
+//         expr ranges over CALLER scope — caller names are renamed to
+//         `~entry.<n>` free variables so they cannot collide with the
+//         fold's own fields; the meet of those equalities must entail
+//         the goal (a literal entry like `i: 0, limit: 3` pins both).
+//   step: at every `@L` back-edge, goal-as-hypothesis ∧ the producing
+//         arm's guard must entail the substituted goal — the induction.
+//
+// `==` goals get one discharge per direction (≠ is not one row), same
+// as claimsGuardRows' split honesty elsewhere.
+fn proveHonors(
+    alloc: std.mem.Allocator,
+    items: []const ast.Item,
+    ev: *const ast.EventDecl,
+    fields: []const ast.Field,
+    glhs: []const spec.LinPart,
+    grhs: []const spec.LinPart,
+    gop: []const u8,
+    subject: []const u8,
+) ClaimVerdict {
+    for (glhs) |p| {
+        if (p.name) |n| {
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "goal names '{s}' — not an integer field, and the goal grammar is integer-only", .{n}) catch unreachable };
+        }
+    }
+    for (grhs) |p| {
+        if (p.name) |n| {
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "goal names '{s}' — not an integer field, and the goal grammar is integer-only", .{n}) catch unreachable };
+        }
+    }
+    const impl = claimsImplFlow(items, ev) orelse {
+        if (claimsAnyImpl(items, ev))
+            return .{ .outside = "the subject's impl is not an if-dispatch" };
+        return .{ .outside = "the subject has no impl flow" };
+    };
+    var arm_meets = std.ArrayListUnmanaged(ArmMeet){};
+    if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
+        return .{ .outside = reason };
+
+    var folds = std.ArrayListUnmanaged(*const ast.Flow){};
+    claimsFoldHeads(alloc, items, ev, &folds);
+    if (folds.items.len == 0)
+        return .{ .unproven = std.fmt.allocPrint(alloc, "no #-fold invokes '{s}'", .{subject}) catch unreachable };
+
+    // The inductive hypothesis: the goal as rows over current fields.
+    const ih_rows = claimsGuardRows(alloc, glhs, grhs, gop, false, "goal");
+
+    var nedges: usize = 0;
+    for (folds.items) |fl| {
+        const label = fl.pre_label.?;
+
+        // Base: the head's entry bindings as equalities. Caller-scope
+        // names are prefixed `~entry.` — free variables FM may only
+        // constrain via the equations themselves.
+        const hnode = fl.body.node orelse return .{ .outside = "the #-fold head has no body" };
+        if (hnode != .invocation) return .{ .outside = "the #-fold head is not an invocation" };
+        var base = std.ArrayListUnmanaged(spec.LinRow){};
+        for (hnode.invocation.args) |a| {
+            if (!claimsFieldListed(fields, a.name))
+                return .{ .outside = std.fmt.allocPrint(alloc, "#{s} arg '{s}' is not a field of '{s}'", .{ label, a.name, subject }) catch unreachable };
+            const eparts = spec.parseLinExpr(alloc, a.value) orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "#{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
+            var renamed = std.ArrayListUnmanaged(spec.LinPart){};
+            for (eparts) |p| {
+                if (p.name) |n| {
+                    const rn = std.fmt.allocPrint(alloc, "~entry.{s}", .{n}) catch unreachable;
+                    renamed.append(alloc, .{ .coef = p.coef, .name = rn }) catch unreachable;
+                } else renamed.append(alloc, p) catch unreachable;
+            }
+            const fpart = [_]spec.LinPart{.{ .coef = 1, .name = a.name }};
+            base.append(alloc, spec.linNormalize(alloc, &fpart, renamed.items, false, "entry binding")) catch unreachable;
+            base.append(alloc, spec.linNormalize(alloc, renamed.items, &fpart, false, "entry binding")) catch unreachable;
+        }
+        switch (claimsEntail(alloc, base.items, glhs, grhs, gop)) {
+            .entailed => {},
+            .open => return .{ .unproven = std.fmt.allocPrint(alloc, "the #{s} entry bindings do not establish the goal", .{label}) catch unreachable },
+            .outside => return .{ .outside = "the fold-entry meet exceeds the decidable fence" },
+        }
+
+        var edges = std.ArrayListUnmanaged(BackEdge){};
+        var nested = false;
+        claimsCollectJumps(alloc, fl.body.continuations, label, 0, &edges, &nested);
+        if (nested)
+            return .{ .outside = "a back-edge sits inside a nested dispatch — the inner call's contract is not modeled" };
+
+        for (edges.items) |e| {
+            nedges += 1;
+            const binding = e.binding orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
+            var arm_rows: ?*const ArmMeet = null;
+            for (arm_meets.items) |*am| {
+                if (std.mem.eql(u8, am.arm, e.arm)) {
+                    arm_rows = am;
+                    break;
+                }
+            }
+            const arm = arm_rows orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' is not produced by the subject's impl", .{e.arm}) catch unreachable };
+
+            var subs = std.ArrayListUnmanaged(spec.LinSub){};
+            for (e.args) |a| {
+                if (!claimsFieldListed(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not a field of '{s}'", .{ label, a.name, subject }) catch unreachable };
+                if (!claimsIntField(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not an integer field", .{ label, a.name }) catch unreachable };
+                const parts = spec.parseLinExpr(alloc, a.value) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
+                const mapped = claimsMapArgParts(alloc, parts, binding, arm.scalar_field, fields) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' names something outside the payload", .{ label, a.name, a.value }) catch unreachable };
+                subs.append(alloc, .{ .name = a.name, .expr = mapped }) catch unreachable;
+            }
+            for (fields) |f| {
+                var covered = false;
+                for (subs.items) |s| {
+                    if (std.mem.eql(u8, s.name, f.name)) covered = true;
+                }
+                if (!covered)
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} does not rebind field '{s}'", .{ label, f.name }) catch unreachable };
+            }
+
+            // Step: IH ∧ guard ⊢ goal'  —  goal' is the goal under the
+            // jump's rebinding (substituted parts over current fields).
+            var meet = std.ArrayListUnmanaged(spec.LinRow){};
+            for (ih_rows) |r| meet.append(alloc, r) catch unreachable;
+            for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
+            const slhs = spec.linSubstitute(alloc, glhs, subs.items);
+            const srhs = spec.linSubstitute(alloc, grhs, subs.items);
+            switch (claimsEntail(alloc, meet.items, slhs, srhs, gop)) {
+                .entailed => {},
+                .open => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the goal may not survive the step", .{e.arm}) catch unreachable },
+                .outside => return .{ .outside = "the step meet exceeds the decidable fence" },
+            }
+        }
+    }
+    return .{ .proven = std.fmt.allocPrint(alloc, "goal holds at {d} fold head{s}, preserved by {d} back-edge{s}", .{ folds.items.len, if (folds.items.len == 1) "" else "s", nedges, if (nedges == 1) "" else "s" }) catch unreachable };
+}
+
+// Entailment as infeasibility: `meet ⊢ lhs <op> rhs` iff
+// `meet ∧ ¬(lhs <op> rhs)` is empty. `==` needs both directions —
+// each negation is one representable row.
+const Entail = union(enum) { entailed, open, outside };
+
+fn claimsEntail(alloc: std.mem.Allocator, meet: []const spec.LinRow, lhs: []const spec.LinPart, rhs: []const spec.LinPart, op: []const u8) Entail {
+    const dirs: []const []const u8 = if (std.mem.eql(u8, op, "=="))
+        &.{ "<=", ">=" }
+    else
+        &.{op};
+    for (dirs) |d| {
+        const neg = claimsGuardRows(alloc, lhs, rhs, d, true, "goal refuted");
+        if (neg.len == 0) return .outside;
+        var m = std.ArrayListUnmanaged(spec.LinRow){};
+        for (meet) |r| m.append(alloc, r) catch unreachable;
+        for (neg) |r| m.append(alloc, r) catch unreachable;
+        switch (spec.linFeasible(alloc, m.items)) {
+            .infeasible => {},
+            .feasible => return .open,
+            .outside => return .outside,
+        }
+    }
+    return .entailed;
+}

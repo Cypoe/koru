@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:21 honors on tick: unproven — at the 'live' back-edge, the goal may not survive the step
