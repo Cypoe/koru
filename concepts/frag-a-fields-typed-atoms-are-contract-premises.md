@@ -41,7 +41,24 @@ handler-param write that bypasses it). Contract text rides the type
 string for exactly one reason — so the claims pass can read it — and
 must stop at the emission boundary.
 
-Open edge: only the field-type position is wired. A `&`-atom on a branch
-payload (`| live i64 & >=0`) parses and passes the same emit door, but
-the claims fence does not read it — whether arm-side types join the
-contract surface is a later ruling.
+The arm-side ruling, landed a day later: a `&`-atom on a branch payload
+(`| live { i: i64 & >=0 }`, scalar `| live i64 & >=0`) is a **produce
+contract — checked, not assumed**. Under the pun-only produce fence the
+produced fields are the same-named tor fields, so the discharge is
+`arm-meet ∪ declared types ⊢ payload rows`; a scalar payload's implicit
+self is the produced value the arm's scalar_field names. What the meet
+leaves open is refused (KORU213): a declared produce that cannot be
+established may be a lie, and typed means proved — `live` promising
+`i & >=0` under an untyped `i` is a refusal, and declaring the field
+type is what makes the promise provable. Proven contracts report in the
+census as `[contract] <subject>: produce contracts proven on N arms`.
+
+The pair now reads coherently: **field types are assumed premises** (the
+state's invariant, declared once); **payload types are checked
+obligations** (the arm's promise, discharged per produce site the fence
+reads). A verified payload row could then rejoin the fold's step meet as
+a premise about the destructured binding — `live { i: i64 & >=0 }`
+checked ⇒ `l.i >= 0` — which is sound by the check itself and not yet
+wired; under pun produces it duplicates what the field type would say,
+so the power gap is narrow (per-arm vs per-state typing on the same
+names) but real.

@@ -95,52 +95,76 @@ fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
 // must be able to read before it may assume it.
 const TypeRows = union(enum) { rows: []const spec.LinRow, outside: []const u8 };
 
+// One `&`-atom as rows — `atom` is the text after a `&`; `self_name` is
+// the name an implicit-self comparison (`>=0`) binds to; `site` spells
+// where the atom sits for the diagnostic (`field 'i'`, `produced 'i'`).
+fn claimsTypedAtomRows(
+    alloc: std.mem.Allocator,
+    atom: []const u8,
+    self_name: []const u8,
+    site: []const u8,
+    fields: []const ast.Field,
+    subject: []const u8,
+) TypeRows {
+    const split = spec.splitLinCmp(atom);
+    const sp = switch (split) {
+        .one => |s| s,
+        else => return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on {s} of '{s}' is not one linear comparison", .{ atom, site, subject }) catch unreachable },
+    };
+    var lhs: []const spec.LinPart = undefined;
+    const ltxt = std.mem.trim(u8, atom[0..sp.pos], " ");
+    if (ltxt.len == 0) {
+        // Implicit self: `& >=0` means `<self> >= 0`.
+        const one = [_]spec.LinPart{.{ .coef = 1, .name = self_name }};
+        lhs = alloc.dupe(spec.LinPart, &one) catch unreachable;
+    } else {
+        lhs = spec.parseLinExpr(alloc, ltxt) orelse
+            return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on {s} of '{s}' is not a linear form", .{ atom, site, subject }) catch unreachable };
+    }
+    const rtxt = std.mem.trim(u8, atom[sp.pos + sp.op.len ..], " ");
+    const rhs = spec.parseLinExpr(alloc, rtxt) orelse
+        return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on {s} of '{s}' is not a linear form", .{ atom, site, subject }) catch unreachable };
+    // Relational atoms may name sibling fields; a stranger is a
+    // broken contract, not a premise.
+    for (lhs) |p| {
+        if (p.name) |n| {
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
+        }
+    }
+    for (rhs) |p| {
+        if (p.name) |n| {
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
+        }
+    }
+    return .{ .rows = claimsGuardRows(alloc, lhs, rhs, sp.op, false, "field type") };
+}
+
+// Every `&`-atom across `decl_fields`' type text as rows, with names
+// validated against the subject's `fields`. Two callers: the tor's own
+// field decl (decl_fields == fields) and an arm's payload schema.
 fn claimsFieldTypeRows(
     alloc: std.mem.Allocator,
+    decl_fields: []const ast.Field,
     fields: []const ast.Field,
     subject: []const u8,
 ) TypeRows {
     var rows = std.ArrayListUnmanaged(spec.LinRow){};
-    for (fields) |f| {
+    for (decl_fields) |f| {
         const cut = std.mem.indexOfScalar(u8, f.type, '&') orelse continue;
         var atoms = std.mem.splitScalar(u8, f.type[cut + 1 ..], '&');
         while (atoms.next()) |raw| {
             const atom = std.mem.trim(u8, raw, " ");
             if (atom.len == 0) continue;
-            const split = spec.splitLinCmp(atom);
-            const sp = switch (split) {
-                .one => |s| s,
-                else => return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not one linear comparison", .{ atom, f.name, subject }) catch unreachable },
-            };
-            var lhs: []const spec.LinPart = undefined;
-            const ltxt = std.mem.trim(u8, atom[0..sp.pos], " ");
-            if (ltxt.len == 0) {
-                // Implicit self: `& >=0` means `<field> >= 0`.
-                const one = [_]spec.LinPart{.{ .coef = 1, .name = f.name }};
-                lhs = alloc.dupe(spec.LinPart, &one) catch unreachable;
-            } else {
-                lhs = spec.parseLinExpr(alloc, ltxt) orelse
-                    return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not a linear form", .{ atom, f.name, subject }) catch unreachable };
+            const site = std.fmt.allocPrint(alloc, "field '{s}'", .{f.name}) catch unreachable;
+            const ar = claimsTypedAtomRows(alloc, atom, f.name, site, fields, subject);
+            switch (ar) {
+                .outside => |m| return .{ .outside = m },
+                .rows => |rs| {
+                    for (rs) |r| rows.append(alloc, r) catch unreachable;
+                },
             }
-            const rtxt = std.mem.trim(u8, atom[sp.pos + sp.op.len ..], " ");
-            const rhs = spec.parseLinExpr(alloc, rtxt) orelse
-                return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not a linear form", .{ atom, f.name, subject }) catch unreachable };
-            // Relational atoms may name sibling fields; a stranger is a
-            // broken contract, not a premise.
-            for (lhs) |p| {
-                if (p.name) |n| {
-                    if (!claimsIntField(fields, n))
-                        return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
-                }
-            }
-            for (rhs) |p| {
-                if (p.name) |n| {
-                    if (!claimsIntField(fields, n))
-                        return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
-                }
-            }
-            for (claimsGuardRows(alloc, lhs, rhs, sp.op, false, "field type")) |r|
-                rows.append(alloc, r) catch unreachable;
         }
     }
     return .{ .rows = rows.items };
@@ -174,6 +198,91 @@ fn claimsSubRows(
     return out.items;
 }
 
+// `| live { i: i64 & >=0 }` on a branch is the arm's produce contract —
+// CHECKED, not assumed: under the pun-only fence the produced fields
+// are the same-named tor fields, so the discharge is
+// `arm-meet ∪ declared types ⊢ payload rows`. A scalar payload parses
+// as `{ __type_ref: <type> }` — its implicit self is the produced
+// value, which the arm's scalar_field names. What the meet cannot
+// establish is refused: the declaration may be a lie, and a contract
+// that cannot be established must not silently ride.
+const ProduceVerdict = union(enum) { ok: usize, refuse: []const u8 };
+
+fn claimsProduceCheck(
+    alloc: std.mem.Allocator,
+    items: []const ast.Item,
+    ev: *const ast.EventDecl,
+    fields: []const ast.Field,
+    subject: []const u8,
+) ProduceVerdict {
+    var has_typed = false;
+    for (ev.branches) |b| {
+        for (b.payload.fields) |f| {
+            if (std.mem.indexOfScalar(u8, f.type, '&') != null) has_typed = true;
+        }
+    }
+    if (!has_typed) return .{ .ok = 0 };
+
+    const impl = claimsImplFlow(items, ev) orelse
+        return .{ .refuse = std.fmt.allocPrint(alloc, "'{s}' declares typed payloads but its impl is not an if-dispatch — the produce contract cannot be established", .{subject}) catch unreachable };
+    var arm_meets = std.ArrayListUnmanaged(ArmMeet){};
+    if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
+        return .{ .refuse = std.fmt.allocPrint(alloc, "'{s}' declares typed payloads; {s}", .{ subject, reason }) catch unreachable };
+    const type_rows = switch (claimsFieldTypeRows(alloc, fields, fields, subject)) {
+        .outside => |m| return .{ .refuse = m },
+        .rows => |rs| rs,
+    };
+
+    var n: usize = 0;
+    for (arm_meets.items) |*am| {
+        var branch: ?*const ast.Branch = null;
+        for (ev.branches) |*b| {
+            if (std.mem.eql(u8, b.name, am.arm)) {
+                branch = b;
+                break;
+            }
+        }
+        const br = branch orelse
+            return .{ .refuse = std.fmt.allocPrint(alloc, "arm '{s}' is not a declared branch of '{s}'", .{ am.arm, subject }) catch unreachable };
+        var prows = std.ArrayListUnmanaged(spec.LinRow){};
+        for (br.payload.fields) |f| {
+            const cut = std.mem.indexOfScalar(u8, f.type, '&') orelse continue;
+            const self_name = if (std.mem.eql(u8, f.name, "__type_ref"))
+                am.scalar_field orelse
+                    return .{ .refuse = std.fmt.allocPrint(alloc, "arm '{s}' declares a typed scalar payload but produces no field of '{s}'", .{ am.arm, subject }) catch unreachable }
+            else
+                f.name;
+            var atoms = std.mem.splitScalar(u8, f.type[cut + 1 ..], '&');
+            while (atoms.next()) |raw| {
+                const atom = std.mem.trim(u8, raw, " ");
+                if (atom.len == 0) continue;
+                const site = std.fmt.allocPrint(alloc, "produced '{s}'", .{self_name}) catch unreachable;
+                switch (claimsTypedAtomRows(alloc, atom, self_name, site, fields, subject)) {
+                    .outside => |m| return .{ .refuse = m },
+                    .rows => |rs| for (rs) |r| prows.append(alloc, r) catch unreachable,
+                }
+            }
+        }
+        if (prows.items.len == 0) continue;
+        n += 1;
+        var meet = std.ArrayListUnmanaged(spec.LinRow){};
+        for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;
+        for (type_rows) |r| meet.append(alloc, r) catch unreachable;
+        for (prows.items) |pr| {
+            var lhs = std.ArrayListUnmanaged(spec.LinPart){};
+            for (pr.terms) |t| lhs.append(alloc, .{ .coef = t.coef, .name = t.name }) catch unreachable;
+            const rhs = [_]spec.LinPart{.{ .coef = pr.bound, .name = null }};
+            const op: []const u8 = if (pr.strict) "<" else "<=";
+            switch (claimsEntail(alloc, meet.items, lhs.items, &rhs, op)) {
+                .entailed => {},
+                .open => return .{ .refuse = std.fmt.allocPrint(alloc, "arm '{s}' of '{s}' does not establish '{s}' under its '{s}' meet — a declared produce contract", .{ am.arm, subject, spec.linSpell(alloc, pr.terms, pr.bound, pr.strict), am.arm }) catch unreachable },
+                .outside => return .{ .refuse = "the produce-contract meet exceeds the decidable fence" },
+            }
+        }
+    }
+    return .{ .ok = n };
+}
+
 ~proc pass-claims-check|zig {
     var mutable_ctx = ctx;
     mutable_ctx.current_pass = "claims_check";
@@ -185,6 +294,7 @@ fn claimsSubRows(
 
     const claims = spec.claim_registry[0..spec.claim_registry_count];
     if (claims.len == 0) return .{ .ctx = ctx };
+    var checked_evs = std.ArrayListUnmanaged(*const ast.EventDecl){};
 
     var refused = false;
 
@@ -310,6 +420,29 @@ fn claimsSubRows(
             reporter.addError(.KORU213, c.line, c.column, "std/spec:claim({s}): goal '{s}' names '{s}' — not an input field of '{s}'", .{ c.atom, c.goal, n, c.on }) catch {};
             refused = true;
             continue;
+        }
+        // Produce contracts: `&`-atoms on the subject's branch payloads
+        // are obligations the impl must establish — checked once per
+        // subject, refused when the meet leaves one open.
+        if (subject_ev) |ev| {
+            var seen = false;
+            for (checked_evs.items) |p| {
+                if (p == ev) seen = true;
+            }
+            if (!seen) {
+                checked_evs.append(mutable_ctx.allocator, ev) catch unreachable;
+                switch (claimsProduceCheck(mutable_ctx.allocator, mutable_ctx.ast.items, ev, fields.items, c.on)) {
+                    .ok => |np| {
+                        if (np > 0)
+                            std.debug.print("[contract] {s}: produce contracts proven on {d} arm{s}\n", .{ c.on, np, if (np == 1) "" else "s" });
+                    },
+                    .refuse => |m| {
+                        reporter.addError(.KORU213, c.line, c.column, "std/spec:contract: {s}", .{m}) catch {};
+                        refused = true;
+                        continue;
+                    },
+                }
+            }
         }
         // census line — the declared record, pinned by expected_comptime.txt.
         // A judged claim goes on to the prover reader: `proven` means

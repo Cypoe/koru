@@ -42,7 +42,7 @@ fn claimsRankPrelude(
     var pre = RankPrelude{};
     if (claimsArmMeets(alloc, impl, fields, subject, &pre.arm_meets)) |reason|
         return .{ .verdict = .{ .outside = reason } };
-    pre.type_rows = switch (claimsFieldTypeRows(alloc, fields, subject)) {
+    pre.type_rows = switch (claimsFieldTypeRows(alloc, fields, fields, subject)) {
         .outside => |m| return .{ .verdict = .{ .outside = m } },
         .rows => |rs| rs,
     };

@@ -1,0 +1,2 @@
+[contract] drop: produce contracts proven on 2 arms
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_023_claim_typed_scalar_payload/input.k:21 terminates on drop: proven — inferred rank 'i' decreases and stays bounded at 1 back-edge

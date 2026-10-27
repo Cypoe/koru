@@ -104,6 +104,19 @@ reaches emission verbatim — `writeFieldType` and the handler-param
 write now emit everything before the first `&`. Inference enumerates
 type rows as rank candidates too. 675 range 20/20.*
 
+*Update 2026-10-29b: produce contracts — `&`-atoms on branch payloads
+are CHECKED obligations, completing the pair with field types (assumed
+premises). Under the pun-only fence the discharge is `arm-meet ∪
+declared types ⊢ payload rows` per arm; scalar payloads bind their
+implicit self to the arm's scalar_field. An unestablished produce is a
+KORU213 refusal — typed means proved — and proven contracts report
+`[contract] <subject>: produce contracts proven on N arms`. Pins:
+675_021 record payload proven via field type, 675_022 refused under an
+untyped field, 675_023 scalar payloads on both arms proven. Remaining
+edge: verified payload rows could rejoin the step meet as premises —
+sound, narrow, unwired. 675 range 23/23, blast radius 64/64 + 690_3
+armed.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

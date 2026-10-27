@@ -374,7 +374,7 @@ fn proveHonors(
     if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
         return .{ .outside = reason };
 
-    const type_rows = switch (claimsFieldTypeRows(alloc, fields, subject)) {
+    const type_rows = switch (claimsFieldTypeRows(alloc, fields, fields, subject)) {
         .outside => |m| return .{ .outside = m },
         .rows => |rs| rs,
     };
