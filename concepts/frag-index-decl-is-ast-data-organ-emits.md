@@ -66,3 +66,27 @@ vocabulary lives in `std/indexes` (plural), not `std/index` — `index.kz`
 `grid`, `kernel`), claimed by exact tors, not a glob —
 `std/indexes:grod` fails unclaimed. The glob road (700_EVENT_GLOBBING,
 resurrected same day) stays for genuinely-open families like `log.*`.
+
+## Ordered variant — widening, not a second mechanism (690_377 pin, 2026-10-26)
+
+An ordered index (`std/indexes:ordered(<store>, <col>)`, spelling
+provisional) belongs in the SAME declaration slot this belief describes:
+it is still AST-data discovered by the organ, still maintained inside the
+verbs' own emit, still one declaration per store. What changes is only
+the bucket's structure — sorted distinct keys over per-key member lists —
+and the `guardKey`/`guardRoute` boundary gaining `<`, `<=`, `>`, `>=`
+arms. Route-vs-scan is already the architecture's single decision point,
+so ordered routing is a widening of that function, never a parallel
+feature. `==` routes through the same directory: the ordered declaration
+is a superset of the equality one, not a sibling.
+
+Two consequences the pin fixes as semantics, not tuning: a routed range
+walk visits in ASCENDING KEY ORDER (join order within a bucket), and
+`! first` under a range answers the first member of that walk — the same
+"first = first of the walk" contract the equality route already runs,
+which diverges from lowest-dense once an order exists. The honest
+structure at store scale is a sorted key array plus binary search; a
+B-tree earns the slot only if the distinct-key domain outgrows a flat
+directory — the prompt for the pin was bbtree (2026-10-23), and its real
+contributions (inline keys, optimistic latch coupling, mmap layout)
+answer questions this seam does not ask.
