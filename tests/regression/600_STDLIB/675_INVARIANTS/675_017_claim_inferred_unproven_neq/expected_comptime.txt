@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_017_claim_inferred_unproven_neq/input.k:21 terminates on tick: unproven — no inferred rank discharged the back-edges (at the 'live' back-edge, the rank can fall below zero)

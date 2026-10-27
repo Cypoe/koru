@@ -1,0 +1,233 @@
+// Koru Standard Library: the `claims-rank` part of compiler.kz.
+// Joined via `~part claims-rank` in compiler.kz; merged into the
+// compiler module at load — the `spec` alias is declared by the claims
+// part. This part owns the rank machinery `terminates` stands on: the
+// shared prelude (arm meets + fold heads), the per-candidate discharge,
+// and rank inference — where a rank comes from when the claim declares
+// none.
+//
+// What a rank judgment needs before the rank is even chosen: the impl's
+// arm meets and the fold heads over the subject. Shared by the declared
+// path and the inferred path — inference only changes WHERE the rank
+// comes from, not what a rank must prove.
+const RankPrelude = struct {
+    arm_meets: std.ArrayListUnmanaged(ArmMeet) = .{},
+    folds: std.ArrayListUnmanaged(*const ast.Flow) = .{},
+};
+
+const RankStep = union(enum) {
+    ok: RankPrelude,
+    verdict: ClaimVerdict,
+};
+
+fn claimsRankPrelude(
+    alloc: std.mem.Allocator,
+    items: []const ast.Item,
+    ev: *const ast.EventDecl,
+    fields: []const ast.Field,
+    subject: []const u8,
+) RankStep {
+    const impl = claimsImplFlow(items, ev) orelse {
+        // An impl the reader cannot see as a flow — a bare return lands as
+        // `immediate_impl`, and a bare return is by construction not an
+        // if-dispatch — still names its shape rather than "missing".
+        if (claimsAnyImpl(items, ev))
+            return .{ .verdict = .{ .outside = "the subject's impl is not an if-dispatch" } };
+        return .{ .verdict = .{ .outside = "the subject has no impl flow" } };
+    };
+    var pre = RankPrelude{};
+    if (claimsArmMeets(alloc, impl, fields, subject, &pre.arm_meets)) |reason|
+        return .{ .verdict = .{ .outside = reason } };
+    claimsFoldHeads(alloc, items, ev, &pre.folds);
+    if (pre.folds.items.len == 0)
+        return .{ .verdict = .{ .unproven = std.fmt.allocPrint(alloc, "no #-fold invokes '{s}'", .{subject}) catch unreachable } };
+    return .{ .ok = pre };
+}
+
+const RankTry = union(enum) {
+    proven: usize,
+    unproven: []const u8,
+    outside: []const u8,
+};
+
+// One candidate rank against every back-edge of every fold — the
+// discharge loop both the declared and the inferred path run.
+fn claimsRankTry(
+    alloc: std.mem.Allocator,
+    arm_meets: []const ArmMeet,
+    folds: []const *const ast.Flow,
+    fields: []const ast.Field,
+    rank_parts: []const spec.LinPart,
+    subject: []const u8,
+) RankTry {
+    var nedges: usize = 0;
+    for (folds) |fl| {
+        const label = fl.pre_label.?;
+        var edges = std.ArrayListUnmanaged(BackEdge){};
+        var nested = false;
+        claimsCollectJumps(alloc, fl.body.continuations, label, 0, &edges, &nested);
+        if (nested)
+            return .{ .outside = "a back-edge sits inside a nested dispatch — the inner call's contract is not modeled" };
+
+        for (edges.items) |e| {
+            nedges += 1;
+            const binding = e.binding orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
+            var arm_rows: ?*const ArmMeet = null;
+            for (arm_meets) |*am| {
+                if (std.mem.eql(u8, am.arm, e.arm)) {
+                    arm_rows = am;
+                    break;
+                }
+            }
+            const arm = arm_rows orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' is not produced by the subject's impl", .{e.arm}) catch unreachable };
+
+            // Jump args → substitution over step-field names.
+            var subs = std.ArrayListUnmanaged(spec.LinSub){};
+            for (e.args) |a| {
+                if (!claimsFieldListed(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not a field of '{s}'", .{ label, a.name, subject }) catch unreachable };
+                if (!claimsIntField(fields, a.name))
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not an integer field", .{ label, a.name }) catch unreachable };
+                const parts = spec.parseLinExpr(alloc, a.value) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
+                const mapped = claimsMapArgParts(alloc, parts, binding, arm.scalar_field, fields) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' names something outside the payload", .{ label, a.name, a.value }) catch unreachable };
+                subs.append(alloc, .{ .name = a.name, .expr = mapped }) catch unreachable;
+            }
+            for (fields) |f| {
+                var covered = false;
+                for (subs.items) |s| {
+                    if (std.mem.eql(u8, s.name, f.name)) covered = true;
+                }
+                if (!covered)
+                    return .{ .outside = std.fmt.allocPrint(alloc, "@{s} does not rebind field '{s}'", .{ label, f.name }) catch unreachable };
+            }
+
+            // R' = rank ∘ args; diff = R − R' as parts over state fields.
+            const next_rank = spec.linSubstitute(alloc, rank_parts, subs.items);
+            var diff = std.ArrayListUnmanaged(spec.LinPart){};
+            for (rank_parts) |p| diff.append(alloc, p) catch unreachable;
+            for (next_rank) |p| diff.append(alloc, .{ .coef = -p.coef, .name = p.name }) catch unreachable;
+
+            const base_n = arm.rows.items.len;
+            var meet = std.ArrayListUnmanaged(spec.LinRow){};
+            for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
+
+            // decrease: meet ∧ (R − R' <= 0) must be empty.
+            meet.items.len = base_n;
+            meet.append(alloc, spec.linPartsRow(alloc, diff.items, false, "rank does not decrease")) catch unreachable;
+            switch (spec.linFeasible(alloc, meet.items)) {
+                .infeasible => {},
+                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank may not strictly decrease", .{e.arm}) catch unreachable },
+                .outside => return .{ .outside = "the rank-decrease meet exceeds the decidable fence" },
+            }
+            // bounded: meet ∧ (R' < 0) must be empty.
+            meet.items.len = base_n;
+            meet.append(alloc, spec.linPartsRow(alloc, next_rank, true, "rank below zero")) catch unreachable;
+            switch (spec.linFeasible(alloc, meet.items)) {
+                .infeasible => {},
+                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank can fall below zero", .{e.arm}) catch unreachable },
+                .outside => return .{ .outside = "the rank-bound meet exceeds the decidable fence" },
+            }
+        }
+    }
+    return .{ .proven = nedges };
+}
+
+
+// `terminates` with no declared rank: the arm guards are the candidate
+// source — a row `Σc·x <= b` is a bound the subject's own dispatch
+// proved, so `b − Σc·x` is a rank candidate (strict rows carry the
+// integer-tightened bound, which is exactly the slack a strict guard
+// implies). Each candidate faces the same discharge a declared rank
+// does; the first to clear every back-edge is reported with its
+// spelling. Candidates always exist for any parseable guard, so the
+// empty case is defensive, not reachable.
+fn proveTerminatesInferred(
+    alloc: std.mem.Allocator,
+    items: []const ast.Item,
+    ev: *const ast.EventDecl,
+    fields: []const ast.Field,
+    subject: []const u8,
+) ClaimVerdict {
+    const pre = switch (claimsRankPrelude(alloc, items, ev, fields, subject)) {
+        .verdict => |v| return v,
+        .ok => |p| p,
+    };
+    var cands = std.ArrayListUnmanaged([]const spec.LinPart){};
+    var spells = std.ArrayListUnmanaged([]const u8){};
+    for (pre.arm_meets.items) |am| {
+        for (am.rows.items) |r| {
+            var cand = std.ArrayListUnmanaged(spec.LinPart){};
+            var key_terms = std.ArrayListUnmanaged(spec.LinTerm){};
+            for (r.terms) |t| {
+                cand.append(alloc, .{ .coef = -t.coef, .name = t.name }) catch unreachable;
+                key_terms.append(alloc, t) catch unreachable;
+            }
+            cand.append(alloc, .{ .coef = r.bound, .name = null }) catch unreachable;
+            // Dedup on the ROW's canonical spell — two guard rows that
+            // spell the same bound generate the same candidate.
+            const key = spec.linSpell(alloc, key_terms.items, r.bound, r.strict);
+            var dup = false;
+            for (spells.items) |s| {
+                if (std.mem.eql(u8, s, key)) dup = true;
+            }
+            if (!dup) {
+                spells.append(alloc, key) catch unreachable;
+                cands.append(alloc, cand.items) catch unreachable;
+            }
+        }
+    }
+    if (cands.items.len == 0)
+        return .{ .outside = "the arm guards hold no linear bound to infer a rank from" };
+    var first_fail: ?[]const u8 = null;
+    for (cands.items) |cand| {
+        switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, cand, subject)) {
+            .proven => |n| return .{ .proven = std.fmt.allocPrint(alloc, "inferred rank '{s}' decreases and stays bounded at {d} back-edge{s}", .{ claimsSpellParts(alloc, cand), n, if (n == 1) "" else "s" }) catch unreachable },
+            .unproven => |m| {
+                if (first_fail == null) first_fail = m;
+            },
+            .outside => |m| return .{ .outside = m },
+        }
+    }
+    return .{ .unproven = std.fmt.allocPrint(alloc, "no inferred rank discharged the back-edges ({s})", .{first_fail orelse "no candidates"}) catch unreachable };
+}
+
+// A linear form's canonical spelling for the census line —
+// `limit - i - 1`, terms first (declaration order), constant last.
+fn claimsSpellParts(alloc: std.mem.Allocator, parts: []const spec.LinPart) []const u8 {
+    var out = std.ArrayList(u8).initCapacity(alloc, parts.len * 10 + 8) catch unreachable;
+    var first = true;
+    // Canonical order: positive terms, then negative, then the constant —
+    // `limit - i`, not `-i + limit`.
+    for ([_]i64{ 1, -1 }) |sign| {
+    for (parts) |p| {
+        const n = p.name orelse continue;
+        if ((p.coef >= 0) != (sign > 0)) continue;
+        const c = if (p.coef < 0) -p.coef else p.coef;
+        if (!first) {
+            out.appendSlice(alloc, if (p.coef < 0) " - " else " + ") catch unreachable;
+        } else if (p.coef < 0) {
+            out.appendSlice(alloc, "-") catch unreachable;
+        }
+        if (c != 1) out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}*", .{c}) catch unreachable) catch unreachable;
+        out.appendSlice(alloc, n) catch unreachable;
+        first = false;
+    }
+    }
+    for (parts) |p| {
+        if (p.name != null) continue;
+        if (first) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}", .{p.coef}) catch unreachable) catch unreachable;
+        } else if (p.coef > 0) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " + {d}", .{p.coef}) catch unreachable) catch unreachable;
+        } else if (p.coef < 0) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " - {d}", .{-p.coef}) catch unreachable) catch unreachable;
+        }
+        first = false;
+    }
+    if (first) out.appendSlice(alloc, "0") catch unreachable;
+    return out.toOwnedSlice(alloc) catch unreachable;
+}

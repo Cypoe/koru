@@ -78,6 +78,18 @@ pin the refusals. The prover readers moved to
 resolution, the prover part holds walkers + judgments; 675 range
 14/14, 671+690_3*+665 154/154 with all oracle legs armed.*
 
+*Update 2026-10-28b: rank inference landed — `"rank"` on `terminates`
+is optional. Absent, the prover enumerates candidates from the
+subject's own arm guards: each normalized row `Σc·x ≤ b` is a bound the
+dispatch proved, so `b − Σc·x` is a candidate, each discharged through
+the same loop the declared rank faces. First to clear every back-edge
+is named with its canonical spelling (`inferred rank 'limit - i'`);
+none clearing is `unproven` with the first failure named (the `!=`
+guard is the canonical case). The refactor splits the judgment into
+shared prelude + per-candidate discharge — `claimsRankPrelude` and
+`claimsRankTry` now live in `compiler.claims-rank.kz` with the
+inference reader; 675 range 17/17, blast radius 154/154.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

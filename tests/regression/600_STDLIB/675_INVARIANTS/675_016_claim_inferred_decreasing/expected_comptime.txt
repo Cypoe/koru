@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_016_claim_inferred_decreasing/input.k:19 terminates on tick: proven — inferred rank 'i' decreases and stays bounded at 1 back-edge

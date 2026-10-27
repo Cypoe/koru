@@ -143,13 +143,14 @@ fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
         var goal_lhs: []const spec.LinPart = &.{};
         var goal_rhs: []const spec.LinPart = &.{};
         var goal_op: []const u8 = "";
-        var needs_rank = false;
         var needs_goal = false;
         for (catom.required) |req| {
-            if (std.mem.eql(u8, req, "rank")) needs_rank = true;
             if (std.mem.eql(u8, req, "goal")) needs_goal = true;
         }
-        if (needs_rank) {
+        // `rank` is optional on `terminates` — a declared rank must still
+        // parse (malformed is a refusal); absent, the prover infers rank
+        // candidates from the arm guards.
+        if (c.rank.len > 0) {
             rank_parts = spec.parseLinExpr(mutable_ctx.allocator, c.rank) orelse {
                 reporter.addError(.KORU213, c.line, c.column, "std/spec:claim({s}): rank '{s}' is not a linear form — terms are `N`, `name`, `N*name` joined by `+`/`-`", .{ c.atom, c.rank }) catch {};
                 refused = true;
@@ -226,7 +227,10 @@ fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
         var detail: []const u8 = "";
         if (subject_ev) |ev| {
             if (std.mem.eql(u8, c.atom, "terminates")) {
-                const verdict = proveTerminates(mutable_ctx.allocator, mutable_ctx.ast.items, ev, fields.items, rank_parts, c.on);
+                const verdict = if (c.rank.len > 0)
+                    proveTerminates(mutable_ctx.allocator, mutable_ctx.ast.items, ev, fields.items, rank_parts, c.on)
+                else
+                    proveTerminatesInferred(mutable_ctx.allocator, mutable_ctx.ast.items, ev, fields.items, c.on);
                 word = switch (verdict) {
                     .proven => "proven",
                     .unproven => "unproven",

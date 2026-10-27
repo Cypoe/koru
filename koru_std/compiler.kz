@@ -1597,13 +1597,13 @@ const emitFlowWithMocks = struct {
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
-// Witness check - the trusted consumer pass after every solver — decl, mark
-// helpers, and impl live in compiler.witness.kz (joined via ~part witness).
+// Witness check — decl, helpers, impl: compiler.witness.kz.
 ~part witness
 
-// Claims check — decl+pass in compiler.claims.kz, provers in claims-prover.
+// Claims — pass in claims.kz, provers in claims-prover, rank in claims-rank.
 ~part claims
 ~part claims-prover
+~part claims-rank
 
 // Semantic phantom type checking - validates type-state compatibility using
 // the default Koru semantic checker (module-qualified phantom states)

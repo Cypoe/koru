@@ -51,7 +51,7 @@ pub const ClaimAtom = struct {
 /// registered definition; `required` names the JSON fields the
 /// declaration must carry.
 pub const claim_atoms = [_]ClaimAtom{
-    .{ .name = "terminates", .required = &.{"rank"}, .doc = "the declared rank is a linear form over the fold's fields that strictly decreases across every back-edge and is bounded below" },
+    .{ .name = "terminates", .required = &.{}, .doc = "the fold terminates: a linear rank over the fields strictly decreases across every back-edge and is bounded below — declared as \"rank\", or inferred from the arm guards when the field is absent" },
     .{ .name = "honors", .required = &.{"goal"}, .doc = "the declared goal is a linear comparison over the fold's fields holding at every head — established by the entry bindings, preserved by every back-edge (the goal is its own inductive hypothesis)" },
 };
 
