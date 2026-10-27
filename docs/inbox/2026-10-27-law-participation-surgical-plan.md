@@ -90,6 +90,20 @@ shared prelude + per-candidate discharge — `claimsRankPrelude` and
 `claimsRankTry` now live in `compiler.claims-rank.kz` with the
 inference reader; 675 range 17/17, blast radius 154/154.*
 
+*Update 2026-10-29: typed `&`-atoms are contract premises — "proven
+when typed" landed. A tor field's type may carry `&`-atoms
+(`i: i64 & >=0`, relational `& spend <= balance + margin`); the claims
+pass reads them into every meet — at the fold head (base: an open
+entry like `i: start` needs the type to pin the sign) and at every
+back-edge. Under substitution they state the produced values'
+contract, which is exactly the `terminates` bounded obligation — a
+`!=` guard, yielding no rows, becomes provable on the type alone
+(675_019). Malformed atoms are outside-P naming the atom (675_020);
+`!=` atoms contribute no rows, conservatively. The same `.type` text
+reaches emission verbatim — `writeFieldType` and the handler-param
+write now emit everything before the first `&`. Inference enumerates
+type rows as rank candidates too. 675 range 20/20.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

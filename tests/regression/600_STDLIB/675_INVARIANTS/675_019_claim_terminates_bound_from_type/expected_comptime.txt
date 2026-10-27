@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_019_claim_terminates_bound_from_type/input.k:21 terminates on drop: proven — inferred rank 'i' decreases and stays bounded at 1 back-edge

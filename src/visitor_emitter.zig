@@ -3062,7 +3062,7 @@ pub const VisitorEmitter = struct {
                 if (i > 0) try self.code_emitter.write(", ");
                 var pbuf: [24]u8 = undefined;
                 try self.code_emitter.write(try std.fmt.bufPrint(&pbuf, "__koru_p_{d}: ", .{i}));
-                try self.code_emitter.write(field.type);
+                try self.code_emitter.write(emitter.fieldContractBase(field.type));
             }
             try self.code_emitter.write(") @This().Output {\n");
         } else {

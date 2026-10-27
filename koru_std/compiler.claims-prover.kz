@@ -323,7 +323,7 @@ fn proveTerminates(
         .verdict => |v| return v,
         .ok => |p| p,
     };
-    return switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, rank_parts, subject)) {
+    return switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, pre.type_rows, rank_parts, subject)) {
         .proven => |n| .{ .proven = std.fmt.allocPrint(alloc, "rank decreases and stays bounded at {d} back-edge{s}", .{ n, if (n == 1) "" else "s" }) catch unreachable },
         .unproven => |m| .{ .unproven = m },
         .outside => |m| .{ .outside = m },
@@ -374,6 +374,11 @@ fn proveHonors(
     if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
         return .{ .outside = reason };
 
+    const type_rows = switch (claimsFieldTypeRows(alloc, fields, subject)) {
+        .outside => |m| return .{ .outside = m },
+        .rows => |rs| rs,
+    };
+
     var folds = std.ArrayListUnmanaged(*const ast.Flow){};
     claimsFoldHeads(alloc, items, ev, &folds);
     if (folds.items.len == 0)
@@ -408,6 +413,9 @@ fn proveHonors(
             base.append(alloc, spec.linNormalize(alloc, &fpart, renamed.items, false, "entry binding")) catch unreachable;
             base.append(alloc, spec.linNormalize(alloc, renamed.items, &fpart, false, "entry binding")) catch unreachable;
         }
+        // Declared types are premises at the head too — `i & >=0` pins
+        // what an open entry binding cannot.
+        for (type_rows) |r| base.append(alloc, r) catch unreachable;
         switch (claimsEntail(alloc, base.items, glhs, grhs, gop)) {
             .entailed => {},
             .open => return .{ .unproven = std.fmt.allocPrint(alloc, "the #{s} entry bindings do not establish the goal", .{label}) catch unreachable },
@@ -455,11 +463,15 @@ fn proveHonors(
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} does not rebind field '{s}'", .{ label, f.name }) catch unreachable };
             }
 
-            // Step: IH ∧ guard ⊢ goal'  —  goal' is the goal under the
-            // jump's rebinding (substituted parts over current fields).
+            // Step: IH ∧ guard ∧ declared types ⊢ goal'  —  goal' is the
+            // goal under the jump's rebinding (substituted parts over
+            // current fields). Substituted type rows state the produced
+            // values' own contract — `i' & >=0` under `i' = i − 1`.
             var meet = std.ArrayListUnmanaged(spec.LinRow){};
             for (ih_rows) |r| meet.append(alloc, r) catch unreachable;
             for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
+            for (type_rows) |r| meet.append(alloc, r) catch unreachable;
+            for (claimsSubRows(alloc, type_rows, subs.items)) |r| meet.append(alloc, r) catch unreachable;
             const slhs = spec.linSubstitute(alloc, glhs, subs.items);
             const srhs = spec.linSubstitute(alloc, grhs, subs.items);
             switch (claimsEntail(alloc, meet.items, slhs, srhs, gop)) {

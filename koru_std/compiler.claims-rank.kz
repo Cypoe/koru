@@ -13,6 +13,10 @@
 const RankPrelude = struct {
     arm_meets: std.ArrayListUnmanaged(ArmMeet) = .{},
     folds: std.ArrayListUnmanaged(*const ast.Flow) = .{},
+    // The subject's declared `&`-type atoms as rows — premises at every
+    // state, and under substitution they state the produced values'
+    // contract. Inference enumerates them as rank candidates too.
+    type_rows: []const spec.LinRow = &.{},
 };
 
 const RankStep = union(enum) {
@@ -38,6 +42,10 @@ fn claimsRankPrelude(
     var pre = RankPrelude{};
     if (claimsArmMeets(alloc, impl, fields, subject, &pre.arm_meets)) |reason|
         return .{ .verdict = .{ .outside = reason } };
+    pre.type_rows = switch (claimsFieldTypeRows(alloc, fields, subject)) {
+        .outside => |m| return .{ .verdict = .{ .outside = m } },
+        .rows => |rs| rs,
+    };
     claimsFoldHeads(alloc, items, ev, &pre.folds);
     if (pre.folds.items.len == 0)
         return .{ .verdict = .{ .unproven = std.fmt.allocPrint(alloc, "no #-fold invokes '{s}'", .{subject}) catch unreachable } };
@@ -57,6 +65,7 @@ fn claimsRankTry(
     arm_meets: []const ArmMeet,
     folds: []const *const ast.Flow,
     fields: []const ast.Field,
+    type_rows: []const spec.LinRow,
     rank_parts: []const spec.LinPart,
     subject: []const u8,
 ) RankTry {
@@ -111,9 +120,13 @@ fn claimsRankTry(
             for (rank_parts) |p| diff.append(alloc, p) catch unreachable;
             for (next_rank) |p| diff.append(alloc, .{ .coef = -p.coef, .name = p.name }) catch unreachable;
 
-            const base_n = arm.rows.items.len;
+            // Meet = guard ∧ declared types ∧ produced values' types —
+            // the substituted rows state the next state's own contract.
             var meet = std.ArrayListUnmanaged(spec.LinRow){};
             for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
+            for (type_rows) |r| meet.append(alloc, r) catch unreachable;
+            for (claimsSubRows(alloc, type_rows, subs.items)) |r| meet.append(alloc, r) catch unreachable;
+            const base_n = meet.items.len;
 
             // decrease: meet ∧ (R − R' <= 0) must be empty.
             meet.items.len = base_n;
@@ -158,6 +171,26 @@ fn proveTerminatesInferred(
     };
     var cands = std.ArrayListUnmanaged([]const spec.LinPart){};
     var spells = std.ArrayListUnmanaged([]const u8){};
+    // Declared type atoms are candidate sources too: `i & >=0` spells
+    // `-i <= 0`, whose negated form is the rank `i` itself.
+    for (pre.type_rows) |r| {
+        var cand = std.ArrayListUnmanaged(spec.LinPart){};
+        var key_terms = std.ArrayListUnmanaged(spec.LinTerm){};
+        for (r.terms) |t| {
+            cand.append(alloc, .{ .coef = -t.coef, .name = t.name }) catch unreachable;
+            key_terms.append(alloc, t) catch unreachable;
+        }
+        cand.append(alloc, .{ .coef = r.bound, .name = null }) catch unreachable;
+        const key = spec.linSpell(alloc, key_terms.items, r.bound, r.strict);
+        var dup = false;
+        for (spells.items) |s| {
+            if (std.mem.eql(u8, s, key)) dup = true;
+        }
+        if (!dup) {
+            spells.append(alloc, key) catch unreachable;
+            cands.append(alloc, cand.items) catch unreachable;
+        }
+    }
     for (pre.arm_meets.items) |am| {
         for (am.rows.items) |r| {
             var cand = std.ArrayListUnmanaged(spec.LinPart){};
@@ -181,10 +214,10 @@ fn proveTerminatesInferred(
         }
     }
     if (cands.items.len == 0)
-        return .{ .outside = "the arm guards hold no linear bound to infer a rank from" };
+        return .{ .outside = "the arm guards and declared types hold no linear bound to infer a rank from" };
     var first_fail: ?[]const u8 = null;
     for (cands.items) |cand| {
-        switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, cand, subject)) {
+        switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, pre.type_rows, cand, subject)) {
             .proven => |n| return .{ .proven = std.fmt.allocPrint(alloc, "inferred rank '{s}' decreases and stays bounded at {d} back-edge{s}", .{ claimsSpellParts(alloc, cand), n, if (n == 1) "" else "s" }) catch unreachable },
             .unproven => |m| {
                 if (first_fail == null) first_fail = m;
@@ -193,41 +226,4 @@ fn proveTerminatesInferred(
         }
     }
     return .{ .unproven = std.fmt.allocPrint(alloc, "no inferred rank discharged the back-edges ({s})", .{first_fail orelse "no candidates"}) catch unreachable };
-}
-
-// A linear form's canonical spelling for the census line —
-// `limit - i - 1`, terms first (declaration order), constant last.
-fn claimsSpellParts(alloc: std.mem.Allocator, parts: []const spec.LinPart) []const u8 {
-    var out = std.ArrayList(u8).initCapacity(alloc, parts.len * 10 + 8) catch unreachable;
-    var first = true;
-    // Canonical order: positive terms, then negative, then the constant —
-    // `limit - i`, not `-i + limit`.
-    for ([_]i64{ 1, -1 }) |sign| {
-    for (parts) |p| {
-        const n = p.name orelse continue;
-        if ((p.coef >= 0) != (sign > 0)) continue;
-        const c = if (p.coef < 0) -p.coef else p.coef;
-        if (!first) {
-            out.appendSlice(alloc, if (p.coef < 0) " - " else " + ") catch unreachable;
-        } else if (p.coef < 0) {
-            out.appendSlice(alloc, "-") catch unreachable;
-        }
-        if (c != 1) out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}*", .{c}) catch unreachable) catch unreachable;
-        out.appendSlice(alloc, n) catch unreachable;
-        first = false;
-    }
-    }
-    for (parts) |p| {
-        if (p.name != null) continue;
-        if (first) {
-            out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}", .{p.coef}) catch unreachable) catch unreachable;
-        } else if (p.coef > 0) {
-            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " + {d}", .{p.coef}) catch unreachable) catch unreachable;
-        } else if (p.coef < 0) {
-            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " - {d}", .{-p.coef}) catch unreachable) catch unreachable;
-        }
-        first = false;
-    }
-    if (first) out.appendSlice(alloc, "0") catch unreachable;
-    return out.toOwnedSlice(alloc) catch unreachable;
 }

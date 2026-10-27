@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_020_claim_typed_atom_malformed/input.k:20 terminates on tick: outside-P — the '&' atom 'fizz' on field 'i' of 'tick' is not one linear comparison

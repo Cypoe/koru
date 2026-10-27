@@ -1088,8 +1088,21 @@ fn emitRecordShapeStruct(
     }
 }
 
+/// A field's declared type may carry `&`-contract atoms (`i64 & >=0`) —
+/// contract text for the claims pass, not a Zig type. Emission sees the
+/// base type: everything before the first `&`.
+pub fn fieldContractBase(t: []const u8) []const u8 {
+    const cut = std.mem.indexOfScalar(u8, t, '&') orelse t.len;
+    return std.mem.trim(u8, t[0..cut], " \t");
+}
+
 /// Helper: Write field type with proper module path handling
 pub fn writeFieldType(emitter: *CodeEmitter, field: ast.Field, main_module_name: ?[]const u8) !void {
+    if (std.mem.indexOfScalar(u8, field.type, '&') != null) {
+        var stripped = field;
+        stripped.type = fieldContractBase(field.type);
+        return writeFieldType(emitter, stripped, main_module_name);
+    }
     // An inline record field type (`user: { x: i64 }`) shares the
     // record-return shape's syntax; emit it as a Zig anon struct with each
     // inner field type lowered through writeBareReturnType — the same

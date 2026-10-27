@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_018_claim_honors_base_from_type/input.k:21 honors on tick: proven — goal holds at 1 fold head, preserved by 1 back-edge

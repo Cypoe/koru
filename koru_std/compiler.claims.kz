@@ -68,11 +68,18 @@ fn claimsFieldOf(fields: []const ast.Field, name: []const u8) ?*const ast.Field 
     return null;
 }
 
+// A field's type text may carry `&`-contract atoms — `i64 & >=0` — the
+// base type is everything before the first `&`.
+fn claimsFieldBase(t: []const u8) []const u8 {
+    const cut = std.mem.indexOfScalar(u8, t, '&') orelse t.len;
+    return std.mem.trim(u8, t[0..cut], " ");
+}
+
 // The linear fragment is integer arithmetic — a rank or guard naming a
 // float or string field is outside-P, not a silent real-domain read.
 fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
     const f = claimsFieldOf(fields, name) orelse return false;
-    const t = f.type;
+    const t = claimsFieldBase(f.type);
     if (std.mem.eql(u8, t, "usize") or std.mem.eql(u8, t, "comptime_int")) return true;
     if (t.len < 2 or (t[0] != 'i' and t[0] != 'u')) return false;
     for (t[1..]) |c| {
@@ -80,6 +87,93 @@ fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
     }
     return true;
 }
+// The subject's declared field types are contract premises: `&`-atoms
+// on `i64 & >=0` or relational `& x <= y + margin` are rows that hold
+// at every entry AND for every produced value. `!=` contributes
+// nothing — under-assuming is conservative. An atom that is not one
+// comparison is outside-P: the type text is contract text the fence
+// must be able to read before it may assume it.
+const TypeRows = union(enum) { rows: []const spec.LinRow, outside: []const u8 };
+
+fn claimsFieldTypeRows(
+    alloc: std.mem.Allocator,
+    fields: []const ast.Field,
+    subject: []const u8,
+) TypeRows {
+    var rows = std.ArrayListUnmanaged(spec.LinRow){};
+    for (fields) |f| {
+        const cut = std.mem.indexOfScalar(u8, f.type, '&') orelse continue;
+        var atoms = std.mem.splitScalar(u8, f.type[cut + 1 ..], '&');
+        while (atoms.next()) |raw| {
+            const atom = std.mem.trim(u8, raw, " ");
+            if (atom.len == 0) continue;
+            const split = spec.splitLinCmp(atom);
+            const sp = switch (split) {
+                .one => |s| s,
+                else => return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not one linear comparison", .{ atom, f.name, subject }) catch unreachable },
+            };
+            var lhs: []const spec.LinPart = undefined;
+            const ltxt = std.mem.trim(u8, atom[0..sp.pos], " ");
+            if (ltxt.len == 0) {
+                // Implicit self: `& >=0` means `<field> >= 0`.
+                const one = [_]spec.LinPart{.{ .coef = 1, .name = f.name }};
+                lhs = alloc.dupe(spec.LinPart, &one) catch unreachable;
+            } else {
+                lhs = spec.parseLinExpr(alloc, ltxt) orelse
+                    return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not a linear form", .{ atom, f.name, subject }) catch unreachable };
+            }
+            const rtxt = std.mem.trim(u8, atom[sp.pos + sp.op.len ..], " ");
+            const rhs = spec.parseLinExpr(alloc, rtxt) orelse
+                return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' on field '{s}' of '{s}' is not a linear form", .{ atom, f.name, subject }) catch unreachable };
+            // Relational atoms may name sibling fields; a stranger is a
+            // broken contract, not a premise.
+            for (lhs) |p| {
+                if (p.name) |n| {
+                    if (!claimsIntField(fields, n))
+                        return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
+                }
+            }
+            for (rhs) |p| {
+                if (p.name) |n| {
+                    if (!claimsIntField(fields, n))
+                        return .{ .outside = std.fmt.allocPrint(alloc, "the '&' atom '{s}' names '{s}' — not an integer field of '{s}'", .{ atom, n, subject }) catch unreachable };
+                }
+            }
+            for (claimsGuardRows(alloc, lhs, rhs, sp.op, false, "field type")) |r|
+                rows.append(alloc, r) catch unreachable;
+        }
+    }
+    return .{ .rows = rows.items };
+}
+
+// A row set under a jump's rebinding — produced values satisfy the
+// declared type, so `i & >=0` read under `i' = i − 1` is `i − 1 >= 0`:
+// the type's own bound, stated about the next state.
+fn claimsSubRows(
+    alloc: std.mem.Allocator,
+    rows: []const spec.LinRow,
+    subs: []const spec.LinSub,
+) []const spec.LinRow {
+    var out = std.ArrayListUnmanaged(spec.LinRow){};
+    for (rows) |r| {
+        var parts = std.ArrayListUnmanaged(spec.LinPart){};
+        for (r.terms) |t|
+            parts.append(alloc, .{ .coef = t.coef, .name = t.name }) catch unreachable;
+        parts.append(alloc, .{ .coef = -r.bound, .name = null }) catch unreachable;
+        const subbed = spec.linSubstitute(alloc, parts.items, subs);
+        // Σterms − b = Σsubbed  ⇒  Σsubbed_named <= −subbed_const; the
+        // strictness flag rides through untouched.
+        var const_part: i64 = 0;
+        var named = std.ArrayListUnmanaged(spec.LinTerm){};
+        for (subbed) |p| {
+            if (p.name) |n| named.append(alloc, .{ .coef = p.coef, .name = n }) catch unreachable
+            else const_part += p.coef;
+        }
+        out.append(alloc, .{ .terms = named.items, .bound = -const_part, .strict = r.strict, .src = r.src }) catch unreachable;
+    }
+    return out.items;
+}
+
 ~proc pass-claims-check|zig {
     var mutable_ctx = ctx;
     mutable_ctx.current_pass = "claims_check";
@@ -282,3 +376,40 @@ fn claimsIntField(fields: []const ast.Field, name: []const u8) bool {
 ]pub tor pass-claims-check { ctx: CompilerContext }
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
+
+// A linear form's canonical spelling for the census line —
+// `limit - i - 1`, terms first (declaration order), constant last.
+fn claimsSpellParts(alloc: std.mem.Allocator, parts: []const spec.LinPart) []const u8 {
+    var out = std.ArrayList(u8).initCapacity(alloc, parts.len * 10 + 8) catch unreachable;
+    var first = true;
+    // Canonical order: positive terms, then negative, then the constant —
+    // `limit - i`, not `-i + limit`.
+    for ([_]i64{ 1, -1 }) |sign| {
+    for (parts) |p| {
+        const n = p.name orelse continue;
+        if ((p.coef >= 0) != (sign > 0)) continue;
+        const c = if (p.coef < 0) -p.coef else p.coef;
+        if (!first) {
+            out.appendSlice(alloc, if (p.coef < 0) " - " else " + ") catch unreachable;
+        } else if (p.coef < 0) {
+            out.appendSlice(alloc, "-") catch unreachable;
+        }
+        if (c != 1) out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}*", .{c}) catch unreachable) catch unreachable;
+        out.appendSlice(alloc, n) catch unreachable;
+        first = false;
+    }
+    }
+    for (parts) |p| {
+        if (p.name != null) continue;
+        if (first) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, "{d}", .{p.coef}) catch unreachable) catch unreachable;
+        } else if (p.coef > 0) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " + {d}", .{p.coef}) catch unreachable) catch unreachable;
+        } else if (p.coef < 0) {
+            out.appendSlice(alloc, std.fmt.allocPrint(alloc, " - {d}", .{-p.coef}) catch unreachable) catch unreachable;
+        }
+        first = false;
+    }
+    if (first) out.appendSlice(alloc, "0") catch unreachable;
+    return out.toOwnedSlice(alloc) catch unreachable;
+}
