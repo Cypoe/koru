@@ -30,10 +30,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readLatestSnapshot } from './lib/corpus.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TESTS = join(ROOT, 'tests/regression');
-const SNAPSHOT = join(ROOT, 'test-results/latest.json');
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
@@ -66,10 +66,13 @@ async function findMarkers(dir, out = []) {
 
 // The board is the authority on what a test currently does. Without a snapshot
 // we say so rather than guessing from SUCCESS/FAILURE markers, which a filtered
-// run leaves in whatever state it touched.
+// run leaves in whatever state it touched. latest.json is a symlink to the
+// dated snapshot; on filesystems that cannot represent one it materializes as
+// a text pointer, which readLatestSnapshot follows — an unreadable board is
+// the same 'no snapshot' answer, never a crash.
 async function loadBoard() {
-	if (!(await exists(SNAPSHOT))) return null;
-	const snap = JSON.parse(await readFile(SNAPSHOT, 'utf8'));
+	const snap = readLatestSnapshot(ROOT);
+	if (!snap) return null;
 	const byDir = new Map();
 	for (const c of snap.categories ?? [])
 		for (const t of c.tests ?? []) byDir.set(t.directory, t);
