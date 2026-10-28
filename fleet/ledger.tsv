@@ -16,3 +16,7 @@ main:008_comptime_transform_catalog.md	running	Cypoe/challenge-008-comptime-tran
 main:008_comptime_transform_catalog.md	failed	Cypoe/challenge-008-comptime-transform-catalog	2026-10-28T06:22:51+01:00	no result file
 main:009_comptime_stdlib_promotion.md	running	Cypoe/challenge-009-comptime-stdlib-promotion	2026-10-28T06:24:00+01:00	started
 main:009_comptime_stdlib_promotion.md	failed	Cypoe/challenge-009-comptime-stdlib-promotion	2026-10-28T06:54:25+01:00	no result file
+main:010_the_refusal_audit.md	running	Cypoe/challenge-010-the-refusal-audit	2026-10-28T13:02:33+01:00	started
+main:011_the_module_mirror_wall.md	running	Cypoe/challenge-011-the-module-mirror-wall	2026-10-28T13:02:53+01:00	started
+main:012_obligations_through_control_flow.md	running	Cypoe/challenge-012-obligations-through-control-flow	2026-10-28T13:32:02+01:00	started
+main:012_obligations_through_control_flow.md	done	Cypoe/challenge-012-obligations-through-control-flow	2026-10-28T15:06:43+01:00	Claim was stale: 28/31 in-scope tests already green; fixed 2 false-red pins (\\d not valid under grep -E
