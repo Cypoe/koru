@@ -654,6 +654,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     dead_strip_module.addImport("ast", ast_module);
+    dead_strip_module.addImport("emitter_helpers", emitter_helpers_module);
     exe.root_module.addImport("dead_strip", dead_strip_module);
 
     // Transform Collector module for two-layer AST transformation
@@ -975,6 +976,7 @@ pub fn build(b: *std.Build) void {
     });
     dead_strip_tests.root_module.addImport("ast", ast_module);
     dead_strip_tests.root_module.addImport("log", log_module);
+    dead_strip_tests.root_module.addImport("emitter_helpers", emitter_helpers_module);
     const run_dead_strip_tests = b.addRunArtifact(dead_strip_tests);
 
     // Compiler passes integration tests

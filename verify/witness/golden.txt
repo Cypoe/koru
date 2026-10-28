@@ -19,7 +19,7 @@
 [witness] site auto-discharge f opened!->std/fs:close sole:std/fs:close all:std/fs:close
 [witness] site auto-discharge f opened!->std/fs:close preferred:std/fs:close!,std/fs:drop all:std/fs:close!,std/fs:drop
 [witness] site auto-discharge conn.h live!->db:release preferred:db:abort,db:release!,db:flush all:db:abort,db:release!,db:flush,db:audit(x)
-[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string
+[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string|br:ok
 [witness] site descriptor files main:read registered cost=1;decl=in:h=*Handle<!opened>|br:data|brf:data:__type_ref=string|br:eof|brf:eof:__type_ref=*Handle<opened!>;emit=cr:main:opened@__type_ref#eof|dis:main:opened@h|in:h=*Handle<!opened>|br:data|br:eof
 [witness] site descriptor files main:close registered cost=1;decl=in:h=*Handle<!opened>;emit=dis:main:opened@h|in:h=*Handle<!opened>
 [witness] site descriptor files main:nix discharge-refused cost=1;decl=in:h=*Handle<!nix>;emit=in:h=*Handle<!nix>
@@ -52,3 +52,11 @@
 [witness] site custody-edge hh hh<-input:*Handle<input:held!> held
 [witness] site custody-edge hh hh<-input:*Handle<input:held!> borrow
 [witness] site custody-edge hh hh<-input:*Handle<input:held!> issued
+[witness] site strip-use app:ev.tick collect marked
+[witness] site strip-use app:ev.bump collect marked
+[witness] site strip-use lib:exported collect marked
+[witness] site strip-root lib:exported seed rooted
+[witness] site strip-rm app:dead.fn - removed
+[witness] site strip-rm util:helper app:util.helper removed
+[witness] site strip-cargo 0123456789abcdef text cargo
+[witness] site strip-census dead-strip totals uses=3;roots=1;removed=2;cargo=1

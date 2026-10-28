@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = @import("log");
 const ast = @import("ast");
+const eh = @import("emitter_helpers");
 
 /// Dead Strip Pass
 ///
@@ -37,11 +38,23 @@ pub const DeadStripPass = struct {
     /// When true, the entry module's `pub` items are roots and survive with no
     /// caller. Set for `koruc lib`; a program build leaves it false.
     library_roots: bool = false,
+    /// K2 Use B evidence — the `used` set and every removal decision are
+    /// committed as `[witness] site strip-*` lines so an independent oracle
+    /// re-decides the lawful-removal law (removed ∩ used = ∅) rather than
+    /// trusting the pass's word. Buffered, never printed mid-run: the caller
+    /// swallows a failed `run`, and a partial ledger in an otherwise-clean
+    /// corpus would read as drift rather than failure.
+    evidence: std.ArrayList([]u8),
+    /// Census counters — each is incremented where its line is buffered.
+    ev_roots: usize = 0,
+    ev_rms: usize = 0,
+    ev_cargo: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) DeadStripPass {
         return .{
             .allocator = allocator,
             .used = std.StringHashMap(void).init(allocator),
+            .evidence = .{},
         };
     }
 
@@ -51,6 +64,17 @@ pub const DeadStripPass = struct {
             self.allocator.free(key.*);
         }
         self.used.deinit();
+        for (self.evidence.items) |line| self.allocator.free(line);
+        self.evidence.deinit(self.allocator);
+    }
+
+    /// Buffer one evidence line. No-op when witness enforcement is off —
+    /// an unarmed compile pays no evidence cost.
+    fn evLine(self: *DeadStripPass, comptime fmt: []const u8, args: anytype) !void {
+        if (!eh.witness_enforced) return;
+        const line = try std.fmt.allocPrint(self.allocator, fmt, args);
+        errdefer self.allocator.free(line);
+        try self.evidence.append(self.allocator, line);
     }
 
     pub fn run(self: *DeadStripPass, program: *const ast.Program, original: ?*const ast.Program) !*const ast.Program {
@@ -67,8 +91,31 @@ pub const DeadStripPass = struct {
         // a library usable rather than a shell of empty names.
         if (self.library_roots) try self.seedExportedRoots(program.items, program.main_module_name);
 
+        // Commit the full `used` set — every spelling the membership test
+        // consults, sorted so the corpus is stable across runs.
+        if (eh.witness_enforced) {
+            var keys = try std.ArrayList([]const u8).initCapacity(self.allocator, self.used.count());
+            defer keys.deinit(self.allocator);
+            var it = self.used.keyIterator();
+            while (it.next()) |k| try keys.append(self.allocator, k.*);
+            std.mem.sort([]const u8, keys.items, {}, struct {
+                fn lt(_: void, a: []const u8, b: []const u8) bool {
+                    return std.mem.order(u8, a, b) == .lt;
+                }
+            }.lt);
+            for (keys.items) |k|
+                try self.evLine("[witness] site strip-use {s} collect marked\n", .{k});
+        }
+
         // Phase 2: Filter items, removing unreferenced event_decl and proc_decl
         const new_items = try self.filterItems(program.items, null);
+
+        // The ledger commits only now — the caller swallows a failed run, so
+        // evidence printed earlier could orphan in an otherwise-clean corpus.
+        if (eh.witness_enforced) {
+            try self.evLine("[witness] site strip-census dead-strip totals uses={d};roots={d};removed={d};cargo={d}\n", .{ self.used.count(), self.ev_roots, self.ev_rms, self.ev_cargo });
+            for (self.evidence.items) |line| std.debug.print("{s}", .{line});
+        }
 
         // Build new program with filtered items
         const new_program = try self.allocator.create(ast.Program);
@@ -100,6 +147,8 @@ pub const DeadStripPass = struct {
             if (!self.used.contains(path)) {
                 try self.used.put(try self.allocator.dupe(u8, path), {});
                 roots += 1;
+                try self.evLine("[witness] site strip-root {s} seed rooted\n", .{path});
+                self.ev_roots += 1;
             }
         }
         log.debug("[DEAD-STRIP] library mode: {d} exported root(s)\n", .{roots});
@@ -343,6 +392,7 @@ pub const DeadStripPass = struct {
                         defer self.allocator.free(name);
                         log.debug("[DEAD-STRIP] Removing event_decl: {s}\n", .{name});
                         self.stripped_count += 1;
+                        try self.evRemoval(&decl.path, module_logical_name);
                     }
                 },
                 .proc_decl => |decl| {
@@ -353,6 +403,7 @@ pub const DeadStripPass = struct {
                         defer self.allocator.free(name);
                         log.debug("[DEAD-STRIP] Removing proc_decl: {s}\n", .{name});
                         self.stripped_count += 1;
+                        try self.evRemoval(&decl.path, module_logical_name);
                     }
                 },
                 .module_decl => |mod| {
@@ -369,6 +420,11 @@ pub const DeadStripPass = struct {
                 .host_line => |line| {
                     if (hostLineIsCommentCargo(line.content)) {
                         self.stripped_count += 1;
+                        // Comment cargo carries no path — the content digest is
+                        // its only identity; two identical comment blocks strip
+                        // as two lines, which the census counts honestly.
+                        try self.evLine("[witness] site strip-cargo {x:0>16} text cargo\n", .{std.hash.Fnv1a_64.hash(line.content)});
+                        self.ev_cargo += 1;
                     } else {
                         try result.append(self.allocator, item);
                     }
@@ -401,6 +457,26 @@ pub const DeadStripPass = struct {
             if (self.used.contains(qualified)) return true;
         }
         return false;
+    }
+
+    /// Commit both keys `isPathUsed` consulted for this removal — the
+    /// canonical path spelling and the enclosing-module fallback (`-` at top
+    /// level). The oracle re-decides lawful removal as "neither key is
+    /// spelled in the committed `used` set", so the wire must carry exactly
+    /// the two spellings the pass tested, not a re-derived name.
+    fn evRemoval(self: *DeadStripPass, path: *const ast.DottedPath, module_logical_name: ?[]const u8) !void {
+        if (!eh.witness_enforced) return;
+        const key = try self.pathToStringInner(path);
+        defer self.allocator.free(key);
+        var alt_buf: ?[]u8 = null;
+        defer if (alt_buf) |a| self.allocator.free(a);
+        if (module_logical_name) |mq| {
+            const segs = try self.segmentsToString(path);
+            defer self.allocator.free(segs);
+            alt_buf = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ mq, segs });
+        }
+        try self.evLine("[witness] site strip-rm {s} {s} removed\n", .{ key, alt_buf orelse "-" });
+        self.ev_rms += 1;
     }
 
     fn hasRetain(annotations: []const []const u8) bool {

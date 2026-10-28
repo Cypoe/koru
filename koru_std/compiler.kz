@@ -678,7 +678,7 @@ const Allocator = std.mem.Allocator;
     backend_output_module.addImport("release_gate", release_gate_module);
     backend_output_module.addImport("phantom_semantic_checker", phantom_semantic_checker_module);
     backend_output_module.addImport("auto_discharge_inserter", auto_discharge_inserter_module);
-    backend_output_module.addImport("dead_strip", dead_strip_module);
+    backend_output_module.addImport("dead_strip", dead_strip_module); dead_strip_module.addImport("emitter_helpers", emitter_helpers_module);
     backend_output_module.addImport("purity_analyzer", purity_analyzer_module);
     backend_output_module.addImport("visitor_emitter", visitor_emitter_module);
     backend_output_module.addImport("js_emitter", js_emitter_module);

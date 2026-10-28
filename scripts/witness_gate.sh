@@ -20,6 +20,15 @@ fi
 if [ $# -eq 0 ]; then
     set -- "$ROOT/tests/regression/600_STDLIB/690_STORE/690_378_witness_marks_ride_lowered_stored_writes/backend.err"
 fi
+# Absolutize corpus args before the cd below — a relative path must resolve
+# against the caller's cwd, not the corpus directory.
+corpora=()
+for corpus in "$@"; do
+    case "$corpus" in
+        /*) corpora+=("$corpus") ;;
+        *) corpora+=("$ROOT/$corpus") ;;
+    esac
+done
 cd "$DIR" || exit 1
 fail=0
 "$LEAN" WitnessCheck.lean >/dev/null 2>"$DIR/.theorems.err" || fail=1
@@ -35,7 +44,7 @@ rm -f "$DIR/.theorems.err"
 # captured verbatim from two real realize runs.
 "$LEAN" --run WitnessCheck.lean golden_marks.txt | tail -1 || fail=1
 "$LEAN" --run WitnessCheck.lean golden_marks_refused.txt | tail -1 || fail=1
-for corpus in "$@"; do
+for corpus in "${corpora[@]}"; do
     if [ ! -f "$corpus" ]; then
         echo "FAIL: corpus missing: $corpus"
         fail=1
@@ -53,6 +62,14 @@ if "$LEAN" --run WitnessCheck.lean drift.txt >/dev/null 2>&1; then
 fi
 if "$LEAN" --run WitnessCheck.lean drift_marks.txt >/dev/null 2>&1; then
     echo "FAIL: drift marks corpus accepted (one (site,arm) admitted twice)"
+    fail=1
+fi
+# Strip-law drift control: every line is well-formed, but the committed
+# removals spell paths the committed used-set still names (and one root is
+# absent from uses) — the unlawful-removal class is corpus-level, so it is
+# gated here expecting rejection, same as a miscount census.
+if "$LEAN" --run WitnessCheck.lean drift_strip.txt >/dev/null 2>&1; then
+    echo "FAIL: drift strip corpus accepted (removed keys still spelled used)"
     fail=1
 fi
 if [ $fail -eq 0 ]; then echo "witness gate: PASS"; else echo "witness gate: FAIL"; fi

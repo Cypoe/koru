@@ -1,4 +1,4 @@
-[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string
+[witness] site descriptor files main:open registered cost=1;decl=in:path=string|ret:*Handle<opened!>;emit=cr:main:opened@__type_ref|in:path=string|br:ok
 [witness] site descriptor files main:read registered cost=1;decl=in:h=*Handle<!opened>|br:data|brf:data:__type_ref=string|br:eof|brf:eof:__type_ref=*Handle<opened!>;emit=cr:main:opened@__type_ref#eof|dis:main:opened@h|in:h=*Handle<!opened>|br:data|br:eof
 [witness] site descriptor files main:close registered cost=1;decl=in:h=*Handle<!opened>;emit=dis:main:opened@h|in:h=*Handle<!opened>
 [witness] site descriptor files main:nix discharge-refused cost=1;decl=in:h=*Handle<!nix>;emit=in:h=*Handle<!nix>

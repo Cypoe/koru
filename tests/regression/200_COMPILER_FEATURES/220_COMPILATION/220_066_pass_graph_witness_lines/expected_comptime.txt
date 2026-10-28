@@ -1,4 +1,4 @@
 [witness] site pass-graph-edge desugar-chains requires resolve-with-scopes
 [witness] site pass-graph-order hello runs input:hello
-[witness] site pass-graph-census graph counts edges=5 orders=24,tedges=0,tstages=9
+[witness] site pass-graph-census graph counts edges=6 orders=24,tedges=0,tstages=9
 [witness] custody-edge: mint=0 held=0 borrow=0 discharge=0 issued=0

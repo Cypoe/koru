@@ -135,6 +135,25 @@ again, with the disagreement hidden inside one file.
   checked transform, not a believed one. This is the pattern Path B
   wants for artifact re-decision generally: don't trust the derived
   surface, commit the pre-image and recount.
+- The same pre-image discipline reached K2 Use B: `pass-dead-strip` is
+  the first transform whose semantic justification is itself a
+  decidable relation — lawful removal IS set membership, `removed ∩
+  (uses ∪ roots) = ∅`. Under enforce it commits `strip-use` (every key
+  the membership test consults, text-scraped spellings included),
+  `strip-root`, `strip-rm` with BOTH probed keys, `strip-cargo`
+  digests, and a `strip-census`; WitnessCheck re-runs the membership
+  law rather than trusting the pass. Two teachings it surfaced on
+  first contact: the corpus is only honest when it is all-or-nothing
+  (the caller swallows a failed pass, so evidence buffers and prints
+  solely on success — a half-ledger would read as drift), and
+  removing-decl-keys legitimately repeat (welded modules carry
+  same-named decl objects) — set-key uniqueness applies to uses and
+  roots, never to removals. It also caught a real derivation gap in
+  an adjacent rule the same week: the registry normalizes a bare
+  `-> T` return to a canonical `ok` branch, which the descriptor
+  checker had to learn before `430_069`'s emit row could re-decide.
+  What it does NOT yet re-decide: the kept-side law and
+  evidence-follows-AST — the same two-frontier shape as claims.
 - There is a defensible middle: two mechanized semantics with a proved
   equivalence (a definitional and a denotational reading, as in textbook
   PL formalizations). That is one semantics stated twice and *proved*

@@ -32,7 +32,18 @@ Measured at `ccomp` `e94bfeeb9` (2026-10-14).
 
 - **Digest honesty, not semantic congruence.** The `rm=`/`add=` lines
   prove the write-back touched the declared item multiset — not that
-  the rewrite preserves meaning.
+  the rewrite preserves meaning. Partially closed for `dead-strip`
+  (2026-10-15): its semantic claim IS a set law (`removed ∩ uses ∪ roots
+  = ∅`), and the pass now commits the `used` set plus both probed keys
+  per removal as `strip-*` lines, so the oracle re-decides lawful
+  removal — not meaning-preservation, but a real semantic property of
+  the rewrite. Still open there: the kept-side law (kept decls were
+  reachable or retained) is uncommitted, and evidence-follows-AST is
+  the pass's word, same channel boundary as claims.
+- **Only dead-strip re-decides.** Every other transform — tap
+  write-backs, template procs, desugar, codegen lowering — remains at
+  digest-accounting level; the `strip-*` pattern applies only where the
+  transform's justification is itself a decidable relation.
 - **`contract:preserves` bounds kinds, not content.** A transform may rewrite
   every item of a kind it declared preserved; the bound only refuses
   *collateral adds/removes* of held kinds.

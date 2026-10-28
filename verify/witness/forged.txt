@@ -65,3 +65,11 @@
 [witness] site transform-oblige tap tap kind-stable ok;justified=aaaabbbbccccdddd
 [witness] site transform-app-census transform transform count=1
 [witness] site custody-edge h h<-input:*Handle<input:owned> borrow
+[witness] site strip-use app:ev.tick collect used
+[witness] site strip-use app:ev.tick gather marked
+[witness] site strip-root app:ev collect rooted
+[witness] site strip-rm app:x - kept
+[witness] site strip-rm app.x - removed stray
+[witness] site strip-cargo nothexdigest! text cargo
+[witness] site strip-census dead-strip totals uses=x;roots=0;removed=0;cargo=0
+[witness] site strip-census dead-strip totals uses=1;roots=0;removed=0

@@ -248,6 +248,36 @@ whose evidence cannot entail `proven` (rank `i` under `i↦i+1`),
 rejected in conformance. Gate: golden + real corpora conform, forged
 15/15 rejected, drift + tampered rejected. 675 range 36/36.*
 
+*Update 2026-10-29j: K2 Use B gets its first semantic rung — dead-strip's
+removal law is re-decided, not accounted. The transform-congruence
+survey found only one live pass whose correctness claim reduces to a
+decidable relation: `pass-dead-strip`'s lawful-removal law
+(`removed ∩ (uses ∪ roots) = ∅`). Under `std/witness:enforce` the pass
+now commits the pre-image — `strip-use` per key in the `used` set (all
+spellings `isPathUsed` consults), `strip-root` per seeded export,
+`strip-rm` carrying BOTH keys each removal probed (canonical +
+enclosing-module fallback), `strip-cargo` digests, `strip-census` —
+and WitnessCheck re-runs the membership law on the committed sets. A
+`strip-rm` naming a still-spelled path is a semantic forgery
+(`drift_strip.txt` gates it expecting rejection), the inverse class
+forged.txt can't carry. Two findings the corpus surfaced on first
+contact: evidence must buffer and print only on run success (the
+caller swallows a failed pass — a half-ledger reads as drift), and rm
+keys legitimately repeat (welded modules carry same-named decls — set
+uniqueness applies to uses/roots only). It also caught a real gap in
+the neighboring descriptor rule: the registry normalizes a bare
+`-> T` return to a canonical `ok` branch, which `declSide` now derives
+(`430_069`'s emit row was semantically right and the checker's
+vocabulary was stale — plus two stale pins: `edges=5→6` on 220_066
+since the claims-check edge landed, and the descriptor emit rows
+growing branch atoms). Honest edges: kept-side law (kept decls were
+reachable or retained) uncommitted; evidence-follows-AST still the
+pass's word — same channel boundary as claims. Every other transform
+stays at digest-accounting level; `strip-*` is the template where a
+transform's justification is decidable. Armed: all 19
+WITNESS_CHECK/CLAIMS_CHECK tests green incl. gate legs; witness gate
+PASS with the new vocabulary + corpora.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

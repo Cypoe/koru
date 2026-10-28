@@ -1,0 +1,6 @@
+[witness] site strip-use app:ev.tick collect marked
+[witness] site strip-use lib:a.b collect marked
+[witness] site strip-rm app:ev.tick - removed
+[witness] site strip-rm other lib:a.b removed
+[witness] site strip-root lib:orphan seed rooted
+[witness] site strip-census dead-strip totals uses=2;roots=1;removed=2;cargo=0

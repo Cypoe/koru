@@ -186,6 +186,35 @@ Pins: `220_068`/`220_069` declaration refusals, `220_070`/`220_071`
 enforcement refusals, `220_072` the satisfied shape; `koru_std/taps.kz`
 declares `contract:obliges("kind-stable")`.
 
+**Dead-strip justification landed (2026-10-15) — the first Use-B transform
+whose semantic claim is re-decided, not accounted.** `pass-dead-strip`
+(src/dead_strip.zig) is the live pipeline pass whose correctness claim
+reduces to a decidable set law: every removed `event_decl`/`proc_decl` must
+spell a path the program never invokes and no library root seeds —
+`removed ∩ (uses ∪ roots) = ∅`. Under `std/witness:enforce` the pass
+commits the pre-image: `strip-use` lines for every key in its `used` set
+(all spellings the membership test consults — canonical paths, inline-body
+text scrapes, hyphenated emitted-name variants), `strip-root` for seeded
+exports, `strip-rm` carrying BOTH keys `isPathUsed` probed (canonical and
+the enclosing-module fallback), `strip-cargo` digests for comment-only
+host-line removals, and a `strip-census`. WitnessCheck re-decides the law
+on the committed sets alone — a `strip-rm` naming a still-spelled path is a
+semantic forgery (`drift_strip.txt` gates it expecting rejection), roots
+must appear among uses, and the census must count honestly. A real
+compile of `675_036` commits 67 uses / 107 removals / 2345 cargo lines —
+the corpus is the ledger, weight included. Evidence lines buffer and print
+only on a fully successful run: the caller swallows a failed pass, and a
+half-ledger in an otherwise-clean corpus would read as drift rather than
+failure. What is still NOT covered, stated in the checker's own header:
+the inverse law (a kept decl was reachable or `@retain`-marked — keep-ness
+is the default and needs kept-keys committed, a different leg) and
+evidence-follows-AST (that the committed `used` set faithfully mirrors the
+program's invocations is still the pass's word — the channel-trust
+boundary, same as claims). Every other koru transform remains at
+accounting level — `strip-*` is the template for the class: commit the
+decidable pre-image of the transform's own justification, let the oracle
+re-run the membership law, never serialize a verdict.
+
 ---
 
 ## 3. K3 — Proof-carrying obligations

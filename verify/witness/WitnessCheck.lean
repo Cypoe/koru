@@ -565,6 +565,11 @@ def declSide (evMod : String) : List String → DescSide → Option DescSide
     else if a.startsWith "br:" then
       declSide evMod rest { acc with brs := acc.brs ++ [a] }
     else if a.startsWith "ret:" then
+      -- Registry normalization: a bare `-> T` return IS the single branch
+      -- `| ok (__type_ref: T)` (runtime.contract `wireDeclOutcome` renders
+      -- the singleton ok branch as `-> T`). The emit side prints resolved
+      -- branches, so the derived side must carry the synthesized `br:ok`.
+      let acc := { acc with brs := acc.brs ++ ["br:ok"] }
       match phantomToken (a.drop 4).toString with
       | none => declSide evMod rest acc
       | some tok =>
@@ -894,6 +899,134 @@ def transformObligeCheck (sites : List SiteLine) : List String :=
   match pend with
   | some p => if p.owed.isEmpty then bad else bad ++ [s!"app {p.name} owed {p.owed} at corpus end"]
   | none => bad
+
+/-! ## Kind `strip-*` — dead-strip reachability re-decision (K2 Use B)
+
+`pass-dead-strip` (src/dead_strip.zig) removes every `event_decl`/`proc_decl`
+the program never spells and every comment-only `host_line`. Its semantic
+claim reduces to a decidable set law, so under `std/witness:enforce` the
+pass commits the pre-image rather than the verdict:
+
+    strip-use   <path>  collect marked     — a key in the pass's `used` set
+    strip-root  <path>  seed    rooted     — a seeded library export
+    strip-rm    <key>   <alt>   removed    — a removed decl, both spellings tested
+    strip-cargo <hash>  text    cargo      — a comment-only host line (fnv1a-64)
+    strip-census dead-strip totals uses=<u>;roots=<r>;removed=<n>;cargo=<c>
+
+The oracle re-decides the lawful-removal law the pass itself enforces:
+`isPathUsed` probes `used` with the canonical spelling AND the
+enclosing-module fallback, so a removal is lawful iff NEITHER committed key
+is in the committed `used` set. Roots are seeded INTO `used`, so every
+`strip-root` must also appear as a `strip-use`. The inverse law (a kept decl
+was reachable or retained) is NOT re-decided — keep-ness is the default, and
+committing every kept key plus its `@retain` marks is a different leg.
+
+Honest boundary, same as the claims lane: the oracle re-decides
+verdict-follows-evidence. That the committed `used` set faithfully mirrors
+the program's invocations (evidence-follows-AST) is still the pass's word —
+the wire is the trusted channel. -/
+
+/-- Path spellings on the wire: dotted segments, `module:` qualifiers,
+hyphenated emitted-name variants, identifier characters. Nothing else —
+a space, quote, or template char is never a path. -/
+def stripPathOk (p : String) : Bool :=
+  !p.isEmpty && p.toList.all fun c =>
+    c.isAlphanum || c == '.' || c == '_' || c == ':' || c == '-'
+
+def ruleStripUse (s : SiteLine) : Ruling :=
+  if s.arrow == "collect" && s.verdict == "marked" &&
+     stripPathOk s.site && s.extra.isEmpty
+  then .match_ else .malformed
+
+def ruleStripRoot (s : SiteLine) : Ruling :=
+  if s.arrow == "seed" && s.verdict == "rooted" &&
+     stripPathOk s.site && s.extra.isEmpty
+  then .match_ else .malformed
+
+def ruleStripRm (s : SiteLine) : Ruling :=
+  if s.verdict == "removed" && stripPathOk s.site &&
+     (s.arrow == "-" || stripPathOk s.arrow) && s.extra.isEmpty
+  then .match_ else .malformed
+
+def ruleStripCargo (s : SiteLine) : Ruling :=
+  if s.arrow == "text" && s.verdict == "cargo" &&
+     isHexDigest s.site && s.extra.isEmpty
+  then .match_ else .malformed
+
+def ruleStripCensus (s : SiteLine) : Ruling :=
+  if s.site != "dead-strip" || s.arrow != "totals" || !s.extra.isEmpty
+  then .malformed
+  else
+    let toks := s.verdict.splitOn ";"
+    match fieldOf toks "uses=", fieldOf toks "roots=",
+          fieldOf toks "removed=", fieldOf toks "cargo=" with
+    | some u, some r, some n, some g =>
+      if u.toNat?.isSome && r.toNat?.isSome && n.toNat?.isSome && g.toNat?.isSome
+      then .match_ else .malformed
+    | _, _, _, _ => .malformed
+
+/-- Corpus-level strip re-decision. Violations are reported, not rulings:
+a well-formed `strip-rm` naming a path the committed `used` set still spells
+is a semantic forgery the per-line rules cannot see — the same class
+`tampered.txt` carries on the claims lane.
+
+`used`/`root` keys are committed once each (set membership), so a repeated
+one is drift. Removed keys may legitimately repeat — welded modules carry
+same-named decl objects whose canonical spellings coincide — so `strip-rm`
+keys are counted for the census, never deduplicated. -/
+def stripCheck (sites : List SiteLine) : List String :=
+  let uses := (sites.filter (·.kind == "strip-use")).map (·.site)
+  let roots := (sites.filter (·.kind == "strip-root")).map (·.site)
+  let rms := sites.filter (·.kind == "strip-rm")
+  let cargo := sites.filter (·.kind == "strip-cargo")
+  let cens := sites.filter (·.kind == "strip-census")
+  let live := uses ++ roots
+  let unlawful := rms.filter fun r =>
+    live.contains r.site || (r.arrow != "-" && live.contains r.arrow)
+  let stray := roots.filter (!uses.contains ·)
+  let dupKeys := fun (ks : List String) =>
+    (ks.eraseDups.filter fun k => ks.count k > 1).map fun k => s!"{k} committed twice"
+  let censusBad :=
+    if uses.isEmpty && roots.isEmpty && rms.isEmpty && cargo.isEmpty && cens.isEmpty
+    then []
+    else match cens with
+      | [c] =>
+        let toks := c.verdict.splitOn ";"
+        match fieldOf toks "uses=", fieldOf toks "roots=",
+              fieldOf toks "removed=", fieldOf toks "cargo=" with
+        | some u, some r, some n, some g =>
+          if u.toNat? == some uses.length && r.toNat? == some roots.length &&
+             n.toNat? == some rms.length && g.toNat? == some cargo.length
+          then [] else ["census mis-counts committed lines"]
+        | _, _, _, _ => ["census fields unparsable"]
+      | _ => ["census missing or duplicated"]
+  (unlawful.map fun r => s!"removed {r.site} ({r.arrow}) still spelled in used/roots")
+    ++ (stray.map fun r => s!"root {r} absent from committed uses")
+    ++ dupKeys uses ++ dupKeys roots
+    ++ censusBad
+
+example : stripCheck [
+    ⟨"strip-use","ev.tick","collect","marked",""⟩,
+    ⟨"strip-use","app:ev.bump","collect","marked",""⟩,
+    ⟨"strip-root","app:ev.bump","seed","rooted",""⟩,
+    ⟨"strip-rm","dead.fn","-","removed",""⟩,
+    ⟨"strip-census","dead-strip","totals","uses=2;roots=1;removed=1;cargo=0",""⟩] = [] := by native_decide
+example : (stripCheck [
+    ⟨"strip-use","ev.tick","collect","marked",""⟩,
+    ⟨"strip-rm","ev.tick","-","removed",""⟩,
+    ⟨"strip-census","dead-strip","totals","uses=1;roots=0;removed=1;cargo=0",""⟩]).length > 0 := by native_decide
+example : (stripCheck [
+    ⟨"strip-use","a.b","collect","marked",""⟩,
+    ⟨"strip-rm","c","mod:c","removed",""⟩,
+    ⟨"strip-use","mod:c","collect","marked",""⟩,
+    ⟨"strip-census","dead-strip","totals","uses=2;roots=0;removed=1;cargo=0",""⟩]).length > 0 := by native_decide
+example : (stripCheck [
+    ⟨"strip-use","a.b","collect","marked",""⟩,
+    ⟨"strip-root","lib:exported","seed","rooted",""⟩,
+    ⟨"strip-census","dead-strip","totals","uses=1;roots=1;removed=0;cargo=0",""⟩]).length > 0 := by native_decide
+example : (stripCheck [
+    ⟨"strip-use","a.b","collect","marked",""⟩,
+    ⟨"strip-census","dead-strip","totals","uses=2;roots=0;removed=0;cargo=0",""⟩]).length > 0 := by native_decide
 
 /-! ## Kind `pass-graph-*` — the declared pass graph as committed artifacts
 
@@ -1430,6 +1563,11 @@ def rule (s : SiteLine) : Ruling :=
   else if s.kind == "declaration" then ruleDeclaration s
   else if s.kind == "catalog" then ruleCatalog s
   else if s.kind == "projection" then ruleProjection s
+  else if s.kind == "strip-use" then ruleStripUse s
+  else if s.kind == "strip-root" then ruleStripRoot s
+  else if s.kind == "strip-rm" then ruleStripRm s
+  else if s.kind == "strip-cargo" then ruleStripCargo s
+  else if s.kind == "strip-census" then ruleStripCensus s
   else .malformed
 
 def isSiteLine (line : String) : Bool :=
@@ -1511,6 +1649,12 @@ def main (args : List String) : IO UInt32 := do
   for v in projectionCheck sites.reverse do
     if !forged then bad := bad + 1
     IO.println s!"{if forged then "ok  " else "BAD "} PROJ-DRIFT  {v}"
+  -- Corpus-level strip re-decision: every removed key must be absent from
+  -- the committed use/root spellings — the pass's own membership law,
+  -- replayed rather than trusted.
+  for v in stripCheck sites.reverse do
+    if !forged then bad := bad + 1
+    IO.println s!"{if forged then "ok  " else "BAD "} STRIP-VIOLATION  {v}"
   let mode := if forged then "forged (all must reject)" else "conformance (all must match)"
   IO.println s!"{mode}: {lines.length} lines, {bad} bad"
   return (if bad == 0 then 0 else 1)
