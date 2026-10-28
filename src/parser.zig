@@ -163,6 +163,40 @@ fn netBraces(s: []const u8) i32 {
     return netDepth(s, '{', '}');
 }
 
+/// A `.kmd` fenced code block's marker — the run that opened it.
+const KmdFence = struct { char: u8, len: usize };
+
+/// ``` or ~~~ run of >=3 at up to 3 spaces indent opens a fenced code
+/// block (CommonMark). Returns the marker for close-matching, or null.
+/// Runs before the `~`-sigil test in the `.kmd` classifier, which is what
+/// makes `~~~` a tilde-fence rather than a malformed switch.
+fn kmdFenceOpen(line: []const u8) ?KmdFence {
+    var i: usize = 0;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i > 3 or i >= line.len) return null;
+    const ch = line[i];
+    if (ch != '`' and ch != '~') return null;
+    var run: usize = 0;
+    while (i < line.len and line[i] == ch) : (i += 1) run += 1;
+    if (run < 3) return null;
+    return .{ .char = ch, .len = run };
+}
+
+/// A fence closes on a same-char run of at least the opener's length at
+/// up to 3 spaces indent, followed by whitespace only (CommonMark).
+fn kmdFenceClose(line: []const u8, fence: KmdFence) bool {
+    var i: usize = 0;
+    while (i < line.len and line[i] == ' ') : (i += 1) {}
+    if (i > 3) return false;
+    var run: usize = 0;
+    while (i < line.len and line[i] == fence.char) : (i += 1) run += 1;
+    if (run < fence.len) return false;
+    while (i < line.len) : (i += 1) {
+        if (line[i] != ' ' and line[i] != '\t') return false;
+    }
+    return true;
+}
+
 ///   - Source block:   `~event { content }`      - no = before {
 ///   - Subflow impl:   `~event = branch { ... }` - has = before {
 fn hasSourceBlock(s: []const u8) bool {
@@ -935,6 +969,13 @@ pub const Parser = struct {
     // (no host backend to forward them to).
     is_k: bool,
 
+    // True when parsing a `.kmd` file: the host text is Markdown — document
+    // lines, not code (docs/KMD.md). `kmd_fence` is the one bit of state the
+    // classification needs: inside a fenced code block every line is document
+    // text, sigils included.
+    is_kmd: bool,
+    kmd_fence: ?KmdFence = null,
+
     // FOUNDATIONAL: Module context for all parsed items
     module_name: []const u8, // Canonical module path (e.g., "input", "lib/fs")
 
@@ -1013,6 +1054,18 @@ pub const Parser = struct {
     /// Get current source location for error reporting and AST metadata
     fn getCurrentLocation(self: *Parser) errors.SourceLocation {
         return self.getLineLocation(self.current, 0);
+    }
+
+    /// Append the current line as a host_line item (verbatim host bytes —
+    /// code in `.kz`/`.kjs`/…, document text in `.kmd`). Does not advance
+    /// the cursor; callers own `self.current`.
+    fn appendHostLine(self: *Parser, items: *std.ArrayList(ast.Item), line: []const u8) !void {
+        const owned_line = try self.allocator.dupe(u8, line);
+        try items.append(self.allocator, .{ .host_line = .{
+            .content = owned_line,
+            .location = self.getCurrentLocation(),
+            .module = try self.allocator.dupe(u8, self.module_name),
+        } });
     }
 
     /// Get source location for a specific line and indent. `indent` is the
@@ -1179,6 +1232,8 @@ pub const Parser = struct {
         };
         // `.k` is the pure-Koru contract/source file: no host bytes, no `~`.
         const is_k = if (file_ext) |ext| std.mem.eql(u8, ext, ".k") else false;
+        // `.kmd` is the document host — Markdown hostlines (docs/KMD.md).
+        const is_kmd = if (file_ext) |ext| std.mem.eql(u8, ext, ".kmd") else false;
 
         return Parser{
             .allocator = allocator,
@@ -1190,6 +1245,7 @@ pub const Parser = struct {
             .registry = type_registry.TypeRegistry.init(allocator),
             .is_compiler_library = false, // Default to false, caller can set if needed
             .is_k = is_k,
+            .is_kmd = is_kmd,
             .module_name = module_name,
             .fail_fast = false, // Default to lenient mode (continue past errors)
             .registry_transferred = false,
@@ -1303,6 +1359,12 @@ pub const Parser = struct {
             module_annotations.deinit(self.allocator);
         }
 
+        // `.kmd` modules are implicitly comptime (docs/KMD.md): the file's
+        // constructs evaluate at compile time and the residue is the document.
+        if (self.is_kmd) {
+            try module_annotations.append(self.allocator, try self.allocator.dupe(u8, "comptime"));
+        }
+
         // Part declarations ride the parser field (parsePartDecl appends).
         // On error, free what was collected and reset so deinit no-ops.
         errdefer {
@@ -1319,6 +1381,37 @@ pub const Parser = struct {
 
             var line = self.lines[self.current];
             var trimmed = lexer.trim(line);
+
+            // `.kmd`: the host text is Markdown — document lines, not code.
+            // A `~` is the Koru switch only at column 0 outside fences (second
+            // char not `~`, space, or tab — `~~`/`~~~` are strikethrough and
+            // tilde-fences). Everything else is a document line: blank lines,
+            // `|`/`!` at top level (tables are prose — the sigils are only
+            // structural inside a construct's extent, which the construct
+            // parser consumes itself), `~~`, indented code. Koru regions end
+            // at a blank line by Koru's own rules.
+            if (self.is_kmd) {
+                if (self.kmd_fence) |fence| {
+                    if (kmdFenceClose(line, fence)) self.kmd_fence = null;
+                    try self.appendHostLine(&items, line);
+                    self.current += 1;
+                    continue;
+                }
+                if (kmdFenceOpen(line)) |fence| {
+                    self.kmd_fence = fence;
+                    try self.appendHostLine(&items, line);
+                    self.current += 1;
+                    continue;
+                }
+                const is_switch = line.len > 1 and line[0] == '~' and
+                    line[1] != '~' and line[1] != ' ' and line[1] != '\t';
+                if (!is_switch) {
+                    try self.appendHostLine(&items, line);
+                    self.current += 1;
+                    continue;
+                }
+                // Fall through: a column-0 `~` line is a Koru construct.
+            }
 
             if (trimmed.len == 0) {
                 self.current += 1;
@@ -1940,12 +2033,7 @@ pub const Parser = struct {
                     }
                 }
                 // Pass through host language line
-                const owned_line = try self.allocator.dupe(u8, line);
-                try items.append(self.allocator, .{ .host_line = .{
-                    .content = owned_line,
-                    .location = self.getCurrentLocation(),
-                    .module = try self.allocator.dupe(u8, self.module_name),
-                } });
+                try self.appendHostLine(&items, line);
                 self.current += 1;
             }
         }
@@ -12957,4 +13045,96 @@ test "parser lands [parallel] on a for-invocation's annotations" {
         }
     }
     try std.testing.expect(found);
+}
+
+test "kmd: markdown lines are host_lines, ~ at col 0 is Koru" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\# Title
+        \\
+        \\Prose with `code` and | a | b | table-ish text.
+        \\
+        \\~import std/io
+        \\
+        \\More prose.
+    ;
+    var parser = try Parser.init(allocator, source, "page.kmd", &[_][]const u8{}, null);
+    defer parser.deinit();
+    var result = try parser.parse();
+    defer result.deinit();
+
+    var host_lines: usize = 0;
+    var imports: usize = 0;
+    for (result.source_file.items) |item| {
+        switch (item) {
+            .host_line => |hl| {
+                host_lines += 1;
+                // Document text is verbatim — pipes and hashes intact.
+                if (host_lines == 1) try std.testing.expectEqualStrings("# Title", hl.content);
+            },
+            .import_decl => imports += 1,
+            else => {},
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 6), host_lines); // 6 doc lines incl. blanks
+    try std.testing.expectEqual(@as(usize, 1), imports); // ~import became a construct
+
+    // Implicit comptime stamp (docs/KMD.md).
+    var saw_comptime = false;
+    for (result.source_file.module_annotations) |a| {
+        if (std.mem.eql(u8, a, "comptime")) saw_comptime = true;
+    }
+    try std.testing.expect(saw_comptime);
+}
+
+test "kmd: fenced code blocks are opaque — ~ lines inside stay text" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Before.
+        \\
+        \\```koru
+        \\~not real koru()
+        \\~~~
+        \\``` 
+        \\still inside? no - closed by ```
+        \\
+    ;
+    var parser = try Parser.init(allocator, source, "doc.kmd", &[_][]const u8{}, null);
+    defer parser.deinit();
+    var result = try parser.parse();
+    defer result.deinit();
+
+    var fence_saw_tilde = false;
+    for (result.source_file.items) |item| {
+        switch (item) {
+            .host_line => |hl| {
+                if (std.mem.eql(u8, hl.content, "~not real koru()")) fence_saw_tilde = true;
+            },
+            .flow => return error.UnexpectedFlow, // nothing here is a construct
+            else => {},
+        }
+    }
+    try std.testing.expect(fence_saw_tilde);
+}
+
+test "kmd: ~~ and indented ~ are document text, not sigils" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\~~strikethrough~~
+        \\
+        \\    ~indented code line
+    ;
+    var parser = try Parser.init(allocator, source, "doc.kmd", &[_][]const u8{}, null);
+    defer parser.deinit();
+    var result = try parser.parse();
+    defer result.deinit();
+
+    var n: usize = 0;
+    for (result.source_file.items) |item| {
+        switch (item) {
+            .host_line => n += 1,
+            else => return error.ExpectedOnlyHostLines,
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), n);
 }
