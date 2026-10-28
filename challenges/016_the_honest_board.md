@@ -184,3 +184,33 @@ denominator growth.
   move this frame exists to prevent.
 - **Publishing mid-frame.** The full board is for publishing. Run the affected
   categories while iterating.
+
+## Replay status — 2026-10-28 (Cypoe/challenge-016-the-honest-board)
+
+Measured against the current tree this session, most of the brief's claims
+were stale:
+
+- **The fourteen**: all carry authored `OWED:` TODO reasons or real run
+  markers; the BENCHMARK category marker is gone and save-snapshot.js
+  recognizes BENCHMARK + category SKIP descs. Closed.
+- **The 44 identical todos**: gone — replaced by per-test Parked/OWED
+  reasons; 410/430 now largely run (014 landed between brief and replay).
+- **New silence found and closed**: three zero-byte TODO markers
+  (020_067, 030_017, 400_195). Compiled this session — all three pin live
+  defects (two stage-D emitter bugs, one silently-dropped arm); un-TODO'd
+  so they fail out loud.
+- **Marker census**: 155 TODO, 3 SKIP, 11 BROKEN, 5 BENCHMARK (all under
+  _archive), 0 NEEDS_RULING — zero empty markers remain.
+- **Environment finding**: the board cannot measure itself under a
+  ~/.nix-profile-led PATH — zig's cc probe links nix-glibc-2.44 objects,
+  every backend binary needs GLIBC_2.34 on a 2.31 host, and both the koruc
+  backend cache and zig artifact store re-serve the poison unkeyed.
+  Filed: 017_toolchain_env_cache_poison. A publishable board still needs a
+  run under a corrected PATH (nix-profile last or absent).
+- generate-status.js no longer crashes on a dereferenced latest.json
+  (drvfs materializes symlinks as text).
+
+Open remainder: zero-untested verified at the mechanism level (every run
+path writes a marker; scanner/runner enumerate the same 2527 tests; no
+empty markers), but no complete board has run since — the suite is ~12h
+on this host.
