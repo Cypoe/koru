@@ -247,6 +247,22 @@
     "check": "python3 checks/check_signal_orphans.py ../signals"
 }
 
+// Media at the consumer's publish boundary: korulang_org's static/ is copied
+// verbatim into the Vercel deploy bundle, and a 12.8 MB mp4 committed there
+// pushed the deploy over the size limit — the video was public and fine, it
+// was the pack that broke. Media lives on the Bunny pull zone
+// (pub-htnl.b-cdn.net, prefix koru/) and posts reference the CDN URL. The
+// consumer's own check carries the law (script is its file, the rule text
+// lives there); this row is the pointer that fires it at every commit —
+// unsampled, because the check reads the working tree and a landed file
+// keeps blocking until migrated.
+~std/invariants:inferred {
+    "name": "media-ships-via-bunny",
+    "tags": ["git-gate", "repo-korulang_org"],
+    "rule": "No video file may live under korulang_org's static/ — the deploy bundle copies that tree verbatim and media committed there pushes Vercel past its size limit; video and audio belong on the Bunny pull zone (pub-htnl.b-cdn.net, prefix koru/), referenced from posts by URL. The same scan refuses editable design sources, OS spill, world-unreadable files, and any single file past 4 MB — the check's refusal text carries the upload command. Reads the consumer's working tree, so an uncommitted file blocks the commit too — matching the site, whose deploy builds the working tree.",
+    "check": "node ../../korulang_org/scripts/check-publishable-static.js ../../korulang_org"
+}
+
 ~tor main {}
 
 ~proc main|zig {
