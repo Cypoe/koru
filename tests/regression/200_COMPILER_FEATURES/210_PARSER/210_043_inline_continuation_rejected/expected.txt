@@ -1,5 +1,7 @@
-error[PARSE001]: Branch continuation '|' must start on a new line with proper indentation
-  --> tests/regression/200_COMPILER_FEATURES/210_PARSER/210_043_inline_continuation_rejected/input.kz:14:23
+error[PARSE001]: branch arm '| done' written mid-line — branch arms open on their own line
+  --> tests/regression/200_COMPILER_FEATURES/210_PARSER/210_043_inline_continuation_rejected/input.kz:14:22
     |
  14 | ~greet(name: "World") | done |> _
-    |                       ^
+    |                      ^
+  hint: a `| name` arm dispatches on the step it follows; put it on a new line indented under that step. A same-line next step chains with `|>`.
+

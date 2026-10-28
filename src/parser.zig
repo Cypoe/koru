@@ -5311,9 +5311,34 @@ pub const Parser = struct {
             }
         }
 
-        const invocation_part_full = if (pipe_idx) |idx|
-            clean[0..idx]
-        else
+        const invocation_part_full = if (pipe_idx) |idx| blk: {
+            // `| name` mid-line after the head is a branch arm with nothing
+            // to dispatch on — it used to truncate here silently and the
+            // step ran unconditionally (oshun's every-label draw; 210_332).
+            // Legal neighbours stay open: `|>` chains, `| ?`/`|*` arms, and
+            // `| name` after `->`/`=>` (produce-tail arms, 420_008) or after
+            // `}` (closed-block arms, 390_004).
+            const rest = lexer.trim(clean[idx + 1 ..]);
+            if (rest.len > 1 and rest[0] == '|' and rest[1] != '>') {
+                const arm_head = lexer.trim(rest[1..]);
+                if (arm_head.len > 0 and arm_head[0] != '>' and arm_head[0] != '?' and arm_head[0] != '*') {
+                    const head_t = lexer.trim(clean[0..idx]);
+                    const legal_context = std.mem.endsWith(u8, head_t, "}") or
+                        indexOfTopLevelHeadArrow(head_t) != null;
+                    if (!legal_context) {
+                        var w: usize = 0;
+                        while (w < arm_head.len and (std.ascii.isAlphanumeric(arm_head[w]) or arm_head[w] == '_')) w += 1;
+                        const col = if (@intFromPtr(clean.ptr) >= @intFromPtr(line.ptr) and
+                            @intFromPtr(clean.ptr) < @intFromPtr(line.ptr) + line.len)
+                            (@intFromPtr(clean.ptr) - @intFromPtr(line.ptr)) + idx + 2
+                        else
+                            idx + 2;
+                        return self.failWithHint(.PARSE001, self.current, @intCast(col), "branch arm '| {s}' written mid-line — branch arms open on their own line", .{arm_head[0..w]}, "a `| name` arm dispatches on the step it follows; put it on a new line indented under that step. A same-line next step chains with `|>`.", .{});
+                    }
+                }
+            }
+            break :blk clean[0..idx];
+        } else
             clean;
 
         // The invocation HEAD ends at the first top-level construct/produce arrow
