@@ -20,3 +20,6 @@ main:010_the_refusal_audit.md	running	Cypoe/challenge-010-the-refusal-audit	2026
 main:011_the_module_mirror_wall.md	running	Cypoe/challenge-011-the-module-mirror-wall	2026-10-28T13:02:53+01:00	started
 main:012_obligations_through_control_flow.md	running	Cypoe/challenge-012-obligations-through-control-flow	2026-10-28T13:32:02+01:00	started
 main:012_obligations_through_control_flow.md	done	Cypoe/challenge-012-obligations-through-control-flow	2026-10-28T15:06:43+01:00	Claim was stale: 28/31 in-scope tests already green; fixed 2 false-red pins (\\d not valid under grep -E
+main:013_the_store_kernel_seam.md	running	Cypoe/challenge-013-the-store-kernel-seam	2026-10-28T15:07:54+01:00	started
+main:014_the_interpreter_reckoning.md	running	Cypoe/challenge-014-the-interpreter-reckoning	2026-10-28T16:41:25+01:00	started
+main:014_the_interpreter_reckoning.md	failed	Cypoe/challenge-014-the-interpreter-reckoning	2026-10-28T17:32:29+01:00	no result file
