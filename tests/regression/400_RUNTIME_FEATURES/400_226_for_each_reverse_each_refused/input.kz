@@ -1,0 +1,9 @@
+~import std/io
+
+// `! each` and `! reverse-each` are alternative delivery axes of one call —
+// attaching both means the call describes two traversals, which is refused:
+// a single `for` call is a single traversal. Pick an axis.
+
+~for(1..5)
+! each i |> std/io:print.ln("{{ i:d }}")
+! reverse-each i |> std/io:print.ln("{{ i:d }}")

@@ -303,3 +303,11 @@ members=2759
 # evidence restructure) is additive lines, not a new clone cluster.
 clusters=2120
 members=2761
+# [carried through the quantity-numbers rebase] Pre-rebase note for
+# "for: add `! reverse-each`": the roll fired on +6 clusters / +14
+# members accumulated between rolls — parser.zig's kmd and midline-arm
+# landings (test_decl clones, errdefer line shapes) committed under
+# rolls that missed; this commit stages zero src/ files (koru_std +
+# tests only). Census re-measured on the pre-rebase tree: 1971/2543.
+# Pin left at the ccomp-basis 2120/2761 pending the post-rebase
+# re-measure on the merged tree.

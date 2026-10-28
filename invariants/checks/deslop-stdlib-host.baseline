@@ -145,3 +145,11 @@ members=1066
 # measured; fold targets unchanged.
 clusters=1179
 members=1066
+# [carried through the quantity-numbers rebase] Pre-rebase note for
+# "for: add `! reverse-each`" (2026-10-28): clusters fell 1179 -> 1177
+# while members rose 1066 -> 1069 (+3) — committed drift under rolls
+# that missed (store.new catch shells lead the board as documented).
+# control.for.kz's synthetic stayed unparseable both sides of that
+# diff (37 -> 39 errors — nested template arms; already escaped).
+# Pin left at the ccomp-basis 1179/1066 pending the post-rebase
+# re-measure on the merged tree.
