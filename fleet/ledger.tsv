@@ -1,0 +1,8 @@
+main:018_the_quirk_hunt.md	partial	Cypoe/challenge-018-q3-command-position	2026-10-28T00:13:41+01:00	Q3 drained; Q2 Q4-Q12 open
+main:001_parser_hardening.md	running	Cypoe/challenge-001-parser-hardening	2026-10-28T02:21:30+01:00	started
+main:001_parser_hardening.md	failed	Cypoe/challenge-001-parser-hardening	2026-10-28T02:34:14+01:00	no result file
+main:002_toolchain_hardening.md	running	Cypoe/challenge-002-toolchain-hardening	2026-10-28T02:41:39+01:00	started
+main:003_docs_without_prose.md	running	Cypoe/challenge-003-docs-without-prose	2026-10-28T02:58:21+01:00	started
+main:004_compute_kernel_gap_mining.md	running	Cypoe/challenge-004-compute-kernel-gap-mining	2026-10-28T03:04:45+01:00	started
+main:005_regression_board_triage.md	running	Cypoe/challenge-005-regression-board-triage	2026-10-28T03:10:37+01:00	started
+main:005_regression_board_triage.md	done	Cypoe/challenge-005-regression-board-triage	2026-10-28T04:10:00+01:00	Ported the KORU_BACKEND_TARGET ABI contract to this branch — the board was unmeasurable (every compile GLIBC_2.34/timed out); commit a0141de2d verified end-to-end
