@@ -11,9 +11,11 @@ import { readdir, stat, access, writeFile, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { readLatestSnapshot } from './lib/corpus.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const ROOT = join(__dirname, '..');
 
 const REGRESSION_PATH = join(__dirname, '../tests/regression');
 const SNAPSHOT_PATH = join(__dirname, '../test-results/latest.json');
@@ -50,9 +52,7 @@ async function readFirstLine(path) {
 // Snapshot-based path (preferred)
 // ---------------------------------------------------------------------------
 
-async function loadFromSnapshot() {
-	const raw = await readFile(SNAPSHOT_PATH, 'utf-8');
-	const snap = JSON.parse(raw);
+function statusFromSnapshot(snap) {
 	const { summary, categories, timestamp, gitCommit } = snap;
 
 	// Backfill inScope for older snapshots written before the field existed.
@@ -215,9 +215,19 @@ async function loadFromFilesystem() {
 async function generateStatus() {
 	try {
 		let data;
-		if (!forceFilesystem && await fileExists(SNAPSHOT_PATH)) {
-			data = await loadFromSnapshot();
+		// latest.json is a symlink to the dated snapshot; on filesystems that
+		// cannot represent one it materializes as a text pointer, which
+		// readLatestSnapshot follows. Existing-but-unreadable is not a hard
+		// failure — the filesystem scan is the honest answer to "no board
+		// recorded" — but it is warned on, never silently swallowed.
+		const snapshotPresent = !forceFilesystem && await fileExists(SNAPSHOT_PATH);
+		const snap = snapshotPresent ? readLatestSnapshot(ROOT) : null;
+		if (snap) {
+			data = statusFromSnapshot(snap);
 		} else {
+			if (snapshotPresent) {
+				console.warn('[warn] test-results/latest.json is present but unreadable — scanning the filesystem instead.');
+			}
 			data = await loadFromFilesystem();
 		}
 

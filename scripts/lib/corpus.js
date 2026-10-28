@@ -51,7 +51,14 @@ export function loadPassingPaths(root) {
   return passing;
 }
 
-function readLatestSnapshot(root) {
+/**
+ * Read `test-results/latest.json` and return the parsed board snapshot, or
+ * null when none can be read — absent, a dangling symlink (fresh clone), or
+ * unparseable. Shared with generate-status.js: every tool that reads the
+ * board hits the same pointer materialization on filesystems that cannot
+ * represent a symlink.
+ */
+export function readLatestSnapshot(root) {
   const resultsDir = path.join(root, 'test-results');
   let raw;
   try {
