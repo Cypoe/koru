@@ -12,3 +12,5 @@ main:007_FIX_QUEUE.md	running	Cypoe/challenge-007-fix-queue	2026-10-28T04:28:40+
 main:007_FIX_QUEUE.md	failed	Cypoe/challenge-007-fix-queue	2026-10-28T05:51:00+01:00	no result file
 main:007_combinatorial_composition.md	running	Cypoe/challenge-007-combinatorial-composition	2026-10-28T05:52:09+01:00	started
 main:007_combinatorial_composition.md	failed	Cypoe/challenge-007-combinatorial-composition	2026-10-28T06:06:18+01:00	no result file
+main:008_comptime_transform_catalog.md	running	Cypoe/challenge-008-comptime-transform-catalog	2026-10-28T06:07:26+01:00	started
+main:008_comptime_transform_catalog.md	failed	Cypoe/challenge-008-comptime-transform-catalog	2026-10-28T06:22:51+01:00	no result file
