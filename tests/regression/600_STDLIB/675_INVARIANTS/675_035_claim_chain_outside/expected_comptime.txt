@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_035_claim_chain_outside/input.k:29 terminates on step: outside-P — a dispatch on 'bounce' is not an if/cond — the fence reads those

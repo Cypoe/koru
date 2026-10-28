@@ -138,6 +138,147 @@ fn claimsGuardRows(
     return rows.items;
 }
 
+// Clause list → arm meets: one ArmMeet per clause, carrying the
+// produced branch's name. Called per terminal arm.
+fn claimsEmitMeets(
+    alloc: std.mem.Allocator,
+    cases: []const []const GuardCmp,
+    prod: anytype,
+    out: *std.ArrayListUnmanaged(ArmMeet),
+) void {
+    for (cases) |clause| {
+        var rows = std.ArrayListUnmanaged(spec.LinRow){};
+        for (clause) |cmp| {
+            for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, cmp.neg, cmp.src)) |r|
+                rows.append(alloc, r) catch unreachable;
+        }
+        out.append(alloc, .{ .arm = prod.branch_name, .rows = rows, .scalar_field = prod.scalar_field }) catch unreachable;
+    }
+}
+
+// One dispatch's continuations → arm meets. `prefix` is the enclosing
+// premise as a clause set (empty clause at the top); each arm's own
+// cases multiply it. A terminal arm emits meets; an arm chaining into
+// `if`/`cond` (`| else |> if(…)`) recurses with the widened prefix —
+// the nested arm's premise is outer × inner, exactly first-match
+// semantics one level down.
+fn claimsDispatchArms(
+    alloc: std.mem.Allocator,
+    inv: *const ast.Invocation,
+    conts: []const ast.Continuation,
+    prefix: []const []const GuardCmp,
+    fields: []const ast.Field,
+    subject: []const u8,
+    out: *std.ArrayListUnmanaged(ArmMeet),
+) ?[]const u8 {
+    const dispatch = if (inv.path.segments.len != 0) inv.path.segments[inv.path.segments.len - 1] else "";
+    const is_if = std.mem.eql(u8, dispatch, "if");
+    if (!is_if and !std.mem.eql(u8, dispatch, "cond"))
+        return std.fmt.allocPrint(alloc, "a dispatch on '{s}' is not an if/cond — the fence reads those", .{dispatch}) catch unreachable;
+    if (inv.path.module_qualifier) |q| {
+        if (!std.mem.eql(u8, q, "std.control"))
+            return std.fmt.allocPrint(alloc, "the impl dispatches on '{s}:{s}' — the fence reads std.control's if/cond", .{ q, dispatch }) catch unreachable;
+    }
+    if (inv.args.len == 0) return "the dispatch carries no guard or scrutinee";
+    if (conts.len == 0) return "the dispatch carries no arms";
+
+    var if_guard: ?GuardExpr = null;
+    var scrutinee: []const u8 = "";
+    if (is_if) {
+        if_guard = switch (claimsParseGuard(alloc, inv.args[0].value, fields, subject)) {
+            .outside => |m| return m,
+            .ok => |g| g,
+        };
+    } else {
+        scrutinee = std.mem.trim(u8, inv.args[0].value, " \t");
+        if (!claimsFieldListed(fields, scrutinee))
+            return std.fmt.allocPrint(alloc, "the cond scrutinee '{s}' is not a field of '{s}' — the fence reads field scrutinees", .{ scrutinee, subject }) catch unreachable;
+        if (!claimsIntField(fields, scrutinee))
+            return std.fmt.allocPrint(alloc, "the cond scrutinee '{s}' is not an integer field — the rank grammar is integer-only", .{scrutinee}) catch unreachable;
+    }
+
+    const empty_clause: []const GuardCmp = &.{};
+    const catchall = [_][]const GuardCmp{empty_clause};
+    var priors = std.ArrayListUnmanaged(?GuardExpr){};
+    for (conts) |*cont| {
+        var own: []const []const GuardCmp = catchall[0..];
+        if (is_if) {
+            const negate = std.mem.eql(u8, cont.branch, "else");
+            if (!negate and !std.mem.eql(u8, cont.branch, "then"))
+                return std.fmt.allocPrint(alloc, "the impl dispatches on '{s}' — the fence reads then/else", .{cont.branch}) catch unreachable;
+            own = switch (claimsGuardCases(alloc, &if_guard.?, negate)) {
+                .outside => |m| return m,
+                .ok => |cs| cs,
+            };
+            if (cont.condition) |ctext| {
+                var extra = switch (claimsParseGuard(alloc, ctext, fields, subject)) {
+                    .outside => |m| return m,
+                    .ok => |e| e,
+                };
+                const xcases = switch (claimsGuardCases(alloc, &extra, false)) {
+                    .outside => |m| return m,
+                    .ok => |cs| cs,
+                };
+                own = switch (claimsClauseProduct(alloc, own, xcases)) {
+                    .outside => |m| return m,
+                    .ok => |cs| cs,
+                };
+            }
+        } else {
+            var guard: ?GuardExpr = null;
+            if (cont.condition) |ctext| {
+                const renamed = if (cont.binding) |b| claimsRenameIdent(alloc, ctext, b, scrutinee) else ctext;
+                guard = switch (claimsParseGuard(alloc, renamed, fields, subject)) {
+                    .outside => |m| return m,
+                    .ok => |e| e,
+                };
+            }
+            if (guard) |*ge| {
+                own = switch (claimsGuardCases(alloc, ge, false)) {
+                    .outside => |m| return m,
+                    .ok => |cs| cs,
+                };
+            }
+            for (priors.items) |*pg| {
+                if (pg.*) |*ge| {
+                    const neg = switch (claimsGuardCases(alloc, ge, true)) {
+                        .outside => |m| return m,
+                        .ok => |cs| cs,
+                    };
+                    own = switch (claimsClauseProduct(alloc, own, neg)) {
+                        .outside => |m| return m,
+                        .ok => |cs| cs,
+                    };
+                } else {
+                    own = &.{}; // earlier default — this arm cannot fire
+                    break;
+                }
+            }
+            priors.append(alloc, guard) catch unreachable;
+        }
+        const arm_cases = switch (claimsClauseProduct(alloc, prefix, own)) {
+            .outside => |m| return m,
+            .ok => |cs| cs,
+        };
+        const node = cont.node orelse
+            return std.fmt.allocPrint(alloc, "arm '{s}' produces nothing the fence reads", .{cont.branch}) catch unreachable;
+        switch (node) {
+            .branch_constructor => switch (claimsArmProduce(alloc, cont, fields, subject)) {
+                .outside => |m| return m,
+                .ok => |prod| claimsEmitMeets(alloc, arm_cases, prod, out),
+            },
+            .invocation => |*inner| {
+                if (cont.continuations.len == 0)
+                    return std.fmt.allocPrint(alloc, "arm '{s}' chains into a dispatch with no arms", .{cont.branch}) catch unreachable;
+                if (claimsDispatchArms(alloc, inner, cont.continuations, arm_cases, fields, subject, out)) |m|
+                    return m;
+            },
+            else => return std.fmt.allocPrint(alloc, "arm '{s}' is not produced by a branch constructor", .{cont.branch}) catch unreachable,
+        }
+    }
+    return null;
+}
+
 // Read the subject impl's then/else dispatch into arm → case meets.
 // A guard is a boolean expression, so an arm's premise is a SET of
 // meets — the DNF clauses of the guard (then) or its negation (else).
@@ -157,47 +298,11 @@ fn claimsArmMeets(
     if (node != .invocation) return "the subject's impl is not an if/cond-dispatch";
     const inv = &node.invocation;
     const dispatch = if (inv.path.segments.len == 1) inv.path.segments[0] else "";
-    const is_if = std.mem.eql(u8, dispatch, "if");
-    if (!is_if and !std.mem.eql(u8, dispatch, "cond"))
+    if (!std.mem.eql(u8, dispatch, "if") and !std.mem.eql(u8, dispatch, "cond"))
         return "the subject's impl is not an if/cond-dispatch";
-    if (inv.path.module_qualifier) |q| {
-        if (!std.mem.eql(u8, q, "std.control")) return "the subject's impl is not an if/cond-dispatch";
-    }
-    if (inv.args.len == 0) return "the if carries no guard";
-    if (!is_if)
-        return claimsCondArmMeets(alloc, inv, impl.body.continuations, fields, subject, out);
-    const guard = switch (claimsParseGuard(alloc, inv.args[0].value, fields, subject)) {
-        .outside => |m| return m,
-        .ok => |g| g,
-    };
-
-    for (impl.body.continuations) |*cont| {
-        const negate = std.mem.eql(u8, cont.branch, "else");
-        if (!negate and !std.mem.eql(u8, cont.branch, "then"))
-            return std.fmt.allocPrint(alloc, "the impl dispatches on '{s}' — the fence reads then/else", .{cont.branch}) catch unreachable;
-
-        // The arm's cases: then reads the guard's DNF, else reads the
-        // negated tree's DNF — `A or B` then-cases {A},{B}, else-case
-        // {¬A ∧ ¬B}; `A and B` mirrors. Each clause is one meet.
-        const cases = switch (claimsGuardCases(alloc, &guard, negate)) {
-            .outside => |m| return m,
-            .ok => |cs| cs,
-        };
-        const prod = switch (claimsArmProduce(alloc, cont, fields, subject)) {
-            .outside => |m| return m,
-            .ok => |p| p,
-        };
-
-        for (cases) |clause| {
-            var rows = std.ArrayListUnmanaged(spec.LinRow){};
-            for (clause) |cmp| {
-                for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, cmp.neg, cmp.src)) |r|
-                    rows.append(alloc, r) catch unreachable;
-            }
-            out.append(alloc, .{ .arm = prod.branch_name, .rows = rows, .scalar_field = prod.scalar_field }) catch unreachable;
-        }
-    }
-    return null;
+    const empty_clause: []const GuardCmp = &.{};
+    const prefix = [_][]const GuardCmp{empty_clause};
+    return claimsDispatchArms(alloc, inv, impl.body.continuations, prefix[0..], fields, subject, out);
 }
 
 // Direct-level back-edges of a fold; a jump to the same label nested

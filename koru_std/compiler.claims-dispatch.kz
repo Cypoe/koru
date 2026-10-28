@@ -1,20 +1,16 @@
 // Koru Standard Library: the `claims-dispatch` part of compiler.kz.
 // Joined via `~part claims-dispatch` in compiler.kz; merged into the
 // compiler module at load — shares the claims parts' types and the
-// `spec` alias. This part owns the MULTI-WAY dispatch reading: a
-// `cond` impl's arms are a first-match cascade, so arm i's premise is
-// its own guard's cases MINUS every earlier arm's — `g_i ∧ ¬g_1 ∧ …
-// ∧ ¬g_{i-1}`, a product of clause sets the same DNF machinery reads.
-//
-// Three rules keep it honest:
-//   * a guardless `| c _` arm is the default — every LATER arm's
-//     premise is empty (unreachable), so it contributes no meets at
-//     all and discharges nothing vacuously it shouldn't;
-//   * the arm binding (`| c p when p == 0`) reads as the scrutinee —
-//     the guard text is renamed identifier-for-identifier before the
-//     linear parser sees it, so shadowing a field name is sound;
-//   * the scrutinee must be one integer field — `cond(f(x))` or a
-//     non-integer names a named outside-P, never a guess.
+// `spec` alias. This part owns the dispatch-site machinery the
+// claims walker (claims-prover) reads through: the binding rename
+// (`| c p when p == 0` reads `p` as the scrutinee — renamed
+// identifier-for-identifier before the linear parser sees it, so
+// shadowing a field name is sound), the clause-set product (`A ∧ B`
+// at the case level — prior-arm subtraction and nested-dispatch
+// premises both read through it), and the point-wise produce check
+// (one arm, one constructor — disjunction lives only at dispatch
+// positions). Budget exhaustion refuses everywhere — a partial
+// premise is never read.
 
 // Whole-identifier rename in guard text — `p == 0` with binding `p`
 // and scrutinee `i` reads `i == 0`. Quote-delimited spans are left
@@ -57,8 +53,9 @@ fn claimsRenameIdent(
 }
 
 // Clause-set product: every clause of `a` conjoined with every clause
-// of `b`. This is `A ∧ B` at the case level — used to subtract earlier
-// arms' negated cases from a later arm's own. Same budget as the DNF.
+// of `b` — `A ∧ B` at the case level. Nested dispatches and prior-arm
+// subtraction both read through it; the budget is the fence's honest
+// answer to combinatorial growth — a refusal, never a truncation.
 fn claimsClauseProduct(
     alloc: std.mem.Allocator,
     a: []const []const GuardCmp,
@@ -83,10 +80,10 @@ const ArmProduce = union(enum) {
     outside: []const u8,
 };
 
-// What a dispatch arm produces: one branch constructor, terminal, pun
-// fields or a scalar that IS a field. Shared by the if-dispatch and
-// the cond cascade — a `->` value arm or a continuing arm is a named
-// outside-P either way.
+// What a terminal arm produces: one branch constructor, pun fields or
+// a scalar that IS a field. The produce is point-wise — one arm, one
+// constructor; disjunction lives only at dispatch positions. A `->`
+// value arm or a produce that continues onward is a named outside-P.
 fn claimsArmProduce(
     alloc: std.mem.Allocator,
     cont: *const ast.Continuation,
@@ -117,70 +114,4 @@ fn claimsArmProduce(
     if (cont.continuations.len != 0)
         return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' continues past its produce — the fence reads terminal arms", .{cont.branch}) catch unreachable };
     return .{ .ok = .{ .branch_name = bc.branch_name, .scalar_field = scalar_field } };
-}
-
-// The cond cascade → arm case meets. Arm i's premise is its own guard
-// under every earlier guard's negation — first-match means later arms
-// see only what earlier arms left. One ArmMeet per surviving clause.
-fn claimsCondArmMeets(
-    alloc: std.mem.Allocator,
-    inv: *const ast.Invocation,
-    conts: []const ast.Continuation,
-    fields: []const ast.Field,
-    subject: []const u8,
-    out: *std.ArrayListUnmanaged(ArmMeet),
-) ?[]const u8 {
-    if (inv.args.len == 0) return "the cond carries no scrutinee";
-    const scrutinee = std.mem.trim(u8, inv.args[0].value, " \t");
-    if (!claimsFieldListed(fields, scrutinee))
-        return std.fmt.allocPrint(alloc, "the cond scrutinee '{s}' is not a field of '{s}' — the fence reads field scrutinees", .{ scrutinee, subject }) catch unreachable;
-    if (!claimsIntField(fields, scrutinee))
-        return std.fmt.allocPrint(alloc, "the cond scrutinee '{s}' is not an integer field — the rank grammar is integer-only", .{scrutinee}) catch unreachable;
-    const empty_clause: []const GuardCmp = &.{};
-    const catchall = [_][]const GuardCmp{empty_clause};
-    var priors = std.ArrayListUnmanaged(?GuardExpr){};
-    for (conts) |*cont| {
-        var guard: ?GuardExpr = null;
-        if (cont.condition) |ctext| {
-            const renamed = if (cont.binding) |b| claimsRenameIdent(alloc, ctext, b, scrutinee) else ctext;
-            guard = switch (claimsParseGuard(alloc, renamed, fields, subject)) {
-                .outside => |m| return m,
-                .ok => |e| e,
-            };
-        }
-        var cases: []const []const GuardCmp = if (guard) |*ge| switch (claimsGuardCases(alloc, ge, false)) {
-            .outside => |m| return m,
-            .ok => |cs| cs,
-        } else catchall[0..];
-        for (priors.items) |*pg| {
-            if (pg.*) |*ge| {
-                const neg = switch (claimsGuardCases(alloc, ge, true)) {
-                    .outside => |m| return m,
-                    .ok => |cs| cs,
-                };
-                cases = switch (claimsClauseProduct(alloc, cases, neg)) {
-                    .outside => |m| return m,
-                    .ok => |cs| cs,
-                };
-            } else {
-                cases = &.{}; // earlier default — this arm cannot fire
-                break;
-            }
-        }
-        switch (claimsArmProduce(alloc, cont, fields, subject)) {
-            .outside => |m| return m,
-            .ok => |prod| {
-                for (cases) |clause| {
-                    var rows = std.ArrayListUnmanaged(spec.LinRow){};
-                    for (clause) |cmp| {
-                        for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, cmp.neg, cmp.src)) |r|
-                            rows.append(alloc, r) catch unreachable;
-                    }
-                    out.append(alloc, .{ .arm = prod.branch_name, .rows = rows, .scalar_field = prod.scalar_field }) catch unreachable;
-                }
-            },
-        }
-        priors.append(alloc, guard) catch unreachable;
-    }
-    return null;
 }

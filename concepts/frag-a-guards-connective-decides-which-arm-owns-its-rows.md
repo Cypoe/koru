@@ -70,12 +70,29 @@ produce validation it shares with the if-path moved to
 `claimsArmProduce`, so both spellings refuse a `->` arm or a
 continuing arm identically.
 
+Dispatch nests, and the fence reads it: `| else |> if(…)` chains a
+second dispatch inside an arm (the surface already compiled and ran —
+the fence alone refused). One recursive walker owns every level —
+`claimsDispatchArms` takes the enclosing premise as a clause set and
+each arm's own cases multiply it, so a nested arm's premise is outer
+× inner, which is exactly first-match semantics one level down.
+`cond`-in-arm is free the same way, and a chain that is not
+`if`/`cond` names itself outside-P (`| else |> bounce(…)` says so).
+Budget exhaustion is a refusal at every product — a partial premise
+would be the same lie-class as an opaque-atom discharge.
+
+The ruling this settles: the produce is point-wise. One arm, one
+constructor — `arm → meets` and per-branch-name typed-payload
+discharge both stand on it. "Disjunctive produce" was never a
+missing mechanism but a second spelling of nested dispatch — the
+disjunction already lives where it belongs, at dispatch positions,
+carried as the branch tag. Not a syntax.
+
 Still outside the guard fence: `not` as a surface operator (De Morgan
 exists only inside the reader, not as user syntax), non-linear leaves,
 `!=` on the positive side (a disjunction — it contributes no rows, so
-the case it lands in just carries less), a nested `if` inside an arm
-(the continuation carries an invocation, not a produce — refused the
-same as any non-constructor), handler-side `when` guards at call
-sites (a different position — the fence reads impls), and
-produce-side conjunction, which still awaits the ruling on whether a
-produce may be disjunctive.
+the case it lands in just carries less), handler-side `when` guards
+at call sites (a different position — the fence reads impls, not
+handlers), and a `cond` in expression position — arm-step chains are
+read; guards and produce expressions naming `cond(x)` are a separate
+site, not implied by the walker.

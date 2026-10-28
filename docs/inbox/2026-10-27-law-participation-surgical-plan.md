@@ -181,6 +181,23 @@ premise; 675_032 non-field scrutinee outside-P. 675 range 32/32.
 Nested `if` inside an arm stays outside-P — cond is the multi-way
 spelling.*
 
+*Update 2026-10-29g: nested dispatch + the produce ruling. Dispatch
+nests — `| else |> if(…)` already compiled and ran; one recursive
+walker (`claimsDispatchArms`) now reads every level: each arm's own
+cases multiply the enclosing premise as a clause-set product, outer
+× inner, under the same budget (exhaustion refuses, never
+truncates). `cond`-in-arm is free the same way; a chain that is not
+if/cond names itself outside-P. The ruling it settles: the produce
+is POINT-WISE — one arm, one constructor; "disjunctive produce" was
+a second spelling of nested dispatch, not a missing mechanism (the
+disjunction lives at dispatch positions, carried as the tag). The
+walker joined claimsArmMeets in claims-prover (the ArmMeet home);
+compiler.claims-dispatch.kz keeps the dispatch-site machinery
+(rename, product, produce check). Pins: 675_033 nested-if proven —
+same meets 675_031's cond reaches, different spelling; 675_034
+cond-in-else proven; 675_035 chained non-dispatch names itself.
+675 range 35/35.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud
