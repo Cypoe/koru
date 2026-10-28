@@ -14,3 +14,5 @@ main:007_combinatorial_composition.md	running	Cypoe/challenge-007-combinatorial-
 main:007_combinatorial_composition.md	failed	Cypoe/challenge-007-combinatorial-composition	2026-10-28T06:06:18+01:00	no result file
 main:008_comptime_transform_catalog.md	running	Cypoe/challenge-008-comptime-transform-catalog	2026-10-28T06:07:26+01:00	started
 main:008_comptime_transform_catalog.md	failed	Cypoe/challenge-008-comptime-transform-catalog	2026-10-28T06:22:51+01:00	no result file
+main:009_comptime_stdlib_promotion.md	running	Cypoe/challenge-009-comptime-stdlib-promotion	2026-10-28T06:24:00+01:00	started
+main:009_comptime_stdlib_promotion.md	failed	Cypoe/challenge-009-comptime-stdlib-promotion	2026-10-28T06:54:25+01:00	no result file
