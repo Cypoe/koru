@@ -9,6 +9,6 @@ import std/string
 
 std/string:from-page(text: "x")
 | ok s |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> std/io:print.ln("done") |> std/string:free(s)
 | err _ |> _

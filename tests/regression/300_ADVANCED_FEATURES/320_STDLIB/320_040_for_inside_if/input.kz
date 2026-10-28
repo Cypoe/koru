@@ -2,6 +2,7 @@
 // Inner for should transform before outer if
 
 ~import std/control
+~import std/io
 
 const std = @import("std");
 
@@ -14,4 +15,4 @@ const std = @import("std");
 // Both should transform to native Zig constructs
 ~start() |> if(true)
 | then |> for(&[_]i32{1, 2, 3})
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")

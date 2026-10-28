@@ -1,8 +1,9 @@
 ~import std/control
+~import std/io
 ~import app/fs
 const should_loop = true;
 ~app/fs:open(path: "test.txt"): f |> if(should_loop)
     | then |> for(0..3)
-        ! each _ |> _
+        ! each i |> std/io:print.ln("{{ i:d }}")
         | done |> app/fs:close(file: f)
     | else |> app/fs:close(file: f)  // Still need to close if no loop

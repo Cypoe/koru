@@ -8,6 +8,6 @@ import std/io
 
 capture { k: 0[i64] }
 ! as acc |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> captured { k: acc.k + 1 }
 | captured _ |> std/io:print.ln("done")

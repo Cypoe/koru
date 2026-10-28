@@ -108,7 +108,7 @@
         }
         {% endif %}
     }
-    {% else %}{% if effects["each"] %}{% if effects["reverse-each"] %}{% comp error %}for: `! each` and `! reverse-each` cannot both attach to one call — pick an axis (a single call is a single traversal){% endcomp %}
+    {% else %}{% if continuations["each"] %}{% comp error %}for: `each` is an effect arm — write `! each`, not `| each` (the traversal delivers through `!` handlers, `|` arms are for the terminal axes){% endcomp %}{% endif %}{% if continuations["reverse-each"] %}{% comp error %}for: `reverse-each` is an effect arm — write `! reverse-each`, not `| reverse-each`{% endcomp %}{% endif %}{% if effects["done"] %}{% comp error %}for: `done` is a terminal arm — write `| done`, not `! done`{% endcomp %}{% endif %}{% if effects["each"] %}{% if effects["reverse-each"] %}{% comp error %}for: `! each` and `! reverse-each` cannot both attach to one call — pick an axis (a single call is a single traversal){% endcomp %}
     {% else %}for ({{ expr }}) |__koru_item{{ __site }}| {
         {% if keep != "" %}if (!({{ keep }})) break;
         {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
