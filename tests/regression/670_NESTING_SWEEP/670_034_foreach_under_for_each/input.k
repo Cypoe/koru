@@ -7,5 +7,5 @@ import std/io
 
 for(0..3)
 ! each _ |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> std/io:print.ln("done")

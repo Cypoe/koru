@@ -8,7 +8,7 @@ import std/fs
 
 std/fs:read-lines(path: "tests/regression/810_AOC_2015/810_171_day17_part1/input.txt")
 ! line _ |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> std/io:print.ln("done")
 | done _ |> _
 | failed _ |> _

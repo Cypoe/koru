@@ -14,7 +14,7 @@ std/store:new(c) { v: 0[i64] }
 
 std/store:watch(c)
 ! v x |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> std/io:print.ln("done")
 
 std/store:stored { c.v: 1 }

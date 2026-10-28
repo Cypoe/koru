@@ -11,4 +11,4 @@ std/kernel:init(Body) {
     { mass: 2.0 },
 }
 | kernel k |> for(0..2)
-    | each _ |> std/kernel:self { k.mass *= 2.0 }
+    ! each _ |> std/kernel:self { k.mass *= 2.0 }

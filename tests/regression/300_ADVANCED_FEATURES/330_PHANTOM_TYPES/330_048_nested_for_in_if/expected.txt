@@ -1,2 +1,5 @@
 Opening file: test.txt
+0
+1
+2
 Closing file
