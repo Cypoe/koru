@@ -286,3 +286,12 @@ members=2758
 # board; re-measured 2118/2758.
 clusters=2118
 members=2758
+# 2119/2759: the roll fired on the ci-step-graph commit. Own delta
+# measured ZERO — the identical census reproduces with this commit's
+# src/ edit (main.zig's ci exemption) stashed, so the +1/+1 is committed
+# drift since the merge pin: the board still names the standing
+# emitter_test/test_decl clusters plus parser.zig errdefer line-shapes
+# and the codegen_utils parse-site twins — same residual classes every
+# prior re-pin documents.
+clusters=2119
+members=2759

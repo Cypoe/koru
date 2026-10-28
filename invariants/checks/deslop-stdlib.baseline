@@ -137,3 +137,13 @@ clusters=153
 members=230
 skipped=2
 spellings=74
+# 153/230 (spellings 74->75): the roll fired on the ci-step-graph commit
+# (zero .kz staged — a main.zig dispatch fix and a concept file). The +1
+# spelling is committed claims-ladder drift since bd7fe0079: the
+# pass-claims-check pipeline invocation the claims rungs added to
+# compiler.kz. Clusters/members measured identical — new vocabulary,
+# not new clones.
+clusters=153
+members=230
+skipped=2
+spellings=75

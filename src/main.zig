@@ -8677,14 +8677,31 @@ pub fn main() !void {
         // Nothing claimed the word in command position. Shell, zig, and koru
         // commands execute in the scan above and never reach here; comptime
         // commands resolved just now; the frontend verbs (mint, help, glance,
-        // at, to-k) all returned earlier. What remains is dead input — a word
-        // no consumer reads (trailing args are never forwarded to the program).
-        // `run`/`build`/`lib`/`bundle` landing here is the leading verb typed
-        // in the trailing position: the file builds and the verb is swallowed
-        // (Q3 in challenges/018_FIX_QUEUE.md). A flag in this slot is the
-        // misplaced-flag case above, so skip anything that starts with '-'.
+        // at, to-k) all returned earlier — except `ci`, the shared step-graph
+        // verb. `ci` is never a program-declared command: it drives the
+        // std/build:step graph via `drives_step_graph` below, reached with
+        // detection null. Exempt it when the program declares user steps —
+        // absent them it is as dead as any other word (its old behavior was
+        // the same silent build Q3 refuses). What remains is dead input — a
+        // word no consumer reads (trailing args are never forwarded to the
+        // program). `run`/`build`/`lib`/`bundle` landing here is the leading
+        // verb typed in the trailing position: the file builds and the verb
+        // is swallowed (Q3 in challenges/018_FIX_QUEUE.md). A flag in this
+        // slot is the misplaced-flag case above, so skip anything that
+        // starts with '-'.
+        const ci_drives_steps = std.mem.eql(u8, potential_command, "ci") and blk: {
+            const coll = collectBuildStepCandidates(parse_allocator, &source_file) catch break :blk false;
+            defer {
+                for (coll.candidates) |*candidate| {
+                    candidate.deinit(parse_allocator);
+                }
+                parse_allocator.free(coll.candidates);
+            }
+            break :blk coll.has_user_defined;
+        };
         if (detected_comptime_command == null and
-            !std.mem.startsWith(u8, potential_command, "-"))
+            !std.mem.startsWith(u8, potential_command, "-") and
+            !ci_drives_steps)
         {
             inline for (.{ "run", "build", "lib", "bundle", "init", "create", "skills", "zen" }) |verb| {
                 if (std.mem.eql(u8, potential_command, verb)) {

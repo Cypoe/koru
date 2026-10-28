@@ -1,7 +1,7 @@
 ---
 type: belief
 id: frag-a-command-and-the-build-step-graph-are-disjoint-paths
-provenance: building koru/github (2026-08-22) — a site that both declares `std/build:step`s and floats a `[comptime|command]`; fixed in main.zig, pinned 310_124
+provenance: building koru/github (2026-08-22) — a site that both declares `std/build:step`s and floats a `[comptime|command]`; fixed in main.zig, pinned 310_124. Evolved 2026-10-29: `ci` rode the unmatched-word fallthrough; dead-word refusal closed it, so `ci` is now recognized at command resolution, gated on declared steps.
 ts: 2026-08-22
 ---
 
@@ -44,11 +44,22 @@ backend command dispatcher; the fix was `drives_step_graph` — a guard in the
 frontend's early-return that lets `ci` through, and the `mangleHandlerName`
 that lets a kebab-named command (`publish-npm`) emit a valid handler symbol.
 
+`ci` was never a *declared* word — no `[comptime|command]` event, no
+`command.declare`. It reached `drives_step_graph` precisely through the
+unmatched-word fallthrough: detection left it null, and null meant "drive
+the graph". When dead-word refusal closed that fallthrough (Q3, 310_144),
+`ci` became the collateral dead word and the test that pins this concept
+refused. The fix makes `ci` a *recognized* frontend-reserved word in its
+own right — exempted at command resolution only when the program declares
+a user step (`has_user_defined`), so `ci` with no steps refuses like any
+dead word instead of reviving the silent build.
+
 ## Scope / not-yet
 
 - Only `ci` is granted graph-driving; the rule for other commands is "not the
   frontend's job." If a second frontend-reserved verb is wanted (e.g. `all`),
-  it is the same one-line special-case.
+  it is the same one-line special-case — and it must now also be recognized
+  at command resolution, gated on whatever makes it live.
 - `std/build:run_step` is still a doc comment, not a wired tor — a `ci` whose
   handler runs in the backend cannot call it. The graph executor lives in
   `main.zig`, so the frontend-reserved-verb approach is the honest one for now.
