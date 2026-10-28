@@ -13,11 +13,75 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Walk `dir`, collecting every passing POSITIVE test (has a SUCCESS marker,
- * no MUST_ERROR marker). Negative tests "pass" by being rejected — they are
- * examples of what the compiler REJECTS, never what-to-do — so they are
- * excluded from every generated artifact and tracked separately so config
- * references to them can warn specifically instead of silently vanishing.
+ * The verdict source for "which tests pass?" is the last recorded board —
+ * `test-results/latest.json` — never the live SUCCESS markers. Markers are
+ * transient run state: a suite run clears and rewrites them per-test as it
+ * goes, so generating from them mid-run silently truncated the corpus (and
+ * once, on 2026-07-18, collapsed `koru-by-example.md` to one test and deleted
+ * ~5000 lines across `docs/by-example/` and `skills/`, looking like a real
+ * diff). The snapshot is a record: it only changes when a board completes.
+ *
+ * Returns a Set of repo-relative test paths — `categorySlug/directory`, e.g.
+ * `300_ADVANCED_FEATURES/330_PHANTOM_TYPES/330_005_foo` — one per test whose
+ * recorded status is `success`.
+ *
+ * No snapshot means nothing has recorded a verdict, which means "the set of
+ * passing tests" is undefined: throw, don't invent one. A fresh clone is such
+ * a boundary — `latest.json` is a tracked symlink to a gitignored dated file,
+ * so it dangles until the first `./run_regression.sh` completes.
+ */
+export function loadPassingPaths(root) {
+  const snap = readLatestSnapshot(root);
+  if (!snap) {
+    throw new Error(
+      'cannot derive the corpus: no recorded board at test-results/latest.json.\n' +
+        '  The corpus is the set of tests the last full suite run recorded as passing,\n' +
+        '  and no run has been recorded. Run ./run_regression.sh once, then regenerate.',
+    );
+  }
+  const passing = new Set();
+  for (const cat of snap.categories ?? []) {
+    if (!cat.slug || !Array.isArray(cat.tests)) continue;
+    for (const t of cat.tests) {
+      if (t.status === 'success' && t.directory) {
+        passing.add(`${cat.slug}/${t.directory}`);
+      }
+    }
+  }
+  return passing;
+}
+
+function readLatestSnapshot(root) {
+  const resultsDir = path.join(root, 'test-results');
+  let raw;
+  try {
+    // A real symlink resolves inside readFileSync; a dangling one throws.
+    raw = fs.readFileSync(path.join(resultsDir, 'latest.json'), 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // A filesystem that cannot represent a symlink materializes latest.json
+    // as a plain file holding the link target's name — follow it.
+    const pointer = raw.trim();
+    if (!/^[0-9A-Za-z._-]+\.json$/.test(pointer)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(path.join(resultsDir, pointer), 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+}
+
+/**
+ * Walk `dir`, collecting every recorded-passing POSITIVE test (in
+ * `passingPaths`, no MUST_ERROR marker). Negative tests "pass" by being
+ * rejected — they are examples of what the compiler REJECTS, never
+ * what-to-do — so they are excluded from every generated artifact and
+ * tracked separately so config references to them can warn specifically
+ * instead of silently vanishing.
  *
  * Returns { tests, negativeTests }:
  *   tests        — array of { name, breadcrumbs, dir, input, expected }
@@ -27,86 +91,17 @@ import path from 'path';
  * so a test at 300_ADVANCED_FEATURES/330_PHANTOM_TYPES/330_005_foo carries
  * breadcrumbs ["300_ADVANCED_FEATURES", "330_PHANTOM_TYPES"].
  */
-/**
- * Refuse to build a corpus from a HALF-WRITTEN marker set.
- *
- * The SUCCESS markers `collectPassing` reads are transient run state: a suite
- * run clears them and rewrites them per-test as it goes. Generate against a
- * partial set and you get a corpus with a handful of tests in it — and the
- * generators write that over the committed docs and exit 0. On 2026-07-18 that
- * collapsed `koru-by-example.md` from 22 tests to 1 and deleted ~5000 lines
- * across `docs/by-example/` and `skills/`, silently, looking like a real diff.
- *
- * The stable reference is the last recorded run's own verdict —
- * `test-results/latest.json` `summary.passed`. A live marker count far below it
- * means a suite is mid-flight, not that the corpus shrank. Throw; the caller
- * exits. A generator that silently destroys committed work is worse than one
- * that stops.
- *
- * This is a wall, not a fallback: there is no degraded corpus, no partial
- * write, no "best effort". Either the markers are settled or nothing is
- * written.
- *
- * Absence of the reference is genuine optionality at a boundary — a fresh clone
- * has never run the suite — so it warns and proceeds rather than inventing a
- * verdict it cannot have.
- */
-export function assertMarkerSetSettled(root, testsDir) {
-  // Counted here rather than taken from the caller: `collectPassing` drops the
-  // MUST_ERROR tests, but `summary.passed` counts them, and the comparison is
-  // only honest between like and like — every SUCCESS marker on disk against
-  // every test the last run recorded as passing.
-  const liveCount = countSuccessMarkers(testsDir);
-  const ref = path.join(root, 'test-results', 'latest.json');
-  let expected;
-  try {
-    expected = JSON.parse(fs.readFileSync(ref, 'utf8'))?.summary?.passed;
-  } catch {
-    console.warn(
-      '[warn] no test-results/latest.json — cannot tell a settled marker set ' +
-        'from a mid-run one. Generating anyway; verify the output before committing.',
-    );
-    return;
-  }
-  if (typeof expected !== 'number' || expected <= 0) return;
-  if (liveCount * 2 >= expected) return;
-
-  throw new Error(
-    `refusing to generate from a partial marker set: ${liveCount} live SUCCESS ` +
-      `markers against ${expected} passing in test-results/latest.json.\n` +
-      '  SUCCESS markers are transient — a suite run clears and rewrites them ' +
-      'per-test.\n' +
-      '  Generating now would overwrite the committed corpus with a truncated one.\n' +
-      '  Let the suite finish (./run_regression.sh), then regenerate.',
-  );
-}
-
-function countSuccessMarkers(dir) {
-  let n = 0;
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-  if (entries.some((e) => e.isFile() && e.name === 'SUCCESS')) n += 1;
-  for (const e of entries) {
-    if (e.isDirectory()) n += countSuccessMarkers(path.join(dir, e.name));
-  }
-  return n;
-}
-
-export function collectPassing(dir) {
+export function collectPassing(dir, passingPaths) {
   const negativeTests = new Set();
-  const tests = walk(dir, [], negativeTests);
+  const tests = walk(dir, dir, [], negativeTests, passingPaths);
   return { tests, negativeTests };
 }
 
-function walk(dir, breadcrumbs, negativeTests) {
+function walk(rootDir, dir, breadcrumbs, negativeTests, passingPaths) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
-  const hasSuccess = entries.some((e) => e.isFile() && e.name === 'SUCCESS');
+  const rel = path.relative(rootDir, dir).split(path.sep).join('/');
 
-  if (hasSuccess) {
+  if (passingPaths.has(rel)) {
     // A MUST_ERROR test is negative: it passes by being rejected. Exclude it
     // from the positive example set — every artifact shows what TO do.
     if (entries.some((e) => e.isFile() && e.name === 'MUST_ERROR')) {
@@ -157,7 +152,7 @@ function walk(dir, breadcrumbs, negativeTests) {
   const out = [];
   for (const e of entries) {
     if (e.isDirectory()) {
-      out.push(...walk(path.join(dir, e.name), [...breadcrumbs, e.name], negativeTests));
+      out.push(...walk(rootDir, path.join(dir, e.name), [...breadcrumbs, e.name], negativeTests, passingPaths));
     }
   }
   return out;

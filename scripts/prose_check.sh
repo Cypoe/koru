@@ -22,11 +22,13 @@ fail=0
 echo "prose-check — no-prose / pipeline coherence"
 
 # --- A: generated == regeneration -------------------------------------------
-# The generators read which tests pass from live SUCCESS markers, so the corpus
-# they produce is only well defined against a settled marker set. Inside our own
-# suite it is settled — prose-check runs last. A FOREIGN suite mid-run is a
-# different story: `--no-cache` clears markers before rewriting them, so
-# regenerating then yields "0 passing positive tests".
+# The generators read which tests pass from the last recorded board
+# (test-results/latest.json), not live SUCCESS markers — a suite run rewrites
+# markers per-test, and a corpus built from them mid-run was truncated. The
+# snapshot is a record: it only changes when a board completes. A FOREIGN
+# suite is a narrower hazard now — at its own end it writes the dated
+# snapshot and re-points latest.json, and a regeneration landing inside that
+# window gets a refusal, not a result — so the lock check below stays.
 #
 # Two defects came out of that, and both are fixed here rather than tolerated.
 # Regeneration used to write over the tracked files, making checking and
@@ -37,8 +39,9 @@ echo "prose-check — no-prose / pipeline coherence"
 GEN_PATHS=(koru-by-example.md koru-tutorial.md docs/by-example \
            skills/koru/SKILL.md skills/koru-templates/SKILL.md skills/koru-metaprogramming/SKILL.md)
 
-# A lock held by anyone but our own suite means the corpus is moving underneath
-# us. run_regression.sh exports KORU_SUITE_PID so its own lock is recognised.
+# A lock held by anyone but our own suite means the recorded board may flip
+# underneath us mid-check. run_regression.sh exports KORU_SUITE_PID so its own
+# lock is recognised.
 LOCK="${TMPDIR:-/tmp}/koru-regression.lock"; LOCK="${LOCK%/}"
 FOREIGN_SUITE=""
 if [ -d "$LOCK" ]; then
@@ -55,10 +58,10 @@ fi
 if [ -n "$FOREIGN_SUITE" ]; then
   # Not clean, not differs — unknowable. Saying either would be inventing a
   # result, and "clean" is the one that would be believed.
-  echo -e "  ${RED}✗ A${NC} CANNOT CHECK — another suite is rewriting the test markers this check reads:"
+  echo -e "  ${RED}✗ A${NC} CANNOT CHECK — another suite may re-point the recorded board mid-check:"
   echo "      pid ${FOREIGN_SUITE}"
-  echo "      The corpus is derived from SUCCESS markers, so a regeneration taken now"
-  echo "      describes a half-finished run. Re-run when that suite is done."
+  echo "      The corpus is derived from test-results/latest.json, which a finishing"
+  echo "      board rewrites. Re-run when that suite is done."
   fail=1
 else
   GEN_TMP=$(mktemp -d "${TMPDIR:-/tmp}/koru-prosecheck.XXXXXX")

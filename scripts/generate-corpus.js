@@ -24,7 +24,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
   collectPassing,
-  assertMarkerSetSettled,
+  loadPassingPaths,
   resolveClusters,
   demoteHeadings,
   humanize,
@@ -79,11 +79,13 @@ const categories = config.categories ?? [];
 const includedTests = config.includedTests ?? [];
 const excludedTests = new Set(config.excludedTests ?? []);
 
-// A half-written marker set yields a truncated corpus that overwrites the
-// committed one and exits 0. Refuse before reading a single test.
-assertMarkerSetSettled(ROOT, TESTS_DIR);
+// Which tests pass is the last recorded board's verdict, not live SUCCESS
+// markers — a suite run rewrites markers per-test, so reading them mid-run
+// truncated the corpus and overwrote the committed one. No recorded board
+// means "passing" is undefined; loadPassingPaths refuses in that case.
+const passingPaths = loadPassingPaths(ROOT);
 
-const { tests: allTests, negativeTests } = collectPassing(TESTS_DIR);
+const { tests: allTests, negativeTests } = collectPassing(TESTS_DIR, passingPaths);
 const byName = new Map(allTests.map((t) => [t.name, t]));
 
 // Resolve `categories` to passing tests. A category entry is a raw

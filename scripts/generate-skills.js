@@ -27,7 +27,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { collectPassing, assertMarkerSetSettled, resolveClusters, humanize, emitTest } from './lib/corpus.js';
+import { collectPassing, loadPassingPaths, resolveClusters, humanize, emitTest } from './lib/corpus.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -214,11 +214,13 @@ if (topics.length === 0) {
   process.exit(0);
 }
 
-// A half-written marker set yields a truncated corpus that overwrites the
-// committed one and exits 0. Refuse before reading a single test.
-assertMarkerSetSettled(ROOT, TESTS_DIR);
+// Which tests pass is the last recorded board's verdict, not live SUCCESS
+// markers — a suite run rewrites markers per-test, so reading them mid-run
+// truncated the corpus and overwrote the committed one. No recorded board
+// means "passing" is undefined; loadPassingPaths refuses in that case.
+const passingPaths = loadPassingPaths(ROOT);
 
-const { tests: allTests, negativeTests } = collectPassing(TESTS_DIR);
+const { tests: allTests, negativeTests } = collectPassing(TESTS_DIR, passingPaths);
 const byName = new Map(allTests.map((t) => [t.name, t]));
 
 fs.mkdirSync(DOCS_DIR, { recursive: true });

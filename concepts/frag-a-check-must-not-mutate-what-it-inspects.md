@@ -78,3 +78,23 @@ ceremony runs several of them in sequence and commits immediately after, which i
 the same arrangement that made this dangerous. The corpus-walking side is now
 partly measured — prose-check and registry_check are held; the site's generators
 are not.
+
+## 2026-10-28 — the input moved, not just the guard
+
+The premise above — "the generators derive which tests to include from live
+`SUCCESS` markers" — is retired. The corpus now derives passing-ness from the
+last recorded board (`test-results/latest.json`), the record the old guard
+only consulted as a sanity threshold. A board's snapshot changes when a run
+completes, so the moving-input hazard this frag diagnosed is *gone* for corpus
+derivation rather than walled around — and with it the heuristic threshold and
+its sub-half blind spot. No recorded board now means "the set of passing tests
+is undefined" and generation refuses — including on a fresh clone, where the
+old warn-and-proceed had quietly written an empty corpus over the committed
+one.
+
+The two rules stand, and the fix adds the deeper form of the second: beside
+"refuse when inputs move" there is **"make the input unable to move"** — read
+the record, not the run's scratch. What is left genuinely moving is narrower:
+the filesystem walk for test sources still races a suite rewriting its
+scratch dirs, and the snapshot itself is re-pointed at board end. The
+foreign-suite lock check now guards exactly that window, and nothing else.
