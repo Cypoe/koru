@@ -1,1 +1,1 @@
-Continuation '|' must start on a new line
+branch arm '| done' written mid-line
