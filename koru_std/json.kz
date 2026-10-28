@@ -172,7 +172,7 @@ pub const JsonValue = union(enum) {
 // Decoding - Extract values from JSON strings
 // ============================================================================
 
-~pub tor get.string { json: string, key: string }
+~pub tor get.string { json: string<*>, key: string }
 | ok string
 | not-found
 
