@@ -234,6 +234,7 @@ fn claimsProduceCheck(
     };
 
     var n: usize = 0;
+    var counted = std.ArrayListUnmanaged([]const u8){};
     for (arm_meets.items) |*am| {
         var branch: ?*const ast.Branch = null;
         for (ev.branches) |*b| {
@@ -264,7 +265,17 @@ fn claimsProduceCheck(
             }
         }
         if (prows.items.len == 0) continue;
-        n += 1;
+        // The contract must hold under EVERY case of the arm's guard —
+        // this loop discharges one clause at a time. The census counts
+        // arms, not clauses.
+        var seen = false;
+        for (counted.items) |cn| {
+            if (std.mem.eql(u8, cn, am.arm)) seen = true;
+        }
+        if (!seen) {
+            n += 1;
+            counted.append(alloc, am.arm) catch unreachable;
+        }
         var meet = std.ArrayListUnmanaged(spec.LinRow){};
         for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;
         for (type_rows) |r| meet.append(alloc, r) catch unreachable;

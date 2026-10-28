@@ -1,1 +1,1 @@
-[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_027_claim_guard_piece_malformed/input.k:18 terminates on bad: outside-P — the impl's guard piece 'j > 0 or i < 0' is not a single linear comparison
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_027_claim_guard_piece_malformed/input.k:21 terminates on bad: proven — inferred rank 'i' decreases and stays bounded at 1 back-edge

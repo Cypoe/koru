@@ -1,5 +1,8 @@
-// Every conjunct must itself be one linear comparison — `fizz` is
-// not a comparison, so the guard is outside-P and says which piece.
+// A nested `or` case-splits through the conjunction:
+// `i > 0 and (j > 0 or i < 0)` gives cases {i>0, j>0} and {i>0, i<0} —
+// the second is empty (FM finds it infeasible) and discharges
+// vacuously. What remains is a real proof: inferred rank `i` clears
+// the one surviving case.
 
 import std/io
 import std/spec

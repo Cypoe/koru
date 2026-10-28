@@ -1600,8 +1600,8 @@ const emitFlowWithMocks = struct {
 // Witness check — decl, helpers, impl: compiler.witness.kz.
 ~part witness
 
-// Claims — pass in claims.kz, provers in claims-prover, rank in claims-rank.
 ~part claims
+~part claims-guard
 ~part claims-prover
 ~part claims-rank
 

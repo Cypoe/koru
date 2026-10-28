@@ -82,14 +82,14 @@ fn claimsRankTry(
             nedges += 1;
             const binding = e.binding orelse
                 return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
-            var arm_rows: ?*const ArmMeet = null;
+            var arm_cases: usize = 0;
+            var scalar_field: ?[]const u8 = null;
             for (arm_meets) |*am| {
-                if (std.mem.eql(u8, am.arm, e.arm)) {
-                    arm_rows = am;
-                    break;
-                }
+                if (!std.mem.eql(u8, am.arm, e.arm)) continue;
+                arm_cases += 1;
+                scalar_field = am.scalar_field;
             }
-            const arm = arm_rows orelse
+            if (arm_cases == 0)
                 return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' is not produced by the subject's impl", .{e.arm}) catch unreachable };
 
             // Jump args → substitution over step-field names.
@@ -101,7 +101,7 @@ fn claimsRankTry(
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not an integer field", .{ label, a.name }) catch unreachable };
                 const parts = spec.parseLinExpr(alloc, a.value) orelse
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
-                const mapped = claimsMapArgParts(alloc, parts, binding, arm.scalar_field, fields) orelse
+                const mapped = claimsMapArgParts(alloc, parts, binding, scalar_field, fields) orelse
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' names something outside the payload", .{ label, a.name, a.value }) catch unreachable };
                 subs.append(alloc, .{ .name = a.name, .expr = mapped }) catch unreachable;
             }
@@ -120,29 +120,33 @@ fn claimsRankTry(
             for (rank_parts) |p| diff.append(alloc, p) catch unreachable;
             for (next_rank) |p| diff.append(alloc, .{ .coef = -p.coef, .name = p.name }) catch unreachable;
 
-            // Meet = guard ∧ declared types ∧ produced values' types —
-            // the substituted rows state the next state's own contract.
-            var meet = std.ArrayListUnmanaged(spec.LinRow){};
-            for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
-            for (type_rows) |r| meet.append(alloc, r) catch unreachable;
-            for (claimsSubRows(alloc, type_rows, subs.items)) |r| meet.append(alloc, r) catch unreachable;
-            const base_n = meet.items.len;
+            // Meet per guard-case: the arm's premise is a clause set,
+            // so both obligations discharge under EVERY clause; an
+            // empty clause is an impossible case — vacuously clear.
+            const sub_type = claimsSubRows(alloc, type_rows, subs.items);
+            for (arm_meets) |*am| {
+                if (!std.mem.eql(u8, am.arm, e.arm)) continue;
+                var meet = std.ArrayListUnmanaged(spec.LinRow){};
+                for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;
+                for (type_rows) |r| meet.append(alloc, r) catch unreachable;
+                for (sub_type) |r| meet.append(alloc, r) catch unreachable;
+                const base_n = meet.items.len;
 
-            // decrease: meet ∧ (R − R' <= 0) must be empty.
-            meet.items.len = base_n;
-            meet.append(alloc, spec.linPartsRow(alloc, diff.items, false, "rank does not decrease")) catch unreachable;
-            switch (spec.linFeasible(alloc, meet.items)) {
-                .infeasible => {},
-                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank may not strictly decrease", .{e.arm}) catch unreachable },
-                .outside => return .{ .outside = "the rank-decrease meet exceeds the decidable fence" },
-            }
-            // bounded: meet ∧ (R' < 0) must be empty.
-            meet.items.len = base_n;
-            meet.append(alloc, spec.linPartsRow(alloc, next_rank, true, "rank below zero")) catch unreachable;
-            switch (spec.linFeasible(alloc, meet.items)) {
-                .infeasible => {},
-                .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank can fall below zero", .{e.arm}) catch unreachable },
-                .outside => return .{ .outside = "the rank-bound meet exceeds the decidable fence" },
+                // decrease: meet ∧ (R − R' <= 0) must be empty.
+                meet.append(alloc, spec.linPartsRow(alloc, diff.items, false, "rank does not decrease")) catch unreachable;
+                switch (spec.linFeasible(alloc, meet.items)) {
+                    .infeasible => {},
+                    .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank may not strictly decrease", .{e.arm}) catch unreachable },
+                    .outside => return .{ .outside = "the rank-decrease meet exceeds the decidable fence" },
+                }
+                // bounded: meet ∧ (R' < 0) must be empty.
+                meet.items.len = base_n;
+                meet.append(alloc, spec.linPartsRow(alloc, next_rank, true, "rank below zero")) catch unreachable;
+                switch (spec.linFeasible(alloc, meet.items)) {
+                    .infeasible => {},
+                    .feasible => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the rank can fall below zero", .{e.arm}) catch unreachable },
+                    .outside => return .{ .outside = "the rank-bound meet exceeds the decidable fence" },
+                }
             }
         }
     }

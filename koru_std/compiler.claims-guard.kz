@@ -1,0 +1,296 @@
+// Koru Standard Library: the `claims-guard` part of compiler.kz.
+// Joined via `~part claims-guard` in compiler.kz; merged into the
+// compiler module at load — the `spec` alias is declared by the claims
+// part. This part owns the guard's own reading: a guard is an
+// expression tree of `or` over `and` over linear comparisons, and each
+// arm's premise is that tree's DNF — one case-meet per clause.
+//
+// The connective decides which SIDE each clause lands on, nothing
+// more: the then-arm reads the guard's cases, the else-arm reads the
+// negated tree's cases (De Morgan pushes `not` through, flipping
+// `and`/`or` at every level). A clause whose atoms the linear grammar
+// cannot read is a named outside-P; a clause FM finds empty is a case
+// that cannot happen — the meets it feeds discharge vacuously, which
+// is sound because the discharge is asked per case.
+//
+// What stays outside: `not` as a surface operator, non-linear leaves,
+// fields the subject does not carry, and a case budget — DNF is
+// exponential in the worst shape, so the fence caps an arm at
+// `GUARD_CASE_CAP` clauses and names the budget rather than blow up.
+
+const GuardCmp = struct {
+    lhs: []const spec.LinPart,
+    rhs: []const spec.LinPart,
+    op: []const u8,
+    src: []const u8,
+    neg: bool = false,
+};
+
+const GuardExpr = union(enum) {
+    atom: GuardCmp,
+    conj: []const GuardExpr,
+    disj: []const GuardExpr,
+};
+
+const GUARD_CASE_CAP: usize = 16;
+
+// Strip one fully-enclosing paren layer — `(a > 0)` → `a > 0` — so a
+// parenthesized conjunct parses like a bare one. Only strips when the
+// FIRST '(' is matched by the LAST char; inner parens ride through and
+// the linear grammar will refuse them honestly.
+fn claimsStripParens(s: []const u8) []const u8 {
+    var cur = std.mem.trim(u8, s, " \t");
+    while (cur.len >= 2 and cur[0] == '(' and cur[cur.len - 1] == ')') {
+        var depth: usize = 0;
+        var wraps = true;
+        for (cur, 0..) |c, i| {
+            if (c == '(') depth += 1;
+            if (c == ')') {
+                depth -= 1;
+                if (depth == 0 and i != cur.len - 1) {
+                    wraps = false;
+                    break;
+                }
+            }
+        }
+        if (!wraps) break;
+        cur = std.mem.trim(u8, cur[1 .. cur.len - 1], " \t");
+    }
+    return cur;
+}
+
+// Does the keyword/operator connective sit at `i` with operand
+// boundaries? `and`/`or` need non-identifier flanks so `random` and
+// `handle` don't split; `&&`/`||` are self-delimiting.
+fn claimsConnAt(src: []const u8, i: usize, word: []const u8) bool {
+    const flank = struct {
+        fn ok(c: u8) bool {
+            return !std.ascii.isAlphanumeric(c) and c != '_';
+        }
+    }.ok;
+    if (i + word.len > src.len or !std.mem.eql(u8, src[i .. i + word.len], word)) return false;
+    const left_ok = i == 0 or flank(src[i - 1]);
+    const right_ok = i + word.len == src.len or flank(src[i + word.len]);
+    return left_ok and right_ok;
+}
+
+const GuardParse = union(enum) {
+    ok: GuardExpr,
+    outside: []const u8,
+};
+
+// Split `text` at depth-0 occurrences of one connective kind. Returns
+// the operand spans, or null when the connective does not appear —
+// "not present" is different from "present and malformed".
+fn claimsSplitConn(
+    alloc: std.mem.Allocator,
+    text: []const u8,
+    comptime word: []const u8,
+    comptime symbol: []const u8,
+) ?[][]const u8 {
+    var pieces = std.ArrayListUnmanaged([]const u8){};
+    var depth: usize = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (c == '(') depth += 1;
+        if (c == ')') {
+            if (depth == 0) return null; // unbalanced — the parser names it
+            depth -= 1;
+        }
+        if (depth != 0) continue;
+        if (claimsConnAt(text, i, word) or claimsConnAt(text, i, symbol)) {
+            pieces.append(alloc, text[start..i]) catch unreachable;
+            const conlen: usize = if (text[i] == symbol[0]) symbol.len else word.len;
+            start = i + conlen;
+            i = start - 1;
+        }
+    }
+    if (pieces.items.len == 0) return null;
+    pieces.append(alloc, text[start..]) catch unreachable;
+    return pieces.items;
+}
+
+// One guard leaf: a single linear comparison over the subject's own
+// integer fields. Everything else is a named outside-P.
+fn claimsGuardAtom(
+    alloc: std.mem.Allocator,
+    src: []const u8,
+    fields: []const ast.Field,
+    subject: []const u8,
+) GuardParse {
+    const split = spec.splitLinCmp(src);
+    const cmp = switch (split) {
+        .one => |s| s,
+        else => return .{ .outside = std.fmt.allocPrint(alloc, "the impl's guard piece '{s}' is not a single linear comparison", .{src}) catch unreachable },
+    };
+    const lhs = spec.parseLinExpr(alloc, std.mem.trim(u8, src[0..cmp.pos], " \t")) orelse
+        return .{ .outside = "the guard's left side is not a linear form" };
+    const rhs = spec.parseLinExpr(alloc, std.mem.trim(u8, src[cmp.pos + cmp.op.len ..], " \t")) orelse
+        return .{ .outside = "the guard's right side is not a linear form" };
+    for (lhs) |p| {
+        if (p.name) |n| {
+            if (!claimsFieldListed(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable };
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable };
+        }
+    }
+    for (rhs) |p| {
+        if (p.name) |n| {
+            if (!claimsFieldListed(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable };
+            if (!claimsIntField(fields, n))
+                return .{ .outside = std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable };
+        }
+    }
+    return .{ .ok = .{ .atom = .{ .lhs = lhs, .rhs = rhs, .op = cmp.op, .src = src } } };
+}
+
+// The guard as an expression tree: `or` binds loosest (Koru's own
+// precedence — `a or b and c` reads `a or (b and c)`), `and` next, a
+// bare linear comparison at the leaf. Any nesting depth parses; what
+// cannot parse is a leaf that is not a comparison.
+fn claimsParseGuard(
+    alloc: std.mem.Allocator,
+    src: []const u8,
+    fields: []const ast.Field,
+    subject: []const u8,
+) GuardParse {
+    const text = claimsStripParens(src);
+    // Unbalanced parens refuse before any split — a stray ')' at depth
+    // 0 or a '(' never closed.
+    {
+        var depth: isize = 0;
+        for (text) |c| {
+            if (c == '(') depth += 1;
+            if (c == ')') depth -= 1;
+            if (depth < 0)
+                return .{ .outside = "the impl's guard has unbalanced parens" };
+        }
+        if (depth != 0)
+            return .{ .outside = "the impl's guard has unbalanced parens" };
+    }
+    if (claimsSplitConn(alloc, text, "or", "||")) |pieces| {
+        var subs = std.ArrayListUnmanaged(GuardExpr){};
+        for (pieces) |p| {
+            switch (claimsParseGuard(alloc, p, fields, subject)) {
+                .outside => |m| return .{ .outside = m },
+                .ok => |e| subs.append(alloc, e) catch unreachable,
+            }
+        }
+        return .{ .ok = .{ .disj = subs.items } };
+    }
+    if (claimsSplitConn(alloc, text, "and", "&&")) |pieces| {
+        var subs = std.ArrayListUnmanaged(GuardExpr){};
+        for (pieces) |p| {
+            switch (claimsParseGuard(alloc, p, fields, subject)) {
+                .outside => |m| return .{ .outside = m },
+                .ok => |e| subs.append(alloc, e) catch unreachable,
+            }
+        }
+        return .{ .ok = .{ .conj = subs.items } };
+    }
+    return claimsGuardAtom(alloc, text, fields, subject);
+}
+
+// DNF over the (possibly negated) guard tree: a list of clauses, each
+// clause a list of atoms. `negate` is the else-arm's view — pushed to
+// the leaves, it flips conjunctive structure to disjunctive and back.
+// The clause budget is the fence's honest answer to exponential
+// shapes: past the cap is a named outside-P, never a silent drop.
+const GuardCases = union(enum) {
+    ok: [][]const GuardCmp,
+    outside: []const u8,
+};
+
+fn claimsGuardCasesWalk(
+    alloc: std.mem.Allocator,
+    expr: *const GuardExpr,
+    negate: bool,
+    out: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)),
+) ?[]const u8 {
+    switch (expr.*) {
+        .atom => |a| {
+            var clause = std.ArrayListUnmanaged(GuardCmp){};
+            var atom = a;
+            atom.neg = negate;
+            clause.append(alloc, atom) catch unreachable;
+            out.append(alloc, clause) catch unreachable;
+        },
+        .conj => |subs| {
+            if (negate) {
+                // ¬(A ∧ B) = ¬A ∨ ¬B — clauses concatenate.
+                for (subs) |*s| {
+                    if (claimsGuardCasesWalk(alloc, s, true, out)) |m| return m;
+                }
+            } else {
+                // Cross-product: every clause of every child conjoined.
+                var acc = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                acc.append(alloc, .{}) catch unreachable;
+                for (subs) |*s| {
+                    var child = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                    if (claimsGuardCasesWalk(alloc, s, false, &child)) |m| return m;
+                    var next = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                    for (acc.items) |ca| {
+                        for (child.items) |cb| {
+                            var joined = std.ArrayListUnmanaged(GuardCmp){};
+                            joined.appendSlice(alloc, ca.items) catch unreachable;
+                            joined.appendSlice(alloc, cb.items) catch unreachable;
+                            next.append(alloc, joined) catch unreachable;
+                            if (next.items.len > GUARD_CASE_CAP)
+                                return "the impl's guard case-splits past the fence's case budget";
+                        }
+                    }
+                    acc = next;
+                }
+                for (acc.items) |c| out.append(alloc, c) catch unreachable;
+            }
+        },
+        .disj => |subs| {
+            if (negate) {
+                // ¬(A ∨ B) = ¬A ∧ ¬B — cross-product of negated children.
+                var acc = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                acc.append(alloc, .{}) catch unreachable;
+                for (subs) |*s| {
+                    var child = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                    if (claimsGuardCasesWalk(alloc, s, true, &child)) |m| return m;
+                    var next = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+                    for (acc.items) |ca| {
+                        for (child.items) |cb| {
+                            var joined = std.ArrayListUnmanaged(GuardCmp){};
+                            joined.appendSlice(alloc, ca.items) catch unreachable;
+                            joined.appendSlice(alloc, cb.items) catch unreachable;
+                            next.append(alloc, joined) catch unreachable;
+                            if (next.items.len > GUARD_CASE_CAP)
+                                return "the impl's guard case-splits past the fence's case budget";
+                        }
+                    }
+                    acc = next;
+                }
+                for (acc.items) |c| out.append(alloc, c) catch unreachable;
+            } else {
+                for (subs) |*s| {
+                    if (claimsGuardCasesWalk(alloc, s, false, out)) |m| return m;
+                }
+            }
+        },
+    }
+    return null;
+}
+
+fn claimsGuardCases(
+    alloc: std.mem.Allocator,
+    expr: *const GuardExpr,
+    negate: bool,
+) GuardCases {
+    var clauses = std.ArrayListUnmanaged(std.ArrayListUnmanaged(GuardCmp)){};
+    if (claimsGuardCasesWalk(alloc, expr, negate, &clauses)) |m|
+        return .{ .outside = m };
+    var out = std.ArrayListUnmanaged([]const GuardCmp){};
+    for (clauses.items) |c| out.append(alloc, c.items) catch unreachable;
+    if (out.items.len > GUARD_CASE_CAP)
+        return .{ .outside = "the impl's guard case-splits past the fence's case budget" };
+    return .{ .ok = out.items };
+}

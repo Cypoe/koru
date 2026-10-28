@@ -138,103 +138,12 @@ fn claimsGuardRows(
     return rows.items;
 }
 
-const GuardConn = enum { none, conj, disj };
-const GuardCmp = struct {
-    lhs: []const spec.LinPart,
-    rhs: []const spec.LinPart,
-    op: []const u8,
-    src: []const u8,
-};
-
-// Strip one fully-enclosing paren layer — `(a > 0)` → `a > 0` — so a
-// parenthesized conjunct parses like a bare one. Only strips when the
-// FIRST '(' is matched by the LAST char; inner parens ride through and
-// the linear grammar will refuse them honestly.
-fn claimsStripParens(s: []const u8) []const u8 {
-    var cur = std.mem.trim(u8, s, " \t");
-    while (cur.len >= 2 and cur[0] == '(' and cur[cur.len - 1] == ')') {
-        var depth: usize = 0;
-        var wraps = true;
-        for (cur, 0..) |c, i| {
-            if (c == '(') depth += 1;
-            if (c == ')') {
-                depth -= 1;
-                if (depth == 0 and i != cur.len - 1) {
-                    wraps = false;
-                    break;
-                }
-            }
-        }
-        if (!wraps) break;
-        cur = std.mem.trim(u8, cur[1 .. cur.len - 1], " \t");
-    }
-    return cur;
-}
-
-// Does the keyword/operator connective sit at `i` with operand
-// boundaries? `and`/`or` need non-identifier flanks so `random` and
-// `handle` don't split; `&&`/`||` are self-delimiting.
-fn claimsConnAt(src: []const u8, i: usize, word: []const u8) bool {
-    const flank = struct {
-        fn ok(c: u8) bool {
-            return !std.ascii.isAlphanumeric(c) and c != '_';
-        }
-    }.ok;
-    if (i + word.len > src.len or !std.mem.eql(u8, src[i .. i + word.len], word)) return false;
-    const left_ok = i == 0 or flank(src[i - 1]);
-    const right_ok = i + word.len == src.len or flank(src[i + word.len]);
-    return left_ok and right_ok;
-}
-
-// The guard's top-level connective: `and`/`&&` splits into conjuncts,
-// `or`/`||` into disjuncts, at paren depth 0 only. One connective kind
-// per guard — a mix (`a and b or c`) is outside-P, the fence reads one
-// level. No connective → a single piece, today's shape.
-const GuardPieces = union(enum) {
-    ok: struct { conn: GuardConn, pieces: [][]const u8 },
-    outside: []const u8,
-};
-
-fn claimsSplitGuard(alloc: std.mem.Allocator, src: []const u8) GuardPieces {
-    const text = claimsStripParens(src);
-    var conn = GuardConn.none;
-    var pieces = std.ArrayListUnmanaged([]const u8){};
-    var depth: usize = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        const c = text[i];
-        if (c == '(') depth += 1;
-        if (c == ')') {
-            if (depth == 0) return .{ .outside = "the impl's guard has unbalanced parens" };
-            depth -= 1;
-        }
-        if (depth != 0) continue;
-        const found: ?GuardConn = if (claimsConnAt(text, i, "and") or claimsConnAt(text, i, "&&"))
-            .conj
-        else if (claimsConnAt(text, i, "or") or claimsConnAt(text, i, "||"))
-            .disj
-        else
-            null;
-        const kind = found orelse continue;
-        if (conn != .none and conn != kind)
-            return .{ .outside = "the impl's guard mixes connectives — the fence reads one level" };
-        conn = kind;
-        pieces.append(alloc, text[start..i]) catch unreachable;
-        const conlen: usize = if (text[i] == 'a') 3 else 2; // "and" vs "or"/"&&"/"||"
-        start = i + conlen;
-        i += conlen - 1;
-    }
-    if (depth != 0) return .{ .outside = "the impl's guard has unbalanced parens" };
-    if (conn == .none) {
-        pieces.append(alloc, text) catch unreachable;
-    } else {
-        pieces.append(alloc, text[start..]) catch unreachable;
-    }
-    return .{ .ok = .{ .conn = conn, .pieces = pieces.items } };
-}
-
-// Read the subject impl's then/else dispatch into arm → meet rows.
+// Read the subject impl's then/else dispatch into arm → case meets.
+// A guard is a boolean expression, so an arm's premise is a SET of
+// meets — the DNF clauses of the guard (then) or its negation (else).
+// Each clause is one ArmMeet carrying the arm's name: every consumer
+// discharges under EVERY clause of the producing arm, and a clause FM
+// finds empty is a case that cannot happen — it discharges vacuously.
 // Returns null on success, or the outside-P reason.
 fn claimsArmMeets(
     alloc: std.mem.Allocator,
@@ -253,44 +162,10 @@ fn claimsArmMeets(
         if (!std.mem.eql(u8, q, "std.control")) return "the subject's impl is not an if-dispatch";
     }
     if (inv.args.len == 0) return "the if carries no guard";
-    const guard_src = inv.args[0].value;
-    const pieces = switch (claimsSplitGuard(alloc, guard_src)) {
+    const guard = switch (claimsParseGuard(alloc, inv.args[0].value, fields, subject)) {
         .outside => |m| return m,
-        .ok => |p| p,
+        .ok => |g| g,
     };
-    var cmps = std.ArrayListUnmanaged(GuardCmp){};
-    for (pieces.pieces) |piece_src| {
-        const piece = claimsStripParens(piece_src);
-        const split = spec.splitLinCmp(piece);
-        const cmp = switch (split) {
-            .one => |s| s,
-            else => return if (pieces.conn == .none)
-                "the impl's guard is not a single linear comparison"
-            else
-                std.fmt.allocPrint(alloc, "the impl's guard piece '{s}' is not a single linear comparison", .{piece}) catch unreachable,
-        };
-        const lhs = spec.parseLinExpr(alloc, std.mem.trim(u8, piece[0..cmp.pos], " \t")) orelse
-            return "the guard's left side is not a linear form";
-        const rhs = spec.parseLinExpr(alloc, std.mem.trim(u8, piece[cmp.pos + cmp.op.len ..], " \t")) orelse
-            return "the guard's right side is not a linear form";
-        for (lhs) |p| {
-            if (p.name) |n| {
-                if (!claimsFieldListed(fields, n))
-                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
-                if (!claimsIntField(fields, n))
-                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
-            }
-        }
-        for (rhs) |p| {
-            if (p.name) |n| {
-                if (!claimsFieldListed(fields, n))
-                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
-                if (!claimsIntField(fields, n))
-                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
-            }
-        }
-        cmps.append(alloc, .{ .lhs = lhs, .rhs = rhs, .op = cmp.op, .src = piece }) catch unreachable;
-    }
 
     for (impl.body.continuations) |*cont| {
         const negate = std.mem.eql(u8, cont.branch, "else");
@@ -301,30 +176,20 @@ fn claimsArmMeets(
         if (bc_node != .branch_constructor)
             return std.fmt.allocPrint(alloc, "arm '{s}' is not produced by a branch constructor", .{cont.branch}) catch unreachable;
         const bc = &bc_node.branch_constructor;
-        var rows = std.ArrayListUnmanaged(spec.LinRow){};
-        // The connective decides which arm owns the guard's rows:
-        // `and` — the then-arm gets every conjunct; the else-arm's
-        //   De Morgan form is a disjunction, not rows — nothing.
-        // `or`  — mirrored: the else-arm gets every disjunct negated
-        //   (¬A ∧ ¬B IS a conjunction); the then-arm gets nothing.
-        // A weaker meet stays sound — it may fail to prove, it
-        // cannot prove wrong.
-        const arm_gets = switch (pieces.conn) {
-            .none => true,
-            .conj => !negate,
-            .disj => negate,
+
+        // The arm's cases: then reads the guard's DNF, else reads the
+        // negated tree's DNF — `A or B` then-cases {A},{B}, else-case
+        // {¬A ∧ ¬B}; `A and B` mirrors. Each clause is one meet.
+        const cases = switch (claimsGuardCases(alloc, &guard, negate)) {
+            .outside => |m| return m,
+            .ok => |cs| cs,
         };
-        if (arm_gets) {
-            for (cmps.items) |cmp| {
-                for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, negate, cmp.src)) |r|
-                    rows.append(alloc, r) catch unreachable;
-            }
-        }
-        var meet = ArmMeet{ .arm = bc.branch_name, .rows = rows };
+
+        var scalar_field: ?[]const u8 = null;
         if (bc.plain_value) |pv| {
             const pv_t = std.mem.trim(u8, pv, " \t");
             if (claimsFieldListed(fields, pv_t)) {
-                meet.scalar_field = pv_t;
+                scalar_field = pv_t;
             } else {
                 return std.fmt.allocPrint(alloc, "arm '{s}' produces '{s}' — not a field of '{s}'", .{ bc.branch_name, pv_t, subject }) catch unreachable;
             }
@@ -338,7 +203,15 @@ fn claimsArmMeets(
         }
         if (cont.continuations.len != 0)
             return std.fmt.allocPrint(alloc, "arm '{s}' continues past its produce — the fence reads terminal arms", .{cont.branch}) catch unreachable;
-        out.append(alloc, meet) catch unreachable;
+
+        for (cases) |clause| {
+            var rows = std.ArrayListUnmanaged(spec.LinRow){};
+            for (clause) |cmp| {
+                for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, cmp.neg, cmp.src)) |r|
+                    rows.append(alloc, r) catch unreachable;
+            }
+            out.append(alloc, .{ .arm = bc.branch_name, .rows = rows, .scalar_field = scalar_field }) catch unreachable;
+        }
     }
     return null;
 }
@@ -557,14 +430,15 @@ fn proveHonors(
             nedges += 1;
             const binding = e.binding orelse
                 return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
-            var arm_rows: ?*const ArmMeet = null;
+            var arm_cases: usize = 0;
+            var scalar_field: ?[]const u8 = null;
             for (arm_meets.items) |*am| {
                 if (std.mem.eql(u8, am.arm, e.arm)) {
-                    arm_rows = am;
-                    break;
+                    arm_cases += 1;
+                    scalar_field = am.scalar_field;
                 }
             }
-            const arm = arm_rows orelse
+            if (arm_cases == 0)
                 return .{ .outside = std.fmt.allocPrint(alloc, "arm '{s}' is not produced by the subject's impl", .{e.arm}) catch unreachable };
 
             var subs = std.ArrayListUnmanaged(spec.LinSub){};
@@ -575,7 +449,7 @@ fn proveHonors(
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}' is not an integer field", .{ label, a.name }) catch unreachable };
                 const parts = spec.parseLinExpr(alloc, a.value) orelse
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' is not a linear form", .{ label, a.name, a.value }) catch unreachable };
-                const mapped = claimsMapArgParts(alloc, parts, binding, arm.scalar_field, fields) orelse
+                const mapped = claimsMapArgParts(alloc, parts, binding, scalar_field, fields) orelse
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} arg '{s}: {s}' names something outside the payload", .{ label, a.name, a.value }) catch unreachable };
                 subs.append(alloc, .{ .name = a.name, .expr = mapped }) catch unreachable;
             }
@@ -588,21 +462,29 @@ fn proveHonors(
                     return .{ .outside = std.fmt.allocPrint(alloc, "@{s} does not rebind field '{s}'", .{ label, f.name }) catch unreachable };
             }
 
-            // Step: IH ∧ guard ∧ declared types ⊢ goal'  —  goal' is the
-            // goal under the jump's rebinding (substituted parts over
-            // current fields). Substituted type rows state the produced
-            // values' own contract — `i' & >=0` under `i' = i − 1`.
-            var meet = std.ArrayListUnmanaged(spec.LinRow){};
-            for (ih_rows) |r| meet.append(alloc, r) catch unreachable;
-            for (arm.rows.items) |r| meet.append(alloc, r) catch unreachable;
-            for (type_rows) |r| meet.append(alloc, r) catch unreachable;
-            for (claimsSubRows(alloc, type_rows, subs.items)) |r| meet.append(alloc, r) catch unreachable;
+            // Step: IH ∧ guard-case ∧ declared types ⊢ goal'  —  goal'
+            // is the goal under the jump's rebinding (substituted parts
+            // over current fields). The producing arm's guard is a
+            // disjunction of cases, so the step is discharged under
+            // EVERY clause; an empty clause is a case that cannot
+            // happen and discharges vacuously. Substituted type rows
+            // state the produced values' own contract — `i' & >=0`
+            // under `i' = i − 1`.
             const slhs = spec.linSubstitute(alloc, glhs, subs.items);
             const srhs = spec.linSubstitute(alloc, grhs, subs.items);
-            switch (claimsEntail(alloc, meet.items, slhs, srhs, gop)) {
-                .entailed => {},
-                .open => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the goal may not survive the step", .{e.arm}) catch unreachable },
-                .outside => return .{ .outside = "the step meet exceeds the decidable fence" },
+            const sub_type = claimsSubRows(alloc, type_rows, subs.items);
+            for (arm_meets.items) |*am| {
+                if (!std.mem.eql(u8, am.arm, e.arm)) continue;
+                var meet = std.ArrayListUnmanaged(spec.LinRow){};
+                for (ih_rows) |r| meet.append(alloc, r) catch unreachable;
+                for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;
+                for (type_rows) |r| meet.append(alloc, r) catch unreachable;
+                for (sub_type) |r| meet.append(alloc, r) catch unreachable;
+                switch (claimsEntail(alloc, meet.items, slhs, srhs, gop)) {
+                    .entailed => {},
+                    .open => return .{ .unproven = std.fmt.allocPrint(alloc, "at the '{s}' back-edge, the goal may not survive the step", .{e.arm}) catch unreachable },
+                    .outside => return .{ .outside = "the step meet exceeds the decidable fence" },
+                }
             }
         }
     }

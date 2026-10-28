@@ -63,6 +63,7 @@ koru_std/channel.units.kz	140
 koru_std/cli.kz	678
 koru_std/compiler.ccp.kz	58
 koru_std/compiler.claims.kz	610
+koru_std/compiler.claims-guard.kz	296
 koru_std/compiler.claims-prover.kz	640
 koru_std/compiler.claims-rank.kz	233
 koru_std/compiler.context.kz	57

@@ -147,6 +147,22 @@ loudly when chained on comparisons, a diagnostic not a divergence;
 left alone. Pin: 675_028 `&&` guard proves rank `i + j` AND compiles.
 675 range 28/28, unit tests green, 310 armed.*
 
+*Update 2026-10-29e: case splits — the kernel rung's last piece. An
+arm's premise is no longer "rows or silence": the guard parses as an
+expression tree (`or` loosest, Koru's own precedence), each side reads
+its own DNF — then the guard's, else the negated tree's — and one
+ArmMeet is emitted per clause. Discharge is per-case: every consumer
+must clear EVERY clause of the producing arm, and an FM-empty clause
+is a case that cannot happen — it discharges vacuously for free.
+Mixed and nested connectives are decidable now; the 675_026/027 pins
+flipped from outside-P to real judgments (`unproven` — the {i<0}
+case cannot bound a rank — and `proven` — the infeasible case pruned,
+inferred rank `i` clears the survivor). New machinery lives in
+compiler.claims-guard.kz (parse + DNF, clause-budget refusal at 16);
+claimsArmMeets shrank. Pins: 675_029 then-cases prove `limit - i`
+where case `i <= 0` needs `limit & >=1`, 675_030 else-cases of a
+conjunction prove the mirror. 675 range 30/30.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

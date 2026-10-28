@@ -1,6 +1,7 @@
-// One connective level only: `a and b or c` has no single top-level
-// reading the fence can take, so it is outside-P — the program still
-// compiles and runs; the claim just reports what it cannot judge.
+// A mixed guard case-splits: `a and b or c` reads `or` loosest, so the
+// then-arm gets cases {a ∧ b} and {c}. The {i < 0} case genuinely
+// cannot bound a decreasing rank — the verdict is unproven, a real
+// judgment where the one-level fence could only say outside-P.
 
 import std/io
 import std/spec

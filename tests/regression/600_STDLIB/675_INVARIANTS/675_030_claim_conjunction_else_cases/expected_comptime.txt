@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_030_claim_conjunction_else_cases/input.k:21 terminates on climb: proven — rank decreases and stays bounded at 1 back-edge
