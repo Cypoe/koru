@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_025_claim_disjunction_else_rows/input.k:20 terminates on ramp: proven — rank decreases and stays bounded at 1 back-edge

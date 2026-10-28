@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_026_claim_guard_mixed_connectives/input.k:19 terminates on mix: outside-P — the impl's guard mixes connectives — the fence reads one level

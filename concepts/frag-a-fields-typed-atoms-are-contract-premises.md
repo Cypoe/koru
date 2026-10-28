@@ -56,9 +56,15 @@ census as `[contract] <subject>: produce contracts proven on N arms`.
 The pair now reads coherently: **field types are assumed premises** (the
 state's invariant, declared once); **payload types are checked
 obligations** (the arm's promise, discharged per produce site the fence
-reads). A verified payload row could then rejoin the fold's step meet as
-a premise about the destructured binding — `live { i: i64 & >=0 }`
-checked ⇒ `l.i >= 0` — which is sound by the check itself and not yet
-wired; under pun produces it duplicates what the field type would say,
-so the power gap is narrow (per-arm vs per-state typing on the same
-names) but real.
+reads).
+
+The rejoin this frag once predicted — a checked payload row re-entering
+the consumer's step meet as `l.i >= 0` — measured **empty**, not narrow.
+The produce check discharges `arm-meet ∪ field types ⊢ payload rows`,
+and the consumer's step meet already contains exactly `arm.rows ∪ type
+rows` — so every payload row is FM-derivable from premises the meet
+already holds. Under the pun fence there is no produce the consumer
+cannot reconstruct; wiring the rejoin would be a no-op and it was not
+built. Per-arm typing can only ever restate what the arm's own guard
+plus field types already establish — the check's premise set IS the
+consumer's premise set.

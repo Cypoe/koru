@@ -117,6 +117,25 @@ edge: verified payload rows could rejoin the step meet as premises —
 sound, narrow, unwired. 675 range 23/23, blast radius 64/64 + 690_3
 armed.*
 
+*Update 2026-10-29c: the rejoin edge measured EMPTY on inspection —
+the produce check discharges `arm-meet ∪ field types ⊢ payload rows`
+from exactly the premise set the consumer's step meet already holds,
+so wiring payload rows into it could never flip a verdict. Not built;
+the frag records the measurement instead. The widening that DID land:
+guard connectives. `if(A and B)`/`if(A or B)` already parsed, emitted,
+and ran — only the claims fence refused them as "not a single linear
+comparison". The reader now splits one top-level connective level:
+`and` feeds every conjunct to the then-arm, `or` feeds every negated
+disjunct to the else-arm (De Morgan: ¬(A∨B) IS a conjunction — the
+profitable side), the disjunctive remainders stay silent because a
+row set cannot spell them. Mixed/nested connectives and non-linear
+pieces are outside-P naming the piece. Every consumer inherits at
+once — arm meets, produce contracts, honors steps, rank candidates.
+Pins: 675_024 conjunct pair discharges rank `i + j` (needs BOTH rows),
+675_025 else-side De Morgan rows bound `limit - i`, 675_026 mixed
+connectives outside-P, 675_027 nested-or piece outside-P. 675 range
+27/27, blast radius 64/64 + 690_3 armed.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

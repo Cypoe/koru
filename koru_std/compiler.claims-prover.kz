@@ -138,6 +138,102 @@ fn claimsGuardRows(
     return rows.items;
 }
 
+const GuardConn = enum { none, conj, disj };
+const GuardCmp = struct {
+    lhs: []const spec.LinPart,
+    rhs: []const spec.LinPart,
+    op: []const u8,
+    src: []const u8,
+};
+
+// Strip one fully-enclosing paren layer — `(a > 0)` → `a > 0` — so a
+// parenthesized conjunct parses like a bare one. Only strips when the
+// FIRST '(' is matched by the LAST char; inner parens ride through and
+// the linear grammar will refuse them honestly.
+fn claimsStripParens(s: []const u8) []const u8 {
+    var cur = std.mem.trim(u8, s, " \t");
+    while (cur.len >= 2 and cur[0] == '(' and cur[cur.len - 1] == ')') {
+        var depth: usize = 0;
+        var wraps = true;
+        for (cur, 0..) |c, i| {
+            if (c == '(') depth += 1;
+            if (c == ')') {
+                depth -= 1;
+                if (depth == 0 and i != cur.len - 1) {
+                    wraps = false;
+                    break;
+                }
+            }
+        }
+        if (!wraps) break;
+        cur = std.mem.trim(u8, cur[1 .. cur.len - 1], " \t");
+    }
+    return cur;
+}
+
+// Does the keyword/operator connective sit at `i` with operand
+// boundaries? `and`/`or` need non-identifier flanks so `random` and
+// `handle` don't split; `&&`/`||` are self-delimiting.
+fn claimsConnAt(src: []const u8, i: usize, word: []const u8) bool {
+    const flank = struct {
+        fn ok(c: u8) bool {
+            return !std.ascii.isAlphanumeric(c) and c != '_';
+        }
+    }.ok;
+    if (i + word.len > src.len or !std.mem.eql(u8, src[i .. i + word.len], word)) return false;
+    const left_ok = i == 0 or flank(src[i - 1]);
+    const right_ok = i + word.len == src.len or flank(src[i + word.len]);
+    return left_ok and right_ok;
+}
+
+// The guard's top-level connective: `and`/`&&` splits into conjuncts,
+// `or`/`||` into disjuncts, at paren depth 0 only. One connective kind
+// per guard — a mix (`a and b or c`) is outside-P, the fence reads one
+// level. No connective → a single piece, today's shape.
+const GuardPieces = union(enum) {
+    ok: struct { conn: GuardConn, pieces: [][]const u8 },
+    outside: []const u8,
+};
+
+fn claimsSplitGuard(alloc: std.mem.Allocator, src: []const u8) GuardPieces {
+    const text = claimsStripParens(src);
+    var conn = GuardConn.none;
+    var pieces = std.ArrayListUnmanaged([]const u8){};
+    var depth: usize = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (c == '(') depth += 1;
+        if (c == ')') {
+            if (depth == 0) return .{ .outside = "the impl's guard has unbalanced parens" };
+            depth -= 1;
+        }
+        if (depth != 0) continue;
+        const found: ?GuardConn = if (claimsConnAt(text, i, "and") or claimsConnAt(text, i, "&&"))
+            .conj
+        else if (claimsConnAt(text, i, "or") or claimsConnAt(text, i, "||"))
+            .disj
+        else
+            null;
+        const kind = found orelse continue;
+        if (conn != .none and conn != kind)
+            return .{ .outside = "the impl's guard mixes connectives — the fence reads one level" };
+        conn = kind;
+        pieces.append(alloc, text[start..i]) catch unreachable;
+        const conlen: usize = if (text[i] == 'a') 3 else 2; // "and" vs "or"/"&&"/"||"
+        start = i + conlen;
+        i += conlen - 1;
+    }
+    if (depth != 0) return .{ .outside = "the impl's guard has unbalanced parens" };
+    if (conn == .none) {
+        pieces.append(alloc, text) catch unreachable;
+    } else {
+        pieces.append(alloc, text[start..]) catch unreachable;
+    }
+    return .{ .ok = .{ .conn = conn, .pieces = pieces.items } };
+}
+
 // Read the subject impl's then/else dispatch into arm → meet rows.
 // Returns null on success, or the outside-P reason.
 fn claimsArmMeets(
@@ -158,30 +254,42 @@ fn claimsArmMeets(
     }
     if (inv.args.len == 0) return "the if carries no guard";
     const guard_src = inv.args[0].value;
-    const split = spec.splitLinCmp(guard_src);
-    const cmp = switch (split) {
-        .one => |s| s,
-        else => return "the impl's guard is not a single linear comparison",
+    const pieces = switch (claimsSplitGuard(alloc, guard_src)) {
+        .outside => |m| return m,
+        .ok => |p| p,
     };
-    const lhs = spec.parseLinExpr(alloc, std.mem.trim(u8, guard_src[0..cmp.pos], " \t")) orelse
-        return "the guard's left side is not a linear form";
-    const rhs = spec.parseLinExpr(alloc, std.mem.trim(u8, guard_src[cmp.pos + cmp.op.len ..], " \t")) orelse
-        return "the guard's right side is not a linear form";
-    for (lhs) |p| {
-        if (p.name) |n| {
-            if (!claimsFieldListed(fields, n))
-                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
-            if (!claimsIntField(fields, n))
-                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+    var cmps = std.ArrayListUnmanaged(GuardCmp){};
+    for (pieces.pieces) |piece_src| {
+        const piece = claimsStripParens(piece_src);
+        const split = spec.splitLinCmp(piece);
+        const cmp = switch (split) {
+            .one => |s| s,
+            else => return if (pieces.conn == .none)
+                "the impl's guard is not a single linear comparison"
+            else
+                std.fmt.allocPrint(alloc, "the impl's guard piece '{s}' is not a single linear comparison", .{piece}) catch unreachable,
+        };
+        const lhs = spec.parseLinExpr(alloc, std.mem.trim(u8, piece[0..cmp.pos], " \t")) orelse
+            return "the guard's left side is not a linear form";
+        const rhs = spec.parseLinExpr(alloc, std.mem.trim(u8, piece[cmp.pos + cmp.op.len ..], " \t")) orelse
+            return "the guard's right side is not a linear form";
+        for (lhs) |p| {
+            if (p.name) |n| {
+                if (!claimsFieldListed(fields, n))
+                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
+                if (!claimsIntField(fields, n))
+                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+            }
         }
-    }
-    for (rhs) |p| {
-        if (p.name) |n| {
-            if (!claimsFieldListed(fields, n))
-                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
-            if (!claimsIntField(fields, n))
-                return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+        for (rhs) |p| {
+            if (p.name) |n| {
+                if (!claimsFieldListed(fields, n))
+                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an input field of '{s}'", .{ n, subject }) catch unreachable;
+                if (!claimsIntField(fields, n))
+                    return std.fmt.allocPrint(alloc, "the guard names '{s}' — not an integer field, and the rank grammar is integer-only", .{n}) catch unreachable;
+            }
         }
+        cmps.append(alloc, .{ .lhs = lhs, .rhs = rhs, .op = cmp.op, .src = piece }) catch unreachable;
     }
 
     for (impl.body.continuations) |*cont| {
@@ -194,7 +302,24 @@ fn claimsArmMeets(
             return std.fmt.allocPrint(alloc, "arm '{s}' is not produced by a branch constructor", .{cont.branch}) catch unreachable;
         const bc = &bc_node.branch_constructor;
         var rows = std.ArrayListUnmanaged(spec.LinRow){};
-        for (claimsGuardRows(alloc, lhs, rhs, cmp.op, negate, guard_src)) |r| rows.append(alloc, r) catch unreachable;
+        // The connective decides which arm owns the guard's rows:
+        // `and` — the then-arm gets every conjunct; the else-arm's
+        //   De Morgan form is a disjunction, not rows — nothing.
+        // `or`  — mirrored: the else-arm gets every disjunct negated
+        //   (¬A ∧ ¬B IS a conjunction); the then-arm gets nothing.
+        // A weaker meet stays sound — it may fail to prove, it
+        // cannot prove wrong.
+        const arm_gets = switch (pieces.conn) {
+            .none => true,
+            .conj => !negate,
+            .disj => negate,
+        };
+        if (arm_gets) {
+            for (cmps.items) |cmp| {
+                for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, negate, cmp.src)) |r|
+                    rows.append(alloc, r) catch unreachable;
+            }
+        }
         var meet = ArmMeet{ .arm = bc.branch_name, .rows = rows };
         if (bc.plain_value) |pv| {
             const pv_t = std.mem.trim(u8, pv, " \t");

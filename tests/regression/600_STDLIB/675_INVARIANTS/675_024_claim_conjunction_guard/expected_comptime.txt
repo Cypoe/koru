@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_024_claim_conjunction_guard/input.k:21 terminates on pair: proven — rank decreases and stays bounded at 1 back-edge
