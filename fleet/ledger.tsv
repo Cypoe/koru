@@ -6,3 +6,5 @@ main:003_docs_without_prose.md	running	Cypoe/challenge-003-docs-without-prose	20
 main:004_compute_kernel_gap_mining.md	running	Cypoe/challenge-004-compute-kernel-gap-mining	2026-10-28T03:04:45+01:00	started
 main:005_regression_board_triage.md	running	Cypoe/challenge-005-regression-board-triage	2026-10-28T03:10:37+01:00	started
 main:005_regression_board_triage.md	done	Cypoe/challenge-005-regression-board-triage	2026-10-28T04:10:00+01:00	Ported the KORU_BACKEND_TARGET ABI contract to this branch — the board was unmeasurable (every compile GLIBC_2.34/timed out); commit a0141de2d verified end-to-end
+main:006_backend_bakeoff.md	running	Cypoe/challenge-006-backend-bakeoff	2026-10-28T04:11:10+01:00	started
+main:006_backend_bakeoff.md	failed	Cypoe/challenge-006-backend-bakeoff	2026-10-28T04:27:34+01:00	no result file
