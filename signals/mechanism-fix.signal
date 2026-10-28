@@ -1,0 +1,9 @@
+name: mechanism-fix
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: folded into `bug-fix` — declare that name. A fix whose outcome was
+  already pinned ("the code now does what a pin claimed") is a bug-fix
+  regardless of whether the delivery mechanism changed; the sharper word
+  added nothing the canonical name lacks.
