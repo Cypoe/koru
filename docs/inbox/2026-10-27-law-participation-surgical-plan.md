@@ -163,6 +163,24 @@ claimsArmMeets shrank. Pins: 675_029 then-cases prove `limit - i`
 where case `i <= 0` needs `limit & >=1`, 675_030 else-cases of a
 conjunction prove the mirror. 675 range 30/30.*
 
+*Update 2026-10-29f: multi-way dispatch — `cond` joined the fence.
+A cond impl is a first-match cascade, so arm i's premise is its own
+guard's cases under every earlier guard's negation (`g_i ∧ ¬g_1 ∧ …
+∧ ¬g_{i-1}`): a clause-set product over the same DNF, guarded by the
+same budget. The arm binding (`| c p when p == 0`) is renamed to the
+scrutinee before the linear parser reads it — shadowing stays sound —
+the scrutinee must be one integer field (`cond(i+1)` is outside-P
+naming it), and a guardless `| c _` renders every later arm
+unreachable (zero meets, discharging nothing vacuously). New part
+compiler.claims-dispatch.kz owns the walk; the produce validation
+both dispatch shapes share moved to claimsArmProduce — a `->` arm or
+a continuing arm refuses identically either way. claims-prover
+dropped 640→501 against its pin. Pins: 675_031 three-arm cond proves
+`i` where `mid`'s bound needs `i >= 1` — the negated first-match
+premise; 675_032 non-field scrutinee outside-P. 675 range 32/32.
+Nested `if` inside an arm stays outside-P — cond is the multi-way
+spelling.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

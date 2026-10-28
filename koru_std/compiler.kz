@@ -1597,11 +1597,11 @@ const emitFlowWithMocks = struct {
 | ctx CompilerContext
 | failed { ctx: CompilerContext, message: string }
 
-// Witness check — decl, helpers, impl: compiler.witness.kz.
 ~part witness
 
 ~part claims
 ~part claims-guard
+~part claims-dispatch
 ~part claims-prover
 ~part claims-rank
 

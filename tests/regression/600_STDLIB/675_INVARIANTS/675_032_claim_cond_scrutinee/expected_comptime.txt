@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_032_claim_cond_scrutinee/input.k:19 terminates on step: outside-P — the cond scrutinee 'i + 1' is not a field of 'step' — the fence reads field scrutinees

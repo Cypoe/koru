@@ -1,0 +1,1 @@
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_031_claim_cond_dispatch/input.k:23 terminates on step: proven — rank decreases and stays bounded at 2 back-edges

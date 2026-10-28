@@ -154,14 +154,18 @@ fn claimsArmMeets(
 ) ?[]const u8 {
     const node = impl.body.node orelse
         return "the subject's impl flow has no body";
-    if (node != .invocation) return "the subject's impl is not an if-dispatch";
+    if (node != .invocation) return "the subject's impl is not an if/cond-dispatch";
     const inv = &node.invocation;
-    if (inv.path.segments.len != 1 or !std.mem.eql(u8, inv.path.segments[0], "if"))
-        return "the subject's impl is not an if-dispatch";
+    const dispatch = if (inv.path.segments.len == 1) inv.path.segments[0] else "";
+    const is_if = std.mem.eql(u8, dispatch, "if");
+    if (!is_if and !std.mem.eql(u8, dispatch, "cond"))
+        return "the subject's impl is not an if/cond-dispatch";
     if (inv.path.module_qualifier) |q| {
-        if (!std.mem.eql(u8, q, "std.control")) return "the subject's impl is not an if-dispatch";
+        if (!std.mem.eql(u8, q, "std.control")) return "the subject's impl is not an if/cond-dispatch";
     }
     if (inv.args.len == 0) return "the if carries no guard";
+    if (!is_if)
+        return claimsCondArmMeets(alloc, inv, impl.body.continuations, fields, subject, out);
     const guard = switch (claimsParseGuard(alloc, inv.args[0].value, fields, subject)) {
         .outside => |m| return m,
         .ok => |g| g,
@@ -171,11 +175,6 @@ fn claimsArmMeets(
         const negate = std.mem.eql(u8, cont.branch, "else");
         if (!negate and !std.mem.eql(u8, cont.branch, "then"))
             return std.fmt.allocPrint(alloc, "the impl dispatches on '{s}' — the fence reads then/else", .{cont.branch}) catch unreachable;
-        const bc_node = cont.node orelse
-            return std.fmt.allocPrint(alloc, "arm '{s}' produces nothing the fence reads", .{cont.branch}) catch unreachable;
-        if (bc_node != .branch_constructor)
-            return std.fmt.allocPrint(alloc, "arm '{s}' is not produced by a branch constructor", .{cont.branch}) catch unreachable;
-        const bc = &bc_node.branch_constructor;
 
         // The arm's cases: then reads the guard's DNF, else reads the
         // negated tree's DNF — `A or B` then-cases {A},{B}, else-case
@@ -184,25 +183,10 @@ fn claimsArmMeets(
             .outside => |m| return m,
             .ok => |cs| cs,
         };
-
-        var scalar_field: ?[]const u8 = null;
-        if (bc.plain_value) |pv| {
-            const pv_t = std.mem.trim(u8, pv, " \t");
-            if (claimsFieldListed(fields, pv_t)) {
-                scalar_field = pv_t;
-            } else {
-                return std.fmt.allocPrint(alloc, "arm '{s}' produces '{s}' — not a field of '{s}'", .{ bc.branch_name, pv_t, subject }) catch unreachable;
-            }
-        } else {
-            for (bc.fields) |f| {
-                const es = f.expression_str orelse
-                    return std.fmt.allocPrint(alloc, "arm '{s}' field '{s}' carries no produce expression", .{ bc.branch_name, f.name }) catch unreachable;
-                if (!claimsFieldListed(fields, f.name) or !std.mem.eql(u8, es, f.name))
-                    return std.fmt.allocPrint(alloc, "arm '{s}' produces '{s}': '{s}' — the fence reads pun produces only", .{ bc.branch_name, f.name, es }) catch unreachable;
-            }
-        }
-        if (cont.continuations.len != 0)
-            return std.fmt.allocPrint(alloc, "arm '{s}' continues past its produce — the fence reads terminal arms", .{cont.branch}) catch unreachable;
+        const prod = switch (claimsArmProduce(alloc, cont, fields, subject)) {
+            .outside => |m| return m,
+            .ok => |p| p,
+        };
 
         for (cases) |clause| {
             var rows = std.ArrayListUnmanaged(spec.LinRow){};
@@ -210,7 +194,7 @@ fn claimsArmMeets(
                 for (claimsGuardRows(alloc, cmp.lhs, cmp.rhs, cmp.op, cmp.neg, cmp.src)) |r|
                     rows.append(alloc, r) catch unreachable;
             }
-            out.append(alloc, .{ .arm = bc.branch_name, .rows = rows, .scalar_field = scalar_field }) catch unreachable;
+            out.append(alloc, .{ .arm = prod.branch_name, .rows = rows, .scalar_field = prod.scalar_field }) catch unreachable;
         }
     }
     return null;
@@ -365,7 +349,7 @@ fn proveHonors(
     }
     const impl = claimsImplFlow(items, ev) orelse {
         if (claimsAnyImpl(items, ev))
-            return .{ .outside = "the subject's impl is not an if-dispatch" };
+            return .{ .outside = "the subject's impl is not an if/cond-dispatch" };
         return .{ .outside = "the subject has no impl flow" };
     };
     var arm_meets = std.ArrayListUnmanaged(ArmMeet){};

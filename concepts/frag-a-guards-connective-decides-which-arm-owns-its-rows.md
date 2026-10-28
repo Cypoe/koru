@@ -57,8 +57,25 @@ verbatim and fails *loudly* — a backend diagnostic, never silent
 divergence; whether bitwise surface deserves a real grammar level is
 a later ruling.
 
+Multi-way dispatch joined the reading: `cond(scrutinee)` is Koru's
+first-match cascade, so arm i's premise is its own guard's cases under
+every earlier guard's negation — `g_i ∧ ¬g_1 ∧ … ∧ ¬g_{i-1}` — a
+clause-set product built from the same DNF. The arm's binding reads
+as the scrutinee (renamed identifier-for-identifier before the linear
+parser sees it, so shadowing is sound), a guardless `| c _` makes
+every later arm unreachable (zero meets — it discharges nothing it
+shouldn't), and the scrutinee must be one integer field: `cond(i+1)`
+is a named outside-P. `claims-dispatch` owns the walk; the per-arm
+produce validation it shares with the if-path moved to
+`claimsArmProduce`, so both spellings refuse a `->` arm or a
+continuing arm identically.
+
 Still outside the guard fence: `not` as a surface operator (De Morgan
 exists only inside the reader, not as user syntax), non-linear leaves,
 `!=` on the positive side (a disjunction — it contributes no rows, so
-the case it lands in just carries less), and the then/else two-arm
-dispatch shape itself.
+the case it lands in just carries less), a nested `if` inside an arm
+(the continuation carries an invocation, not a produce — refused the
+same as any non-constructor), handler-side `when` guards at call
+sites (a different position — the fence reads impls), and
+produce-side conjunction, which still awaits the ruling on whether a
+produce may be disjunctive.

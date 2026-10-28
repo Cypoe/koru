@@ -224,7 +224,7 @@ fn claimsProduceCheck(
     if (!has_typed) return .{ .ok = 0 };
 
     const impl = claimsImplFlow(items, ev) orelse
-        return .{ .refuse = std.fmt.allocPrint(alloc, "'{s}' declares typed payloads but its impl is not an if-dispatch — the produce contract cannot be established", .{subject}) catch unreachable };
+        return .{ .refuse = std.fmt.allocPrint(alloc, "'{s}' declares typed payloads but its impl is not an if/cond-dispatch — the produce contract cannot be established", .{subject}) catch unreachable };
     var arm_meets = std.ArrayListUnmanaged(ArmMeet){};
     if (claimsArmMeets(alloc, impl, fields, subject, &arm_meets)) |reason|
         return .{ .refuse = std.fmt.allocPrint(alloc, "'{s}' declares typed payloads; {s}", .{ subject, reason }) catch unreachable };

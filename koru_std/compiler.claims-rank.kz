@@ -36,7 +36,7 @@ fn claimsRankPrelude(
         // `immediate_impl`, and a bare return is by construction not an
         // if-dispatch — still names its shape rather than "missing".
         if (claimsAnyImpl(items, ev))
-            return .{ .verdict = .{ .outside = "the subject's impl is not an if-dispatch" } };
+            return .{ .verdict = .{ .outside = "the subject's impl is not an if/cond-dispatch" } };
         return .{ .verdict = .{ .outside = "the subject has no impl flow" } };
     };
     var pre = RankPrelude{};
