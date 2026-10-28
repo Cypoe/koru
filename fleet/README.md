@@ -10,11 +10,24 @@ Driver lives OUTSIDE the repo at `W:\src\koru-fleet\`:
 
 - `loop.sh` — serial round-robin. Picks a standing challenge (from
   `origin/main:challenges/` + `fleet/new-challenges/`), opens a
-  worktree at `W:\src\koru-wt\<slug>` on `Cypoe/challenge-<slug>`,
-  runs `devin -p` with `prompt-template.md`, classifies via
-  `state/result-<slug>.json`, pushes the branch + opens the PR on
-  success, commits reports/ledger here. `touch W:\src\koru-fleet\STOP`
-  halts after the current round.
+  shared clone at `W:\src\koru-wt\<slug>` on `Cypoe/challenge-<slug>`,
+  runs up to `FLEET_MAX_TURNS` (default 3) devin turns — turn 1 uses
+  `prompt-template.md`, later turns `devin -c` resume the conversation
+  in that directory — then classifies via `state/result-<slug>.json`.
+  **Any round with commits ahead of base pushes its branch to the
+  fork** (success OR failure — the work stays inspectable); a PR to
+  korulang/koru opens only on `success`. Non-success clones are kept
+  and retried rounds resume them — or re-clone the pushed branch if
+  the clone is gone. `touch W:\src\koru-fleet\STOP` halts after the
+  current round.
+- Per-clone setup (done by the driver, outside the sandbox): repo
+  hooks installed into `.git/hooks/` patched to `--checks-only`
+  (deterministic rows block, judged rows skip — no provisioned judge),
+  tracked `hooks/pre-commit` patched identically + `skip-worktree` so
+  the drift check stays green and the edit can never be staged;
+  alternates rewritten to a relative path (Windows git writes `W:/...`
+  which WSL git can't parse); `~/fleet-shims/{git,node}` provide the
+  check-ignore/node.exe routes the hooks need.
 - `prompt-template.md` — the per-round brief: doctrine, the WSL/zig/env
   recipe, commit-hook recipe, result-file contract.
 - `state/ledger.tsv` — one row per attempt: challenge, status, branch.
