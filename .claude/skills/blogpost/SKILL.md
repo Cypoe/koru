@@ -210,6 +210,15 @@ alone.** Lead with the concrete subject — the feature or concept, by name.
   appendix "because the journey is half of what these posts are for" — it
   isn't. None of them care about our journey; they care about the result.)
 - **Short and synthesized.** State the idea and let the tests carry the proof.
+- **Never print two numbers side by side when their gap is inside run-to-run
+  jitter.** `99.9% vs 99.7%` reads as an ordering no matter how many caveats
+  follow it — readers will assume the bigger number is the better implementation
+  even when the difference is demonstrably noise. Either prove the gap survives
+  variance (repeat the run, report the spread) or collapse the numbers to the
+  claim the data supports ("both answered essentially everything") and put the
+  real difference in the sentence instead — acceptance policy, architecture,
+  the thing that isn't jitter. (Lars-ruled 2026-10-26: counterproductive
+  precision is still precision-theater.)
 - Match the register of the recent posts; don't invent a new house style.
 - **Numbers worth seeing are a HyperFrame.** `~/.claude/skills/hyperframe/SKILL.md`
   — the site surface (`src/lib/hyperframes/`), not the War Room. A chart is a
