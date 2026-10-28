@@ -832,6 +832,52 @@ regression_check_flow_eval_oracle() {
     echo -e "${GREEN}  ✓ flow-eval oracle: all claims re-decided (Lean)${NC}"
 }
 
+# Claims ledger oracle leg — opt-in via a `CLAIMS_CHECK` marker AND
+# KORU_WITNESS=1 (same Lean toolchain gate as the witness oracle). The
+# claims ledger checker (verify/claims/ClaimsCheck.lean) re-decides every
+# `[claim-check]`/`[claim-census]` line the claims pass committed under
+# std/witness:enforce — vocabulary, verdict detail discipline, census
+# balance, drift — at accounting level (the linear entailment itself is
+# not re-decided). A marker without KORU_WITNESS is a named NOT-ARMED
+# verdict — never green, FAIL under KORU_ORACLE_REQUIRED=1. A marked test
+# whose run printed no `[claim-check]` lines FAILS inside the gate — the
+# pin is the ledger's presence, not just its balance.
+regression_check_claims_oracle() {
+    local test_dir="$1"
+    local TEST_NAME
+    TEST_NAME=$(basename "$test_dir")
+
+    [ -f "$test_dir/CLAIMS_CHECK" ] || return 0
+    [ -f "$test_dir/SUCCESS" ] && [ ! -f "$test_dir/FAILURE" ] || return 0
+
+    _claims_oracle_fail() {
+        rm -f "$test_dir/SUCCESS"
+        echo "$1" > "$test_dir/FAILURE"
+        FAILED_TESTS="$FAILED_TESTS $TEST_NAME($1)"
+        [ "${PASSED_TESTS:-0}" -gt 0 ] && PASSED_TESTS=$((PASSED_TESTS - 1))
+        echo -e "${RED}  ✗ claims oracle: $2${NC}"
+    }
+
+    if [ "${KORU_WITNESS:-0}" != "1" ]; then
+        if [ "${KORU_ORACLE_REQUIRED:-0}" = "1" ]; then
+            _claims_oracle_fail "claims-oracle" "marker is the contract but the oracle is not armed (set KORU_WITNESS=1)"
+        else
+            regression_oracle_not_armed "$test_dir" "claims-oracle" "set KORU_WITNESS=1"
+        fi
+        return 0
+    fi
+
+    # The gate cds into verify/claims before reading its corpus args — the
+    # backend.err path must be absolute to survive that cd.
+    local claims_corpus="$(cd "$test_dir" && pwd)/backend.err"
+    if ! "$SCRIPT_DIR/scripts/claims_gate.sh" "$claims_corpus" >"$test_dir/claims_check.out" 2>&1; then
+        _claims_oracle_fail "claims-check" "gate failed (see claims_check.out)"
+        tail -15 "$test_dir/claims_check.out" | sed 's/^/    /'
+        return 0
+    fi
+    echo -e "${GREEN}  ✓ claims oracle: verdict ledger balanced (Lean)${NC}"
+}
+
 # C-refine oracle leg — opt-in via a `C_REFINE_CHECK` marker AND
 # KORU_WITNESS=1 (same Lean toolchain gate), and only meaningful on a
 # test that already ran the C lane (`c` in LANGUAGES). This is the A.5
@@ -2572,6 +2618,9 @@ EOF
     # The flow-eval oracle leg — opt-in via FLOW_EVAL_CHECK + KORU_WITNESS=1;
     # the semantics kernel re-decides the [flow-eval] claims in backend.err.
     regression_check_flow_eval_oracle "$test_dir"
+    # The claims ledger oracle leg — opt-in via CLAIMS_CHECK +
+    # KORU_WITNESS=1; the Lean checker re-decides the [claim-check] ledger.
+    regression_check_claims_oracle "$test_dir"
     # The c-refine oracle leg — opt-in via C_REFINE_CHECK + KORU_WITNESS=1 +
     # the c lane having run; A.5 per-instance graph→C refinement.
     regression_check_c_refine_oracle "$test_dir"

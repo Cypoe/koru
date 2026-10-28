@@ -52,6 +52,7 @@
 !**/FLOW_EVAL_CHECK
 !**/C_REFINE_CHECK
 !**/HOLDS_CHECK
+!**/CLAIMS_CHECK
 !**/ARGS
 !**/STDIN
 !**/input.txt

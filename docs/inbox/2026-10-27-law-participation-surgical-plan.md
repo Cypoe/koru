@@ -198,6 +198,23 @@ same meets 675_031's cond reaches, different spelling; 675_034
 cond-in-else proven; 675_035 chained non-dispatch names itself.
 675 range 35/35.*
 
+*Update 2026-10-29h: claim verdicts reach Lean — the accounting leg.
+Under `std/witness:enforce`, `pass-claims-check` now commits one
+`[claim-check]` line per claim (site, atom, subject, verdict, detail)
+plus a trailing `[claim-census]`; `verify/claims/ClaimsCheck.lean`
+re-decides the ledger — closed atom/verdict vocabulary (spec's
+`claim_atoms` pinned checker-side), the detail discipline (a judged
+verdict without its reason is malformed), exactly one trailing census
+whose counts equal the emitted lines, byte-identical lines are splice
+drift. `scripts/claims_gate.sh` mirrors the witness gate and a
+`CLAIMS_CHECK` marker arms the regression leg under `KORU_WITNESS=1`.
+Deliberately accounting-level: the record's shape is recomputed, the
+linear entailment behind `proven` is not — a well-formed forged
+`proven` still passes and the checker header says so. The named next
+leg is serializing the meet rows so the Lean FM engine re-decides the
+judgment itself. Pins: 675_036 armed trip (golden + forged 10-line +
+drift corpora in verify/claims/). 675 range 36/36.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

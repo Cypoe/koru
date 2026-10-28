@@ -1,0 +1,4 @@
+[witness] site pass-graph-edge pass-claims-check requires pass-witness-check
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_036_claim_verdicts_ledger/input.k:24 terminates on tick: proven — rank decreases and stays bounded at 1 back-edge
+[claim-check] site tests/regression/600_STDLIB/675_INVARIANTS/675_036_claim_verdicts_ledger/input.k:24 terminates on tick proven — rank decreases and stays bounded at 1 back-edge
+[claim-census] claims=1 declared=0 proven=1 unproven=0 outside=0

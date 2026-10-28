@@ -92,6 +92,19 @@ again, with the disagreement hidden inside one file.
   `(residue)` arms the renderer can't read just fails the marked test,
   but nothing checks that every emitted flow function got a claim
   (the zip is count-strict per corpus, which is the current guard).
+- The claims-prover's verdicts joined the corpus discipline: under
+  `std/witness:enforce`, `pass-claims-check` now commits one structured
+  `[claim-check]` line per claim (site, atom, subject, verdict, detail)
+  plus a trailing `[claim-census]`, and `verify/claims/ClaimsCheck.lean`
+  re-decides the ledger — closed atom/verdict vocabulary, judged
+  verdicts must carry their detail, one trailing census whose counts
+  equal the emitted lines, byte-identical lines are splice drift. That
+  is deliberately **accounting-level** re-decision: the record's shape
+  and completeness are recomputed, while the linear entailment behind
+  `proven` is not — a well-formed forged `proven` still passes, and the
+  file's header says so. The FM engine is the last piece still
+  solver-and-checker in one; serializing the meet rows is the named
+  next leg, not a patch on this one. `675_036` pins the trip.
 - The doctrine now spans **command-produced** verdicts. Commands are
   solvers: koru-os's `realize` commits admission/declaration verdicts
   through `emitter_helpers.commitCommandMark` — a validated sink, not a

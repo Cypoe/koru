@@ -1,0 +1,10 @@
+[claim-check] site input.k:11 terminates on step probably — fabricated
+[claim-check] site input.k:11 halts on step proven — fabricated
+[claim-check] site input.k:11 terminates on step proven
+[claim-check] site input.k:11 terminates on step declared — rank i
+[claim-check] site input.k:11 terminates on step
+[claim-check] site input.k terminates on step declared
+[claim-check] site :11 terminates on step declared
+[claim-check] site input.k:x terminates on step declared
+[claim-check] place input.k:11 terminates on step declared
+[claim-bogus] site input.k:11 terminates on step declared
