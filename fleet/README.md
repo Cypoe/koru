@@ -35,18 +35,33 @@ Driver lives OUTSIDE the repo at `W:\src\koru-fleet\`:
 3. Start: `bash W:\src\koru-fleet\loop.sh` (Git Bash; it never returns
    — run under `nohup`/tmux or a dedicated terminal).
 
-## Containment model
+## Containment model (probe-verified 2026-10-28)
 
 Each round clones the repo (`git clone --shared`) into
 `W:\src\koru-wt/<slug>` — `.git` inside the workspace, so the sandbox can
 deny the whole main tree without carving a hole for worktree metadata.
-The agent runs `devin -p --sandbox` (Autonomous + bwrap): writable =
-the clone + `/tmp` + `~/.cache` + `koru-fleet/` + `koru-orchestrate/fleet/`;
-everything else is read-only at OS level. `Read` denies hide `.ssh`,
-`.aws`, gh creds, and the Windows-side devin credentials. `Exec` denies
-block `git push`/`gh`/`sudo`/`git config` — publishing is the driver's
-job. The agent's own edit/write tools run outside bwrap but are bound
-by the same `deny` rules. Fails closed: no bwrap/socat → no session.
+The agent runs `devin -p --sandbox` (Autonomous + bwrap). Measured:
+
+- Workspace writes work; `git add`/`commit` work; `.git/hooks/` itself
+  is read-only even inside the workspace (hooks can't be tampered).
+- Ungranted paths: `Read-only file system` — verified against
+  `W:/src/koru` and `koru-fleet` pre-grant.
+- **Sandbox writable roots come from USER-level config only**
+  (`~/.config/devin/config.json`): project-config `Write` allows
+  grant tool permission but did NOT widen sandbox roots (measured —
+  `touch` in an allowed-but-ungranted dir → ROFS). Fleet grants live
+  in the WSL user config: `/tmp`, `~/zig*`, `~/.cache`, `koru-fleet`,
+  `koru-orchestrate/fleet`.
+- `Read(...)` denies hide `.ssh`, `.aws`, gh creds, devin creds
+  (tool-level deny, verified).
+- `Exec(...)` rules are **prefix** matchers — `Exec(git push)`, never
+  `Exec(git push *)`. And pushes have a second wall regardless:
+  WSL git has no GitHub credentials (verified — fails on auth).
+- `sudo` is dead inside bwrap (verified); `gh` isn't installed in WSL.
+- Windows interop binaries (`node.exe`, `git.exe` shims) execute fine
+  under bwrap+drvfs (verified).
+
+Fails closed: no bwrap/socat → the session refuses to start.
 
 ## Rules the fleet holds itself to
 
