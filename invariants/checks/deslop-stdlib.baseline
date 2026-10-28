@@ -51,8 +51,15 @@
 # drift accumulated on main between rolls (interpreter/store/proto/
 # channel import_decl and event_decl residuals; this diff stages zero
 # .kz files). Re-pinning records the tree as measured 2026-11-15.
-clusters=142
-members=216
+# 146/220: the roll fired on the .kmd document-host landing (zero .kz
+# staged — parser/main/file_types + docs + a probe). +4 clusters/+4
+# members is committed drift since the 142/216 pin: the std/tree and
+# store.oindex landings' part-file decl shells (proto.ownedleaf,
+# rings.home, runtime.obtainvia, supervisor.decl, store.bulkjoin
+# import_decl quad named by the census) — the documented decl-shell
+# protocol category. Measured 2026-10-28 on the working tree.
+clusters=146
+members=220
 skipped=2
 spellings=59
 # 70/111: store.keyed.kz joined io.blk-style import preamble clone w/ interpreter.select.kz (3 shared compiler-module imports, boilerplate)

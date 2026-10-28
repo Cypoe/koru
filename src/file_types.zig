@@ -7,7 +7,9 @@ const std = @import("std");
 ///
 /// Naming convention: `.k` + host-language abbreviation. `.k` itself is
 /// pure Koru (contract-only: events, types, obligations — no proc bodies).
-pub const koru_extensions = [_][]const u8{ ".kgpu", ".kjs", ".kcs", ".kz", ".kc", ".k" };
+/// `.kmd` is the document host: hostlines are Markdown — data, not code
+/// (docs/KMD.md).
+pub const koru_extensions = [_][]const u8{ ".kgpu", ".kmd", ".kjs", ".kcs", ".kz", ".kc", ".k" };
 
 /// True if `name` ends with any Koru file extension.
 pub fn isKoruFile(name: []const u8) bool {
@@ -57,6 +59,7 @@ pub fn hostLangOfFile(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, ext, ".kcs")) return "cs";
     if (std.mem.eql(u8, ext, ".kc")) return "c";
     if (std.mem.eql(u8, ext, ".kgpu")) return "gpu";
+    if (std.mem.eql(u8, ext, ".kmd")) return "md";
     // ".k" — pure contract, no host bytes.
     return null;
 }
@@ -69,6 +72,9 @@ test "isKoruFile recognizes all canonical extensions" {
     try testing.expect(isKoruFile("foo.kjs"));
     try testing.expect(isKoruFile("foo.kc"));
     try testing.expect(isKoruFile("foo.kgpu"));
+    try testing.expect(isKoruFile("foo.kmd"));
+    // ".md" alone is not a Koru file.
+    try testing.expect(!isKoruFile("foo.md"));
 }
 
 test "isKoruFile rejects non-Koru extensions" {
@@ -101,6 +107,7 @@ test "hostLangOfFile maps each extension to its variant-tag string" {
     try testing.expectEqualStrings("cs", hostLangOfFile("chain.kcs").?);
     try testing.expectEqualStrings("c", hostLangOfFile("chain.kc").?);
     try testing.expectEqualStrings("gpu", hostLangOfFile("chain.kgpu").?);
+    try testing.expectEqualStrings("md", hostLangOfFile("page.kmd").?);
 }
 
 test "hostLangOfFile returns null for the pure contract and synthesized items" {

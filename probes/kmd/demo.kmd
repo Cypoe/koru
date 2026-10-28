@@ -1,0 +1,21 @@
+~const { title: "The Document Is The Program", stamp: "2026-10-28" }
+
+# {{ title }}
+
+Prose is prose — **bold**, `code`, lists, quotes. The only sigil
+is `~` at column 0: that line is Koru, same rules as `.kz`.
+
+| construct   | emits        |
+|-------------|--------------|
+| table rows  | literal text |
+| `~` lines   | koru calls   |
+
+```koru
+~import std/io
+std/io:print "fences stay literal, sigils included"
+```
+
+Generated {{ stamp }} by a doc that is also a program.
+
+---
+*end of document*

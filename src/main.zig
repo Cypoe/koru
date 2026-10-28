@@ -33,6 +33,7 @@ const flow_checker = @import("flow_checker");
 const FlowChecker = flow_checker.FlowChecker;
 const codegen_utils = @import("codegen_utils");
 const lexer = @import("lexer");
+const liquid = @import("liquid");
 const struct_literal = @import("struct_literal");
 const emitter_helpers = @import("emitter_helpers");
 const site_hash = @import("site_hash");
@@ -4612,6 +4613,65 @@ fn generateVisitorBackend(writer: anytype, allocator: std.mem.Allocator, source_
     );
 }
 
+/// `.kmd` document emission (docs/KMD.md). The file is an implicit-comptime
+/// module whose residue IS the document: walk items in file order — md
+/// hostlines render through Liquid against `~const` bindings, `~const` feeds
+/// the environment, declarations are consumed structure. Anything else left
+/// over is residue that refuses to compile — never muted into the output.
+fn emitKmdDocument(allocator: std.mem.Allocator, source_file: *ast.Program, input_path: []const u8, reporter: *errors.ErrorReporter) !void {
+    var ctx = liquid.Context.init(allocator);
+    var doc = std.ArrayList(u8){};
+    const writer = doc.writer(allocator);
+
+    for (source_file.items) |*item| {
+        switch (item.*) {
+            .host_line => |hl| {
+                const rendered = try liquid.render(allocator, hl.content, &ctx);
+                try writer.writeAll(rendered);
+                try writer.writeAll("\n");
+            },
+            .import_decl => {},
+            .flow => |*flow| {
+                const node = flow.body.node orelse return error.KmdResidue;
+                if (node != .invocation) return error.KmdResidue;
+                const inv = node.invocation;
+                const is_const = inv.path.segments.len == 1 and std.mem.eql(u8, inv.path.segments[0], "const");
+                if (!is_const) {
+                    // The residue wall: a call that can't be consumed at
+                    // compile time is not silently dropped from the document.
+                    try reporter.addErrorAtLocationWithHint(.KORU120, flow.location, "call `{s}` leaves residue a `.kmd` compile can't consume — comptime call results are not spliced into documents yet", .{inv.path.segments[inv.path.segments.len - 1]}, "declare the binding with `~const`, or wait for the comptime-result splice (docs/KMD.md)", .{});
+                    continue;
+                }
+                // ~const { name: value, ... } → Liquid context bindings.
+                for (inv.args) |arg| {
+                    if (arg.source_value) |src| {
+                        var it = std.mem.tokenizeAny(u8, src.text, "{}\n,");
+                        while (it.next()) |entry| {
+                            const colon = std.mem.indexOfScalar(u8, entry, ':') orelse continue;
+                            const name = std.mem.trim(u8, entry[0..colon], " \t");
+                            const raw = std.mem.trim(u8, entry[colon + 1 ..], " \t");
+                            if (name.len == 0 or raw.len == 0) continue;
+                            if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"') {
+                                try ctx.put(name, .{ .string = raw[1 .. raw.len - 1] });
+                            } else if (std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "false")) {
+                                try ctx.put(name, .{ .boolean = std.mem.eql(u8, raw, "true") });
+                            } else {
+                                try ctx.put(name, .{ .string = raw });
+                            }
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    const file = try std.fs.cwd().createFile("output_emitted.md", .{});
+    defer file.close();
+    try file.writeAll(doc.items);
+    try printStderr(allocator, "✓ Compiled {s} → output_emitted.md ({d} bytes)\n", .{ input_path, doc.items.len });
+}
+
 /// Print "  <name>" padded to a column — one entry of a help listing.
 fn printPaddedName(allocator: std.mem.Allocator, name: []const u8, max_name_len: usize) !void {
     const padding = max_name_len - name.len + 2;
@@ -7841,6 +7901,19 @@ pub fn main() !void {
     // entry-side mirror of `loadFileWithCompanions` (used for imports).
     if (!ast_json_mode and !ast_canon_mode and !print_mode and !check_k_convertible_mode and !to_k_mode) {
         source_file = try import_pipeline.mergeEntryCompanions(allocator, parse_allocator, input, source_file, !show_help);
+    }
+
+    // `.kmd`: the document is the compile-time residue of an implicit-
+    // comptime module (docs/KMD.md). No backend, no binary — walk items in
+    // file order; md hostlines render through Liquid against ~const
+    // bindings; anything the comptime stage can't consume is a compile
+    // failure, not silent output.
+    if (file_types.koruExtensionOf(std.fs.path.basename(input_file.?))) |input_ext| {
+        if (std.mem.eql(u8, input_ext, ".kmd") and !ast_json_mode and !ast_canon_mode) {
+            try emitKmdDocument(compile_allocator, &source_file, input_file.?, &parser.reporter);
+            try exitOnReportedErrors(&parser.reporter);
+            return;
+        }
     }
 
     // If --ast-json mode, output AST as JSON (even if there are parse errors)
