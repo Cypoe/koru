@@ -1,1 +1,3 @@
-[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_009_claim_outside_p_impl_shape/input.k:14 terminates on step: outside-P — the subject's impl is not an if/cond-dispatch
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_009_claim_outside_p_impl_shape/input.k:17 terminates on step: outside-P — the subject's impl is not an if/cond-dispatch
+[claim-check] site tests/regression/600_STDLIB/675_INVARIANTS/675_009_claim_outside_p_impl_shape/input.k:17 terminates on step outside-P — the subject's impl is not an if/cond-dispatch
+[claim-census] claims=1 declared=0 proven=0 unproven=0 outside=1 edges=0

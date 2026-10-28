@@ -314,6 +314,7 @@ fn claimsProduceCheck(
     var cc_proven: usize = 0;
     var cc_unproven: usize = 0;
     var cc_outside: usize = 0;
+    var cc_edges: usize = 0;
 
     for (claims) |c| {
         if (c.malformed) {
@@ -469,6 +470,8 @@ fn claimsProduceCheck(
         var judged = false;
         var word: []const u8 = "";
         var detail: []const u8 = "";
+        var evb = ClaimEvidence{};
+        if (@import("emitter_helpers").witness_enforced) claim_ev_sink = &evb;
         if (subject_ev) |ev| {
             if (std.mem.eql(u8, c.atom, "terminates")) {
                 const verdict = if (c.rank.len > 0)
@@ -501,6 +504,7 @@ fn claimsProduceCheck(
                 judged = true;
             }
         }
+        claim_ev_sink = null;
         if (judged) {
             std.debug.print("[claim] {s}:{d} {s} on {s}: {s} — {s}\n", .{ c.file, c.line, c.atom, c.on, word, detail });
             if (@import("emitter_helpers").witness_enforced) {
@@ -508,6 +512,8 @@ fn claimsProduceCheck(
                 if (std.mem.eql(u8, word, "proven")) cc_proven += 1;
                 if (std.mem.eql(u8, word, "unproven")) cc_unproven += 1;
                 if (std.mem.eql(u8, word, "outside-P")) cc_outside += 1;
+                claimsEvEmit(mutable_ctx.allocator, c.file, c.line, &evb);
+                cc_edges += evb.edges.items.len;
             }
             continue;
         }
@@ -520,7 +526,7 @@ fn claimsProduceCheck(
 
     if (@import("emitter_helpers").witness_enforced) {
         const n = cc_declared + cc_proven + cc_unproven + cc_outside;
-        std.debug.print("[claim-census] claims={d} declared={d} proven={d} unproven={d} outside={d}\n", .{ n, cc_declared, cc_proven, cc_unproven, cc_outside });
+        std.debug.print("[claim-census] claims={d} declared={d} proven={d} unproven={d} outside={d} edges={d}\n", .{ n, cc_declared, cc_proven, cc_unproven, cc_outside, cc_edges });
     }
 
     if (refused) {

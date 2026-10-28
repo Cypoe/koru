@@ -1,15 +1,9 @@
 // Koru Standard Library: the `claims-rank` part of compiler.kz.
-// Joined via `~part claims-rank` in compiler.kz; merged into the
-// compiler module at load — the `spec` alias is declared by the claims
-// part. This part owns the rank machinery `terminates` stands on: the
-// shared prelude (arm meets + fold heads), the per-candidate discharge,
-// and rank inference — where a rank comes from when the claim declares
-// none.
-//
-// What a rank judgment needs before the rank is even chosen: the impl's
-// arm meets and the fold heads over the subject. Shared by the declared
-// path and the inferred path — inference only changes WHERE the rank
-// comes from, not what a rank must prove.
+// Joined via `~part claims-rank` in compiler.kz — the `spec` alias is
+// declared by the claims part. Owns the rank machinery `terminates`
+// stands on: the shared prelude (arm meets + fold heads), the
+// per-candidate discharge, and rank inference. Inference only changes
+// WHERE the rank comes from, not what a rank must prove.
 const RankPrelude = struct {
     arm_meets: std.ArrayListUnmanaged(ArmMeet) = .{},
     folds: std.ArrayListUnmanaged(*const ast.Flow) = .{},
@@ -46,6 +40,7 @@ fn claimsRankPrelude(
         .outside => |m| return .{ .verdict = .{ .outside = m } },
         .rows => |rs| rs,
     };
+    if (claim_ev_sink) |eb| eb.type_rows = pre.type_rows;
     claimsFoldHeads(alloc, items, ev, &pre.folds);
     if (pre.folds.items.len == 0)
         return .{ .verdict = .{ .unproven = std.fmt.allocPrint(alloc, "no #-fold invokes '{s}'", .{subject}) catch unreachable } };
@@ -70,15 +65,16 @@ fn claimsRankTry(
     subject: []const u8,
 ) RankTry {
     var nedges: usize = 0;
-    for (folds) |fl| {
+    for (folds, 0..) |fl, fi| {
         const label = fl.pre_label.?;
         var edges = std.ArrayListUnmanaged(BackEdge){};
         var nested = false;
         claimsCollectJumps(alloc, fl.body.continuations, label, 0, &edges, &nested);
         if (nested)
             return .{ .outside = "a back-edge sits inside a nested dispatch — the inner call's contract is not modeled" };
+        if (claim_ev_sink) |eb| eb.cur_fold = fi;
 
-        for (edges.items) |e| {
+        for (edges.items, 0..) |e, ei| {
             nedges += 1;
             const binding = e.binding orelse
                 return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
@@ -124,8 +120,11 @@ fn claimsRankTry(
             // so both obligations discharge under EVERY clause; an
             // empty clause is an impossible case — vacuously clear.
             const sub_type = claimsSubRows(alloc, type_rows, subs.items);
+            var case_n: usize = 0;
             for (arm_meets) |*am| {
                 if (!std.mem.eql(u8, am.arm, e.arm)) continue;
+                if (claim_ev_sink) |eb| evEdge(alloc, eb, .{ .cand = eb.cur_cand, .fold = fi, .edge = ei, .arm = e.arm, .case = case_n, .rows = am.rows.items, .subs = subs.items });
+                case_n += 1;
                 var meet = std.ArrayListUnmanaged(spec.LinRow){};
                 for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;
                 for (type_rows) |r| meet.append(alloc, r) catch unreachable;
@@ -154,14 +153,11 @@ fn claimsRankTry(
 }
 
 
-// `terminates` with no declared rank: the arm guards are the candidate
-// source — a row `Σc·x <= b` is a bound the subject's own dispatch
-// proved, so `b − Σc·x` is a rank candidate (strict rows carry the
-// integer-tightened bound, which is exactly the slack a strict guard
-// implies). Each candidate faces the same discharge a declared rank
-// does; the first to clear every back-edge is reported with its
-// spelling. Candidates always exist for any parseable guard, so the
-// empty case is defensive, not reachable.
+// `terminates` with no declared rank: the arm guards + declared types
+// are the candidate source — a proved bound `Σc·x <= b` is the rank
+// `b − Σc·x` (strict rows carry the tightened bound). Each candidate
+// faces the same discharge a declared rank does; the first to clear
+// every back-edge wins.
 fn proveTerminatesInferred(
     alloc: std.mem.Allocator,
     items: []const ast.Item,
@@ -220,7 +216,11 @@ fn proveTerminatesInferred(
     if (cands.items.len == 0)
         return .{ .outside = "the arm guards and declared types hold no linear bound to infer a rank from" };
     var first_fail: ?[]const u8 = null;
-    for (cands.items) |cand| {
+    for (cands.items, 0..) |cand, ci| {
+        if (claim_ev_sink) |eb| {
+            eb.cur_cand = ci;
+            eb.terms.append(alloc, .{ .cand = ci, .rank = cand }) catch unreachable;
+        }
         switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, pre.type_rows, cand, subject)) {
             .proven => |n| return .{ .proven = std.fmt.allocPrint(alloc, "inferred rank '{s}' decreases and stays bounded at {d} back-edge{s}", .{ claimsSpellParts(alloc, cand), n, if (n == 1) "" else "s" }) catch unreachable },
             .unproven => |m| {

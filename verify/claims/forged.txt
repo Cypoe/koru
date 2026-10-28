@@ -4,7 +4,12 @@
 [claim-check] site input.k:11 terminates on step declared — rank i
 [claim-check] site input.k:11 terminates on step
 [claim-check] site input.k terminates on step declared
+[claim-check] site input.k :11 terminates on step declared
 [claim-check] site :11 terminates on step declared
-[claim-check] site input.k:x terminates on step declared
 [claim-check] place input.k:11 terminates on step declared
+[claim-term] site input.k:11 cand=0 rank=1*i,x type=-
+[claim-term] site input.k:11 cand=0 rank=1*i type=1*i~>=~0
+[claim-edge] site input.k:11 cand=0 fold=0 edge=0 arm=live case=0 rows=1*i~<~0 sub=i
+[claim-edge] site input.k:11 cand=0 edge=0 arm=live case=0 rows=- sub=-
+[claim-census] claims=1 declared=0 proven=1 unproven=0 outside=0
 [claim-bogus] site input.k:11 terminates on step declared

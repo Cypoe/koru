@@ -215,6 +215,39 @@ leg is serializing the meet rows so the Lean FM engine re-decides the
 judgment itself. Pins: 675_036 armed trip (golden + forged 10-line +
 drift corpora in verify/claims/). 675 range 36/36.*
 
+*Update 2026-10-29i: the FM pre-image is committed — `proven` is
+re-decided, not trusted. The claims pass now commits the solver's
+input, not just its verdict: `[claim-term]` per tried rank candidate
+(`cand`, rank parts, declared-type rows), `[claim-goal]` per honors
+goal, `[claim-head]` per fold's entry-binding rows, and `[claim-edge]`
+per back-edge case (arm premise rows + the jump's rebinding
+substitution), all under `std/witness:enforce`; the census gained
+`edges=<n>`. `ClaimsCheck.lean` grew a faithful port of
+`spec.linear.kz` — `linSubstitute`, `linNormalize`, guard-row
+polarity (incl. the `==`/`!=` non-row reading), integer-tightened
+Fourier–Motzkin under the same fences (>64 rows in, >3 named vars,
+>256 derived rows → `outside`, which is itself a ledger violation).
+It rebuilds the meets (arm premise ∪ declared types ∪ substituted
+types), re-negates the obligations, and re-decides both refutations
+per edge — `proven` then means the committed rows really entail it,
+`unproven` means every committed candidate has a failing check; a
+verdict that disagrees with its own evidence is a ledger violation
+both ways. `declared`/`outside-P` evidence parses but is not re-run
+(no re-decidable judgment). What the checker still cannot see is
+stated in its header: evidence-follows-AST is asserted by the pass —
+the wire's rows mirroring the program's actual arm premises is the
+trusted channel, the judgment downstream of it is not. Two wire
+decisions worth recording: internal `~entry.` names are mangled to
+`entry.` on the wire (`~` is the row separator), and `|`, `;`, `~`
+are structural — names carrying them could not round-trip. Pins:
+675_036 plus enforced arms on the four verdict classes — 675_008
+terminates unproven, 675_009 outside-P, 675_010 honors proven,
+675_012 honors unproven — so every re-decidable branch runs against
+live compiler output. New `tampered.txt` corpus: well-formed lines
+whose evidence cannot entail `proven` (rank `i` under `i↦i+1`),
+rejected in conformance. Gate: golden + real corpora conform, forged
+15/15 rejected, drift + tampered rejected. 675 range 36/36.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

@@ -21,6 +21,10 @@ fi
 if [ $# -eq 0 ]; then
     set -- "$ROOT/tests/regression/600_STDLIB/675_INVARIANTS/675_036_claim_verdicts_ledger/backend.err"
 fi
+# Corpus args resolve against the caller's cwd — absolutize before cd.
+abs=()
+for corpus in "$@"; do abs+=("$(readlink -f "$corpus")"); done
+set -- "${abs[@]}"
 cd "$DIR" || exit 1
 fail=0
 "$LEAN" ClaimsCheck.lean >/dev/null 2>"$DIR/.theorems.err" || fail=1
@@ -44,6 +48,13 @@ done
 # conformance batch — rejection is the expected verdict, never a skip.
 if "$LEAN" --run ClaimsCheck.lean drift.txt >/dev/null 2>&1; then
     echo "FAIL: drift corpus accepted (census unbalanced but passed)"
+    fail=1
+fi
+# Semantic-forgery control: well-formed lines whose committed evidence
+# does not entail the printed `proven` — the FM re-decision must catch
+# what shape-checking alone cannot.
+if "$LEAN" --run ClaimsCheck.lean tampered.txt >/dev/null 2>&1; then
+    echo "FAIL: tampered corpus accepted (evidence does not entail proven)"
     fail=1
 fi
 if [ $fail -eq 0 ]; then echo "claims gate: PASS"; else echo "claims gate: FAIL"; fi

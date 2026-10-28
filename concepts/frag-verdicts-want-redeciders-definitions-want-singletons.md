@@ -92,19 +92,28 @@ again, with the disagreement hidden inside one file.
   `(residue)` arms the renderer can't read just fails the marked test,
   but nothing checks that every emitted flow function got a claim
   (the zip is count-strict per corpus, which is the current guard).
-- The claims-prover's verdicts joined the corpus discipline: under
-  `std/witness:enforce`, `pass-claims-check` now commits one structured
-  `[claim-check]` line per claim (site, atom, subject, verdict, detail)
-  plus a trailing `[claim-census]`, and `verify/claims/ClaimsCheck.lean`
-  re-decides the ledger — closed atom/verdict vocabulary, judged
-  verdicts must carry their detail, one trailing census whose counts
-  equal the emitted lines, byte-identical lines are splice drift. That
-  is deliberately **accounting-level** re-decision: the record's shape
-  and completeness are recomputed, while the linear entailment behind
-  `proven` is not — a well-formed forged `proven` still passes, and the
-  file's header says so. The FM engine is the last piece still
-  solver-and-checker in one; serializing the meet rows is the named
-  next leg, not a patch on this one. `675_036` pins the trip.
+- The claims-prover's verdicts joined the corpus discipline in two
+  legs. First the ledger: under `std/witness:enforce`,
+  `pass-claims-check` commits `[claim-check]` + `[claim-census]` and
+  `verify/claims/ClaimsCheck.lean` re-decides vocabulary, detail
+  discipline, census honesty, and splice drift. Then the judgment
+  itself: the pass now commits the FM **pre-image** — `[claim-term]`
+  per tried candidate, `[claim-goal]`/`[claim-head]`/`[claim-edge]`
+  per honors site (goal, entry rows, per-case arm premises +
+  rebinding substitutions) — and the checker's port of
+  `spec.linear.kz` rebuilds the meets and re-runs integer-tightened
+  Fourier–Motzkin under the same fences. `proven` now means the
+  committed rows entail it; a verdict disagreeing with its own
+  evidence is a violation in both directions. The last piece is
+  genuinely re-decided — but the boundary moved, not vanished:
+  the checker verifies **verdict-follows-evidence**, while
+  **evidence-follows-AST** (that the committed rows mirror the
+  program's real arm premises) is still asserted by the pass — the
+  wire is now the trusted channel, and that is stated in the file
+  header rather than absorbed. Pins: `675_036` plus enforced arms on
+  `675_008`/`675_009`/`675_010`/`675_012` covering every verdict
+  class; `tampered.txt` catches a well-formed-but-unentailed
+  `proven`.
 - The doctrine now spans **command-produced** verdicts. Commands are
   solvers: koru-os's `realize` commits admission/declaration verdicts
   through `emitter_helpers.commitCommandMark` — a validated sink, not a

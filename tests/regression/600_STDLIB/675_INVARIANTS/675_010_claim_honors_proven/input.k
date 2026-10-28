@@ -7,6 +7,7 @@
 
 import std/io
 import std/spec
+import std/witness
 
 tor tick { i: i64, limit: i64 }
 | live { i: i64, limit: i64 }
@@ -17,6 +18,8 @@ tor run { } -> i64
 tick = if(i < limit)
 | then => live { i, limit }
 | else => done i
+
+std/witness:enforce { }
 
 std/spec:claim(atom: honors, on: tick) { "goal": "i <= limit" }
 

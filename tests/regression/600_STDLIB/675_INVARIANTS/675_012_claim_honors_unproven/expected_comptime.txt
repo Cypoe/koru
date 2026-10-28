@@ -1,1 +1,6 @@
-[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:21 honors on tick: unproven — at the 'live' back-edge, the goal may not survive the step
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:24 honors on tick: unproven — at the 'live' back-edge, the goal may not survive the step
+[claim-check] site tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:24 honors on tick unproven — at the 'live' back-edge, the goal may not survive the step
+[claim-goal] site tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:24 goal=1*i~<~1*limit type=-
+[claim-head] site tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:24 fold=0 rows=1*i~<=~0|-1*i~<=~0|1*limit~<=~3|-1*limit~<=~-3
+[claim-edge] site tests/regression/600_STDLIB/675_INVARIANTS/675_012_claim_honors_unproven/input.k:24 cand=0 fold=0 edge=0 arm=live case=0 rows=1*i,-1*limit~<~0 sub=i=1*i,1;limit=1*limit
+[claim-census] claims=1 declared=0 proven=0 unproven=1 outside=0 edges=1

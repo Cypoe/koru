@@ -1,0 +1,142 @@
+// Koru Standard Library: the `claims-evidence` part of compiler.kz.
+// Joined via `~part claims-evidence` in compiler.kz; merged into the
+// compiler module at load — `std`, `spec` and `ArmMeet`-adjacent types
+// are shared by the other claims parts.
+//
+// Claim-verdict evidence: under `std/witness:enforce` the prover's FM
+// INPUT is committed as `[claim-*]` lines so
+// `verify/claims/ClaimsCheck.lean` can re-decide the judgment — not just
+// the ledger's shape. What is committed is the pre-image: the rank or
+// goal, the declared `&`-type rows, each back-edge's arm-premise rows
+// plus its rebinding substitution, and each fold head's entry-binding
+// rows. The checker rebuilds meets, re-substitutes, re-negates and
+// re-runs the integer FM engine — a forged `proven` then fails because
+// the committed rows cannot entail it.
+//
+// Wire shapes (space-separated; `~` inside a row or goal separates
+// terms/op/bound, `|` joins rows, `;` joins subs, `,` joins terms):
+//
+//   [claim-term] site <file>:<line> cand=<k> rank=<parts> type=<rows>
+//   [claim-goal] site <file>:<line> goal=<lhs>~<op>~<rhs> type=<rows>
+//   [claim-head] site <file>:<line> fold=<i> rows=<rows>
+//   [claim-edge] site <file>:<line> cand=<k> fold=<f> edge=<i> arm=<arm> case=<c> rows=<rows> sub=<subs>
+//   [claim-census] claims=<n> declared=<d> proven=<p> unproven=<u> outside=<o> edges=<e>
+//
+// `-` spells an empty list. `cand` distinguishes inferred-rank tries —
+// the verdict's winning candidate and every refuted one are all
+// committed, so `unproven` is re-decidable too (every cand must fail).
+
+const TermEv = struct { cand: usize, rank: []const spec.LinPart };
+const GoalEv = struct { lhs: []const spec.LinPart, op: []const u8, rhs: []const spec.LinPart };
+const HeadEv = struct { fold: usize, rows: []const spec.LinRow };
+const EdgeEv = struct {
+    cand: usize,
+    fold: usize,
+    edge: usize,
+    arm: []const u8,
+    case: usize,
+    rows: []const spec.LinRow,
+    subs: []const spec.LinSub,
+};
+
+// The per-claim buffer the prover parts fill through the module sink.
+// `cur_cand`/`cur_fold` track which try/fold an edge line belongs to —
+// the candidate loop and fold loop set them before descending.
+const ClaimEvidence = struct {
+    terms: std.ArrayListUnmanaged(TermEv) = .{},
+    goal: ?GoalEv = null,
+    heads: std.ArrayListUnmanaged(HeadEv) = .{},
+    edges: std.ArrayListUnmanaged(EdgeEv) = .{},
+    type_rows: []const spec.LinRow = &.{},
+    cur_cand: usize = 0,
+    cur_fold: usize = 0,
+};
+
+// The sink is module state, not a parameter: the prover parts publish
+// through it only when the pass arms it (enforce), so the non-enforced
+// path pays nothing and signatures stay narrow.
+var claim_ev_sink: ?*ClaimEvidence = null;
+
+fn evEdge(alloc: std.mem.Allocator, eb: *ClaimEvidence, e: EdgeEv) void {
+    eb.edges.append(alloc, e) catch unreachable;
+}
+
+// `1*limit,-1*i` — coef*name / bare const, comma-joined. `-` when empty.
+fn claimsWireParts(alloc: std.mem.Allocator, parts: []const spec.LinPart) []const u8 {
+    if (parts.len == 0) return "-";
+    var out = std.ArrayList(u8).initCapacity(alloc, parts.len * 8) catch unreachable;
+    for (parts, 0..) |p, i| {
+        if (i > 0) out.append(alloc, ',') catch unreachable;
+        // `~`-prefixed names are evidence-internal (~entry.* prefixes on
+        // fold-head bindings); `~` is the row separator, so they spell
+        // without it — to FM the name is opaque either way.
+        const s = if (p.name) |n|
+            std.fmt.allocPrint(alloc, "{d}*{s}", .{ p.coef, if (n[0] == '~') n[1..] else n }) catch unreachable
+        else
+            std.fmt.allocPrint(alloc, "{d}", .{p.coef}) catch unreachable;
+        out.appendSlice(alloc, s) catch unreachable;
+    }
+    return out.toOwnedSlice(alloc) catch unreachable;
+}
+
+// `1*i,-1*limit~<~0` — terms~op~bound; `~<=~` spells a const-only row.
+fn claimsWireRow(alloc: std.mem.Allocator, r: spec.LinRow) []const u8 {
+    var lhs = std.ArrayListUnmanaged(spec.LinPart){};
+    for (r.terms) |t|
+        lhs.append(alloc, .{ .coef = t.coef, .name = t.name }) catch unreachable;
+    return std.fmt.allocPrint(alloc, "{s}~{s}~{d}", .{
+        claimsWireParts(alloc, lhs.items),
+        if (r.strict) "<" else "<=",
+        r.bound,
+    }) catch unreachable;
+}
+
+fn claimsWireRows(alloc: std.mem.Allocator, rows: []const spec.LinRow) []const u8 {
+    if (rows.len == 0) return "-";
+    var out = std.ArrayList(u8).initCapacity(alloc, rows.len * 16) catch unreachable;
+    for (rows, 0..) |r, i| {
+        if (i > 0) out.append(alloc, '|') catch unreachable;
+        out.appendSlice(alloc, claimsWireRow(alloc, r)) catch unreachable;
+    }
+    return out.toOwnedSlice(alloc) catch unreachable;
+}
+
+// `i=1*i,1;limit=1*limit` — name=parts joined by `;`. `-` when empty.
+fn claimsWireSubs(alloc: std.mem.Allocator, subs: []const spec.LinSub) []const u8 {
+    if (subs.len == 0) return "-";
+    var out = std.ArrayList(u8).initCapacity(alloc, subs.len * 16) catch unreachable;
+    for (subs, 0..) |s, i| {
+        if (i > 0) out.append(alloc, ';') catch unreachable;
+        const sp = std.fmt.allocPrint(alloc, "{s}={s}", .{ s.name, claimsWireParts(alloc, s.expr) }) catch unreachable;
+        out.appendSlice(alloc, sp) catch unreachable;
+    }
+    return out.toOwnedSlice(alloc) catch unreachable;
+}
+
+// Emit one claim's committed evidence — the FM pre-image, in prover
+// order: rank/goal declaration, fold-head bases, edge-case premises.
+fn claimsEvEmit(alloc: std.mem.Allocator, file: []const u8, line: usize, eb: *const ClaimEvidence) void {
+    const type_sp = claimsWireRows(alloc, eb.type_rows);
+    for (eb.terms.items) |t| {
+        std.debug.print("[claim-term] site {s}:{d} cand={d} rank={s} type={s}\n", .{
+            file, line, t.cand, claimsWireParts(alloc, t.rank), type_sp,
+        });
+    }
+    if (eb.goal) |g| {
+        std.debug.print("[claim-goal] site {s}:{d} goal={s}~{s}~{s} type={s}\n", .{
+            file, line, claimsWireParts(alloc, g.lhs), g.op, claimsWireParts(alloc, g.rhs), type_sp,
+        });
+    }
+    for (eb.heads.items) |h| {
+        std.debug.print("[claim-head] site {s}:{d} fold={d} rows={s}\n", .{
+            file, line, h.fold, claimsWireRows(alloc, h.rows),
+        });
+    }
+    for (eb.edges.items) |e| {
+        std.debug.print("[claim-edge] site {s}:{d} cand={d} fold={d} edge={d} arm={s} case={d} rows={s} sub={s}\n", .{
+            file,           line,          e.cand,        e.fold, e.edge,
+            e.arm,          e.case,        claimsWireRows(alloc, e.rows),
+            claimsWireSubs(alloc, e.subs),
+        });
+    }
+}

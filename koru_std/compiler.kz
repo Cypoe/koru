@@ -1598,12 +1598,12 @@ const emitFlowWithMocks = struct {
 | failed { ctx: CompilerContext, message: string }
 
 ~part witness
-
 ~part claims
 ~part claims-guard
 ~part claims-dispatch
 ~part claims-prover
 ~part claims-rank
+~part claims-evidence
 
 // Semantic phantom type checking - validates type-state compatibility using
 // the default Koru semantic checker (module-qualified phantom states)

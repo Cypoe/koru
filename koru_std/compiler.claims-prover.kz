@@ -410,6 +410,10 @@ fn proveTerminates(
         .verdict => |v| return v,
         .ok => |p| p,
     };
+    if (claim_ev_sink) |eb| {
+        eb.cur_cand = 0;
+        eb.terms.append(alloc, .{ .cand = 0, .rank = rank_parts }) catch unreachable;
+    }
     return switch (claimsRankTry(alloc, pre.arm_meets.items, pre.folds.items, fields, pre.type_rows, rank_parts, subject)) {
         .proven => |n| .{ .proven = std.fmt.allocPrint(alloc, "rank decreases and stays bounded at {d} back-edge{s}", .{ n, if (n == 1) "" else "s" }) catch unreachable },
         .unproven => |m| .{ .unproven = m },
@@ -473,10 +477,12 @@ fn proveHonors(
 
     // The inductive hypothesis: the goal as rows over current fields.
     const ih_rows = claimsGuardRows(alloc, glhs, grhs, gop, false, "goal");
+    if (claim_ev_sink) |eb| eb.goal = .{ .lhs = glhs, .op = gop, .rhs = grhs };
 
     var nedges: usize = 0;
-    for (folds.items) |fl| {
+    for (folds.items, 0..) |fl, fi| {
         const label = fl.pre_label.?;
+        if (claim_ev_sink) |eb| eb.cur_fold = fi;
 
         // Base: the head's entry bindings as equalities. Caller-scope
         // names are prefixed `~entry.` — free variables FM may only
@@ -500,6 +506,7 @@ fn proveHonors(
             base.append(alloc, spec.linNormalize(alloc, &fpart, renamed.items, false, "entry binding")) catch unreachable;
             base.append(alloc, spec.linNormalize(alloc, renamed.items, &fpart, false, "entry binding")) catch unreachable;
         }
+        if (claim_ev_sink) |eb| eb.heads.append(alloc, .{ .fold = fi, .rows = base.items }) catch unreachable;
         // Declared types are premises at the head too — `i & >=0` pins
         // what an open entry binding cannot.
         for (type_rows) |r| base.append(alloc, r) catch unreachable;
@@ -515,7 +522,7 @@ fn proveHonors(
         if (nested)
             return .{ .outside = "a back-edge sits inside a nested dispatch — the inner call's contract is not modeled" };
 
-        for (edges.items) |e| {
+        for (edges.items, 0..) |e, ei| {
             nedges += 1;
             const binding = e.binding orelse
                 return .{ .outside = std.fmt.allocPrint(alloc, "the '{s}' back-edge binds no payload", .{e.arm}) catch unreachable };
@@ -562,8 +569,11 @@ fn proveHonors(
             const slhs = spec.linSubstitute(alloc, glhs, subs.items);
             const srhs = spec.linSubstitute(alloc, grhs, subs.items);
             const sub_type = claimsSubRows(alloc, type_rows, subs.items);
+            var case_n: usize = 0;
             for (arm_meets.items) |*am| {
                 if (!std.mem.eql(u8, am.arm, e.arm)) continue;
+                if (claim_ev_sink) |eb| evEdge(alloc, eb, .{ .cand = eb.cur_cand, .fold = fi, .edge = ei, .arm = e.arm, .case = case_n, .rows = am.rows.items, .subs = subs.items });
+                case_n += 1;
                 var meet = std.ArrayListUnmanaged(spec.LinRow){};
                 for (ih_rows) |r| meet.append(alloc, r) catch unreachable;
                 for (am.rows.items) |r| meet.append(alloc, r) catch unreachable;

@@ -1,1 +1,5 @@
-[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:22 terminates on tick: unproven — at the 'live' back-edge, the rank may not strictly decrease
+[claim] tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:25 terminates on tick: unproven — at the 'live' back-edge, the rank may not strictly decrease
+[claim-check] site tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:25 terminates on tick unproven — at the 'live' back-edge, the rank may not strictly decrease
+[claim-term] site tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:25 cand=0 rank=1*i type=-
+[claim-edge] site tests/regression/600_STDLIB/675_INVARIANTS/675_008_claim_unproven_rank_stagnates/input.k:25 cand=0 fold=0 edge=0 arm=live case=0 rows=1*i,-1*limit~<~0 sub=i=1*i,1;limit=1*limit
+[claim-census] claims=1 declared=0 proven=0 unproven=1 outside=0 edges=1
