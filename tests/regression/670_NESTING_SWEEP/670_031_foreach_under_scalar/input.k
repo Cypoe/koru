@@ -5,5 +5,5 @@ import std/io
 import std/args
 
 std/args:count(): _ |> for(0..3)
-    ! each _ |> _
+    ! each i |> std/io:print.ln("{{ i:d }}")
     | done |> std/io:print.ln("done")

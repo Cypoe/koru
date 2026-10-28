@@ -117,7 +117,8 @@ const std = @import("std");
 //   to remember there were two homes for it. Lars caught it; converging is the
 //   concept's own prescription.
 ~[keyword]pub tor for { expr: Expression, keep: ?Expression }
-! each *
+! ?each *
+! ?reverse-each *
 ! ?else *
 | ?done
 

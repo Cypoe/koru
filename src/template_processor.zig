@@ -1270,13 +1270,11 @@ pub fn renderTemplateInvocation(
     // afford an N-deep buffer. Empty strings for any other expr shape.
     var par_lo: []const u8 = "";
     var par_hi: []const u8 = "";
-    if (parallel_text.len > 0) {
-        if (ctx.get("expr")) |v| {
-            if (v == .string) {
-                if (splitRangeExpr(v.string)) |r| {
-                    par_lo = r.lo;
-                    par_hi = r.hi;
-                }
+    if (ctx.get("expr")) |v| {
+        if (v == .string) {
+            if (splitRangeExpr(v.string)) |r| {
+                par_lo = r.lo;
+                par_hi = r.hi;
             }
         }
     }

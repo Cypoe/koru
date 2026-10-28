@@ -1,5 +1,5 @@
 ~[template]proc for|zig {
-    {% if __parallel != "" %}{
+    {% if __parallel != "" %}{% if effects["reverse-each"] %}{% comp error %}[parallel]for: `! reverse-each` is not lowered on the parallel path — drop [parallel] or use `! each`{% endcomp %}{% endif %}{
         // [parallel]for — split the iteration space, spawn one thread per
         // chunk, fold each serially, join. Ranges (`lo..hi`) split
         // arithmetically; anything else materializes into a stack buffer
@@ -108,10 +108,33 @@
         }
         {% endif %}
     }
+    {% else %}{% if effects["each"] %}{% if effects["reverse-each"] %}{% comp error %}for: `! each` and `! reverse-each` cannot both attach to one call — pick an axis (a single call is a single traversal){% endcomp %}
     {% else %}for ({{ expr }}) |__koru_item{{ __site }}| {
         {% if keep != "" %}if (!({{ keep }})) break;
         {% endif %}{% for h in effects["each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
         {% endfor %}{% for h in effects["else"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});{% endfor %}
     }
-    {% endif %}{{ continuations["done"].continue }}
+    {% endif %}{% else %}{% if effects["reverse-each"] %}{% if __range_lo != "" %}{
+        const __koru_rev_lo{{ __site }}: usize = {{ __range_lo }};
+        const __koru_rev_hi{{ __site }}: usize = {{ __range_hi }};
+        for (0..__koru_rev_hi{{ __site }} - __koru_rev_lo{{ __site }}) |__koru_rev_i{{ __site }}| {
+            const __koru_item{{ __site }} = __koru_rev_hi{{ __site }} - 1 - __koru_rev_i{{ __site }};
+            {% if keep != "" %}if (!({{ keep }})) break;
+            {% endif %}{% for h in effects["reverse-each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+            {% endfor %}
+        }
+    }
+    {% else %}{
+        const __koru_rev_items{{ __site }} = {{ expr }};
+        var __koru_rev_i{{ __site }}: usize = __koru_rev_items{{ __site }}.len;
+        while (__koru_rev_i{{ __site }} > 0) {
+            __koru_rev_i{{ __site }} -= 1;
+            const __koru_item{{ __site }} = __koru_rev_items{{ __site }}[__koru_rev_i{{ __site }}];
+            {% if keep != "" %}if (!({{ keep }})) break;
+            {% endif %}{% for h in effects["reverse-each"] %}{{ h.inlined_link[scope] }}(__koru_item{{ __site }});
+            {% endfor %}
+        }
+    }
+    {% endif %}{% else %}{% comp error %}for: no delivery arm attached — `! each` or `! reverse-each` must receive the traversal (a `for` that delivers to nobody is a loop to nothing){% endcomp %}
+    {% endif %}{% endif %}{% endif %}{{ continuations["done"].continue }}
 }

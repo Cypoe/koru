@@ -113,3 +113,11 @@ members=1066
 # (clusters #1/#4), trellis.kz + fmt/io.blk twin var-decls (#2/#3),
 # store.qtail/grid.walk/grid.for catch idioms (#5). Re-pinned to
 # measured; fold targets unchanged.
+# Re-pinned 2026-10-28 in "for: add `! reverse-each`": clusters fall
+# 1179 -> 1177 while members rise 1066 -> 1069 (+3) — committed drift
+# under rolls that missed (store.new catch shells lead the board as
+# documented). control.for.kz's synthetic stays unparseable both
+# sides of this diff (37 -> 39 errors — nested template arms; it was
+# already in the escaped set, so its host text never counted).
+clusters=1177
+members=1069

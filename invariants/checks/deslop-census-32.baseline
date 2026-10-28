@@ -260,3 +260,11 @@ members=2463
 # this tree: 1965/2529.
 clusters=1965
 members=2529
+# Re-pinned in "for: add `! reverse-each`": the roll fired on +6
+# clusters / +14 members accumulated between rolls — parser.zig's kmd
+# and midline-arm landings (test_decl clones, errdefer line shapes)
+# committed under rolls that missed; this commit stages zero src/
+# files (koru_std + tests only). Census re-measured on this tree:
+# 1971/2543.
+clusters=1971
+members=2543
