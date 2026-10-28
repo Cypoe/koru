@@ -37,9 +37,12 @@ it is silence. The widening is pure premise construction: every consumer
 (arm meets, produce contracts, honors steps, rank candidates) inherits
 it at once because they all draw from the same `claimsArmMeets` reading.
 
-Open edge: `&&`/`||` are read identically to `and`/`or` in the fence,
-but emission passes guard text through verbatim and Zig refuses `&&` —
-a `&&` program can earn a claim verdict and still fail codegen. That is
-an emitter-honesty gap in the guard's own lowering, not a claims
-question; the same leak exists today for `&` (bitwise surface chained
-on comparisons).
+The emit-door half of the same story, landed a day later: `&&`/`||`
+are Koru spellings Zig cannot eat, and the lowering door
+(`rewriteZigExpr`'s keyword-binop level) now respells them to
+`and`/`or` with the author's spacing riding — a `&&` program earns its
+claim verdict AND compiles. What remains raw passthrough: `&` is not a
+Koru operator at all (nothing in `expression_parser` owns it), so
+`j > 0 & i > 0` still reaches Zig verbatim and fails *loudly* — a
+backend diagnostic, never silent divergence; whether bitwise surface
+deserves a real grammar level is a later ruling.

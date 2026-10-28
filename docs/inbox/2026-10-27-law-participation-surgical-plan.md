@@ -136,6 +136,17 @@ Pins: 675_024 conjunct pair discharges rank `i + j` (needs BOTH rows),
 connectives outside-P, 675_027 nested-or piece outside-P. 675 range
 27/27, blast radius 64/64 + 690_3 armed.*
 
+*Update 2026-10-29d: the emit-door half of the connective story. The
+Zig lowering (rewriteZigExpr keyword-binop level) respelled nothing —
+the symbol forms `&&`/`||` spliced source bytes verbatim, so a `&&`
+guard earned a claim verdict and then failed codegen. The level now
+respells symbol -> keyword with the author's spacing riding, and the
+trigger scan admits `&&`/`||`. `&` measured differently: it is not a
+Koru operator (no grammar owns it) — raw passthrough that Zig rejects
+loudly when chained on comparisons, a diagnostic not a divergence;
+left alone. Pin: 675_028 `&&` guard proves rank `i + j` AND compiles.
+675 range 28/28, unit tests green, 310 armed.*
+
 The transcript's conclusion, restated as work: koru's missing piece for a
 law-proving surface is not a prover — it is a **leaf refutation with a
 home**. `std/refine`'s fold already is a confluent meet with loud

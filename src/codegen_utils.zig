@@ -3157,6 +3157,9 @@ const ZigExprParser = struct {
     /// A left-associative keyword/symbol binary-op level: `l op r op r …`
     /// where `op` reads as either the host keyword (`or`, `and`) or its
     /// C-style symbol (`||`, `&&`). `next` parses the tighter level.
+    /// The symbol form is a Koru spelling Zig cannot eat — `a && b` is
+    /// ambiguous to Zig's parser — so it respells to the keyword with the
+    /// author's own spacing riding around it.
     fn parseKeywordBinOp(
         self: *ZigExprParser,
         comptime keyword: []const u8,
@@ -3166,13 +3169,27 @@ const ZigExprParser = struct {
         var left = try next(self);
         while (true) {
             self.skipWs();
+            const op_start = self.pos;
+            var symbol_form = false;
             if (self.atKeyword(keyword)) {
                 self.pos += keyword.len;
             } else if (self.pos + 1 < self.text.len and std.mem.eql(u8, self.text[self.pos .. self.pos + 2], symbol)) {
                 self.pos += symbol.len;
+                symbol_form = true;
             } else break;
             const right = try next(self);
-            left = try self.combine(left, right);
+            if (symbol_form) {
+                const joined = std.fmt.allocPrint(self.allocator, "{s}{s}{s}{s}{s}", .{
+                    left.text,
+                    self.text[left.end..op_start],
+                    keyword,
+                    self.text[op_start + symbol.len .. right.start],
+                    right.text,
+                }) catch return ZigExprError.OutOfMemory;
+                left = .{ .text = joined, .start = left.start, .end = right.end, .is_string_lit = false, .changed = true };
+            } else {
+                left = try self.combine(left, right);
+            }
         }
         return left;
     }
@@ -3741,6 +3758,8 @@ fn zigExprMayRewrite(text: []const u8) bool {
     if (std.mem.indexOfScalar(u8, text, '%') != null or
         std.mem.indexOf(u8, text, "==") != null or
         std.mem.indexOf(u8, text, "!=") != null or
+        std.mem.indexOf(u8, text, "&&") != null or
+        std.mem.indexOf(u8, text, "||") != null or
         std.mem.indexOf(u8, text, "@intCast") != null) return true;
     return hasNonZigFieldName(text);
 }
@@ -3833,6 +3852,26 @@ test "string equality: numeric comparisons are untouched (null)" {
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "acc.floor == -1 and acc.pos == 0"));
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "c == '('"));
     try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "pv == 0"));
+}
+
+test "logical symbols respell to host keywords" {
+    const a = (try rewriteZigExpr(std.testing.allocator, "i > 0 && j < 3")).?;
+    defer std.testing.allocator.free(a);
+    try std.testing.expectEqualStrings("i > 0 and j < 3", a);
+    const o = (try rewriteZigExpr(std.testing.allocator, "i <= 0 || i >= limit")).?;
+    defer std.testing.allocator.free(o);
+    try std.testing.expectEqualStrings("i <= 0 or i >= limit", o);
+    const m = (try rewriteZigExpr(std.testing.allocator, "a && b || c")).?;
+    defer std.testing.allocator.free(m);
+    try std.testing.expectEqualStrings("a and b or c", m);
+    // Mixed spellings normalize only the symbol; keyword gaps keep their bytes.
+    const k = (try rewriteZigExpr(std.testing.allocator, "a && b  and  c")).?;
+    defer std.testing.allocator.free(k);
+    try std.testing.expectEqualStrings("a and b  and  c", k);
+    // A lone `|`/`&` is not a connective — bitwise surface passes through.
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "x | y & z"));
+    // `&&` inside a string literal is not an operator.
+    try std.testing.expectEqual(@as(?[]const u8, null), try rewriteZigExpr(std.testing.allocator, "\"a && b\""));
 }
 
 test "string equality: an == inside a string literal does not fire" {

@@ -1,0 +1,12 @@
+name: emitter-honesty
+kind: inferred
+shape: categorical
+face: in
+membrane: false
+note: the emitted text does not mean what the source spelled — the
+  compiler produced output the backend either refuses or would read
+  differently. Fires when a lowering door stops passing source bytes
+  through verbatim and starts respelling them (e.g. `&&`/`||` -> Zig's
+  `and`/`or`), closing the gap between "accepted surface" and "compiles
+  to the same thing". Cousin of toolchain-soundness: that one is
+  compile-clean-then-misbehaves; this one is source-valid-then-emit-lies.
