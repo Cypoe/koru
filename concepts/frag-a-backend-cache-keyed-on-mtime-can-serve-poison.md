@@ -6,6 +6,7 @@ ts: 2026-08-15
 evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the per-invocation generated compiler_env.zig; --lang=js backend served to zig builds (koru b90be9be → main.zig backendCacheKey fix)
 evolved: 2026-10-05 — Fail 3: the key cannot see the koruc binary's own embedded backend template; a stale generator keys correct, poisons completely (K# vertical, cs stage-D)
 evolved: 2026-10-11 — Fail 3 struck again: a pre-overlay koruc cached a stale-template backend under a current-src key; every later build's emitted program silently linked stock zig std. Fixed by hashing the emitted backend.zig + build_backend.zig into the key
+evolved: 2026-10-28 — Fail 4, the axis outside the tree: the toolchain itself. The key is complete over source and blind over environment — a backend linked against nix-glibc-2.44 (zig's cc-probe found ~/.nix-profile/bin/cc first) cached and re-served to a glibc-2.31 host; every board test failed backend-exec. Filed as the toolchain-env-cache-poison challenge
 ---
 
 # A backend binary cache can serve a poisoned kernel (belief)
@@ -72,6 +73,23 @@ fix is the simpler form of the self-hash idea: hash the emitted
 text IS the template's rendered bytes — keying on it captures emitter
 version by construction, so a stale generator can only ever mint a key a
 fresh one never looks up.
+
+**Fail 4 — the environment is an input too (2026-10-28, WSL fleet
+worktree).** Every test on a board failed `backend-exec`: the produced
+backend required `__libc_start_main@GLIBC_2.34` on a glibc-2.31 host. Zig's
+native libc detection probes `cc` on PATH; `~/.nix-profile/bin/cc` resolves
+into nix glibc 2.44, so natively-built backends link nix crt objects
+(`GCC: (GNU) 16.2.0` in `.comment`) and cannot exec. Three key-coverage
+fixes had all looked inward — at what the binary *embeds* — and the key was
+complete over every one of those inputs. The miss this time is what the
+binary is *linked against*: the key carries nothing of the toolchain that
+produced it, so a binary from a misdetected-cc environment caches and
+re-serves to hosts that cannot run it, and zig's own artifact store under a
+shared `ZIG_LOCAL_CACHE_DIR` does the same one level down. Same signature
+as the other three: a compiler failing on unmodified input, attributable
+to nothing in the tree — this time attributable to nothing in *PATH order*
+either, unless you know to ask which `cc` zig asked. No fix landed; filed
+as a standing challenge (toolchain-env-cache-poison).
 
 The discipline that catches all three, retroactively: **enumerate what the
 binary actually embeds — every file the compilation unit imports, every file

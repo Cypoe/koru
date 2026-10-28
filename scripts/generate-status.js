@@ -51,8 +51,20 @@ async function readFirstLine(path) {
 // ---------------------------------------------------------------------------
 
 async function loadFromSnapshot() {
-	const raw = await readFile(SNAPSHOT_PATH, 'utf-8');
-	const snap = JSON.parse(raw);
+	let raw = await readFile(SNAPSHOT_PATH, 'utf-8');
+	let snap;
+	try {
+		snap = JSON.parse(raw);
+	} catch {
+		// On filesystems that cannot store symlinks (drvfs under WSL) the
+		// latest.json symlink materializes as a plain file holding the target
+		// filename — resolve it one hop, same directory. A bare basename only;
+		// anything else is a real JSON error and deserves to throw.
+		const target = raw.trim();
+		if (!/^[\w.-]+\.json$/.test(target)) throw new SyntaxError('latest.json is not valid JSON');
+		raw = await readFile(join(dirname(SNAPSHOT_PATH), target), 'utf-8');
+		snap = JSON.parse(raw);
+	}
 	const { summary, categories, timestamp, gitCommit } = snap;
 
 	// Backfill inScope for older snapshots written before the field existed.
@@ -216,7 +228,14 @@ async function generateStatus() {
 	try {
 		let data;
 		if (!forceFilesystem && await fileExists(SNAPSHOT_PATH)) {
-			data = await loadFromSnapshot();
+			try {
+				data = await loadFromSnapshot();
+			} catch {
+				// An unreadable snapshot (dangling link target, partial write)
+				// must not hard-fail status — the markers on disk are the same
+				// source of truth the snapshot was saved from.
+				data = await loadFromFilesystem();
+			}
 		} else {
 			data = await loadFromFilesystem();
 		}
