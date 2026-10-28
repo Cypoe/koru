@@ -3,6 +3,7 @@ type: belief
 id: frag-no-verdict-must-not-fold-into-verdict-was-no
 provenance: the .kz→.k migration gate, 2026-08-09. It enumerated 38 candidates, handed only 33 to the runner because its filter was built from a leading `NNN_NNN` that five directory names do not have, and reported those five as "no marker — never ran". A two-state gate would have counted them as "stays .kz" and printed a smaller, healthier backlog
 ts: 2026-08-09
+evolved: 2026-10-28 — new instance species: the zero-byte TODO marker — a sideline bucket that holds nothing and still counts (020_067, 030_017, 400_195 un-silenced to red)
 ---
 
 # A backlog is only a backlog if the gate can say "I did not judge this"
@@ -60,6 +61,16 @@ strangles the input before the window check runs. The oracle (gate.py) reports
 UNJUDGED and blocks; the port reports clean and exits 0. Same law, one layer
 down: not only must the gate distinguish "never judged" from "judged no" — it
 must distinguish "the state never arrived" from "the state was empty."
+
+2026-10-28 instance, a different silence species (challenge 016 replay): three
+test dirs carried a TODO marker that was **zero bytes** — sidelined, counted in
+the denominator's exclusion, carrying no reason at all (020_067, 030_017,
+400_195). The marker existed, so no scanner row read "never ran"; the reason
+field folded into silence instead. Measured, all three pin live defects — two
+stage-D emitter bugs and a silently-dropped arm — so the state the marker
+asserted ("deferred, unrun") was wrong in fact: each is a red the board was not
+reporting. Empty-marker is the smallest member of the family: not "no verdict
+bucket", but a bucket that holds nothing and still counts.
 
 **What would correct this:** a case where the third bucket is noise — where
 "never ran" is routine and expected, and forcing the gate to fail on it trains
