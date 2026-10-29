@@ -6232,7 +6232,8 @@ pub fn emitInlineBodyNode(
             // Site-unique name: nested or sibling inline-effect sites each
             // synthesize a struct in the same Zig scope — a fixed `Handlers_0`
             // shadows the outer one and Zig rejects the redeclaration.
-            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{result_counter.*});
+            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{ctx.capture_counter})
+            ; ctx.capture_counter += 1;
             defer ctx.allocator.free(hname);
             result_counter.* += 1;
             try emitHandlersStruct(emitter, ctx, hname, inline_effect_conts.items, ed);
@@ -6588,7 +6589,14 @@ pub fn emitFlow(
     defer if (handlers_name_owned) |h| ctx.allocator.free(h);
     if (event_has_effect_branch and inline_elig == null) {
         if (event_decl_for_partition) |ed| {
-            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{result_counter});
+            // result_counter is flow-local — reused across flows — but
+            // Handlers_N names land in main_module at module scope, so two
+            // pump sites in different flows collide (koice: host.run's
+            // hotkey arm vs a nested frames arm both emitted
+            // __HandlersCaps_4). capture_counter is the module-unique
+            // counter, same role as capture type names.
+            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{ctx.capture_counter});
+            ctx.capture_counter += 1;
             handlers_name_owned = hname;
             try emitHandlersStruct(emitter, ctx, hname, effect_conts_buf.items, ed);
             ctx.pending_handlers_name = hname;
@@ -12046,7 +12054,8 @@ pub fn emitContinuationBody(
             // inline splice cannot express a resume value), so the Handlers path
             // is the only one — the same net as emitFlow's `inline_elig == null`
             // branch. The struct must be declared BEFORE the seed call below.
-            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{result_counter.*});
+            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{ctx.capture_counter})
+            ; ctx.capture_counter += 1;
             fold_handlers_name_owned = hname;
             try emitHandlersStruct(emitter, ctx, hname, fold_effect_buf.items, event_decl.?);
             ctx.pending_handlers_name = hname;
@@ -12244,7 +12253,8 @@ pub fn emitContinuationBody(
                         }
                         nested_inline_elig = inlineEffectfulEligibility(ctx, &maybe_step.invocation, cont.continuations);
                         if (nested_inline_elig == null) {
-                            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{result_counter.*});
+                            const hname = try std.fmt.allocPrint(ctx.allocator, "Handlers_{d}", .{ctx.capture_counter})
+            ; ctx.capture_counter += 1;
                             nested_handlers_name_owned = hname;
                             try emitHandlersStruct(emitter, ctx, hname, nested_effect_buf.items, ed);
                             ctx.pending_handlers_name = hname;
