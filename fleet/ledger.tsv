@@ -611,3 +611,5 @@ main:027_the_auditors_audit.md	running	Cypoe/challenge-027-the-auditors-audit	20
 main:027_the_auditors_audit.md	failed	Cypoe/challenge-027-the-auditors-audit	2026-10-29T10:16:55+01:00	no result file
 main:028_the_friction_corpus.md	running	Cypoe/challenge-028-the-friction-corpus	2026-10-29T10:18:09+01:00	started
 main:028_the_friction_corpus.md	failed	Cypoe/challenge-028-the-friction-corpus	2026-10-29T10:43:48+01:00	no result file
+main:029_the_host_leak_audit.md	running	Cypoe/challenge-029-the-host-leak-audit	2026-10-29T10:45:01+01:00	started
+main:029_the_host_leak_audit.md	done	Cypoe/challenge-029-the-host-leak-audit	2026-10-29T11:37:05+01:00	Landed the :d:N hoist — decimalPadWidth + {f
