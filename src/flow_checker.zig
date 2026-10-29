@@ -2143,6 +2143,12 @@ pub const FlowChecker = struct {
                 try self.checkMemberKebab(v, i, name, location, scope, bound, member_ctx);
             }
             if (is_ref) {
+                // `{ a-b: v }` field-name positions (and `a-b:` named args)
+                // are declarations, not references — a name followed by ':'
+                // never reads a binding, for KORU108 and KORU181 alike.
+                var k = end;
+                while (k < v.len and (v[k] == ' ' or v[k] == '\t')) k += 1;
+                const name_position = k < v.len and v[k] == ':';
                 if (bound.get(name)) |site| {
                     var in_scope = false;
                     for (scope) |s| {
@@ -2151,7 +2157,7 @@ pub const FlowChecker = struct {
                             break;
                         }
                     }
-                    if (!in_scope) {
+                    if (!in_scope and !name_position) {
                         const bindtext = if (site.glyph == ':')
                             try std.fmt.allocPrint(self.allocator, ": {s}", .{site.name})
                         else
@@ -2172,11 +2178,7 @@ pub const FlowChecker = struct {
                     // `-` is a name glyph, so `a-b` is one identifier, not
                     // subtraction. When the whole name binds nothing but
                     // every `-`-segment resolves, the author almost surely
-                    // meant `a - b`. `{ a-b: v }` field-name positions (and
-                    // `a-b:` named args) are declarations, not references.
-                    var k = end;
-                    while (k < v.len and (v[k] == ' ' or v[k] == '\t')) k += 1;
-                    const name_position = k < v.len and v[k] == ':';
+                    // meant `a - b`.
                     var in_scope = false;
                     for (scope) |s| {
                         if (std.mem.eql(u8, s, name)) {

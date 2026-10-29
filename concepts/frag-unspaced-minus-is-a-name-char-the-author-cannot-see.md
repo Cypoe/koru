@@ -98,6 +98,15 @@ not a grammar fork:
   Pinned green-and-documented in 220_055, explicitly framed as the
   tripwire: opening captured args flips it red until repinned as a
   MUST_ERROR twin of 220_054.
+- **The name-position exemption now covers KORU108 too.** The widened
+  scan that carried KORU181 swept record-literal field names into the
+  unbound-*reference* check as well: `-> { h: h2, n: 7 }` on an `| ok`
+  arm fired KORU108 blaming the sibling arm's `| err n` binding — a
+  declaration position read as a use, masking the pinned KORU030
+  underneath (330_142 red 2026-10-22→29). `name_position` now gates both
+  diagnostics from one computation in `checkNameTokenScan`: a name
+  followed by `:` is a label, never a reference. A pun `{ n }` still
+  scans — it is a value read, and refusing it off-path is correct.
 
 Related:
 [[frag-every-name-writing-site-must-mangle]] — the same kebab glyph seen
