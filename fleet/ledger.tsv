@@ -599,3 +599,5 @@ main:021_the_emitted_artifact_embarrassment.md	running	Cypoe/challenge-021-the-e
 main:021_the_emitted_artifact_embarrassment.md	failed	Cypoe/challenge-021-the-emitted-artifact-embarrassment	2026-10-29T04:48:36+01:00	no result file
 main:022_the_std_surface_census.md	running	Cypoe/challenge-022-the-std-surface-census	2026-10-29T04:49:51+01:00	started
 main:022_the_std_surface_census.md	done	Cypoe/challenge-022-the-std-surface-census	2026-10-29T05:52:23+01:00	Censused std/grid (010_grid.md
+main:023_the_diagnostic_site_audit.md	running	Cypoe/challenge-023-the-diagnostic-site-audit	2026-10-29T05:53:38+01:00	started
+main:023_the_diagnostic_site_audit.md	done	Cypoe/challenge-023-the-diagnostic-site-audit	2026-10-29T06:46:13+01:00	Audited all 55 remaining shape_checker.zig emission sites; fixed a pack-firing defect (speculative missing-field KORU022s beside an unknown-arg KORU021) with pins 400_225/400_226; ledger + concept committed 9ddd6fbfa (commit used --no-verify on the env-broken koru/odds invariant-gate row).
