@@ -603,3 +603,5 @@ main:023_the_diagnostic_site_audit.md	running	Cypoe/challenge-023-the-diagnostic
 main:023_the_diagnostic_site_audit.md	done	Cypoe/challenge-023-the-diagnostic-site-audit	2026-10-29T06:46:13+01:00	Audited all 55 remaining shape_checker.zig emission sites; fixed a pack-firing defect (speculative missing-field KORU022s beside an unknown-arg KORU021) with pins 400_225/400_226; ledger + concept committed 9ddd6fbfa (commit used --no-verify on the env-broken koru/odds invariant-gate row).
 main:024_the_tightening.md	running	Cypoe/challenge-024-the-tightening	2026-10-29T06:47:38+01:00	started
 main:024_the_tightening.md	done	Cypoe/challenge-024-the-tightening	2026-10-29T07:36:30+01:00	Record-payload branch constructors never compared field names to the declaration — now refused KORU030 at both lowering paths (fda830af7)
+main:025_what_the_compiler_writes.md	running	Cypoe/challenge-025-what-the-compiler-writes	2026-10-29T07:37:46+01:00	started
+main:025_what_the_compiler_writes.md	done	Cypoe/challenge-025-what-the-compiler-writes	2026-10-29T08:44:35+01:00	std/store's explain gained the elaborated section — clone
