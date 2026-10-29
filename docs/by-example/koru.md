@@ -818,7 +818,7 @@ proc fetch|zig {
 }
 
 fetch(id: 1)
-| found { name, age: i64 } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
+| found { name, age } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
 | found { name } |> std/io:print.ln("younger {{ name:s }}")
 | missing |> std/io:print.ln("nope")
 ```
@@ -844,7 +844,7 @@ pub tor locate {} -> { pos: Pos, label: string }
 
 proc locate|zig { return .{ .pos = .{ .x = 3, .y = 7 }, .label = "home" }; }
 
-locate(): { pos: { x, y }, label } |> std/io:print.ln("{{ label:s }} at {{ x:d }},{{ y:d }}")
+locate(): { pos.x, pos.y, label } |> std/io:print.ln("{{ label:s }} at {{ x:d }},{{ y:d }}")
 ```
 
 **Output:**
@@ -1400,7 +1400,7 @@ proc fetch|zig {
 }
 
 fetch(id: 1)
-| found { name, age: i64 } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
+| found { name, age } when age > 40 |> std/io:print.ln("elder {{ name:s }} {{ age:d }}")
 | found { name } |> std/io:print.ln("younger {{ name:s }}")
 | missing |> std/io:print.ln("nope")
 ```
