@@ -124,6 +124,7 @@ const std = @import("std");
 
 ~part for
 
+~part zip
 
 
 

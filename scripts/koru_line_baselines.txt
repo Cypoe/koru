@@ -77,8 +77,9 @@ koru_std/compiler.with.kz	313
 koru_std/compress.kz	1083
 koru_std/constructor.kz	305
 koru_std/control.capture.kz	352
-koru_std/control.kz	138
+koru_std/control.kz	134
 koru_std/control.targets.kz	120
+koru_std/control.zip.kz	58
 koru_std/crypto.kz	37
 koru_std/ctx.kz	767
 koru_std/declarations.kz	54

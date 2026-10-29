@@ -5605,6 +5605,71 @@ fn emitInlineCodeResolvingSplices(
             if (idx < continuations.len) {
                 const cont = &continuations[idx];
                 try emitter.write("{ ");
+                // Optional `(arg)` after the marker: `__koru_continue_<idx>(expr)`
+                // — a PAYLOAD terminal. The template writes the arg adjacent to
+                // the marker (`{{ continuations["done"].continue }}(count)`);
+                // `zip`'s `| done n` is the first consumer, delivering the pair
+                // count. Bound BEFORE the guard so a `when` can reference it —
+                // the same ordering the effect-splice path uses.
+                var arg: []const u8 = "";
+                if (i < inline_code.len and inline_code[i] == '(') {
+                    const arg_start = i + 1;
+                    var depth: usize = 1;
+                    var j = arg_start;
+                    var q: u8 = 0; // parens in string/char literals are text
+                    while (j < inline_code.len and depth > 0) : (j += 1) {
+                        const ch = inline_code[j];
+                        if (q != 0) {
+                            if (ch == '\\') {
+                                j += 1;
+                            } else if (ch == q) {
+                                q = 0;
+                            }
+                            continue;
+                        }
+                        if (ch == '"' or ch == '\'') {
+                            q = ch;
+                        } else if (ch == '(') {
+                            depth += 1;
+                        } else if (ch == ')') {
+                            depth -= 1;
+                        }
+                    }
+                    arg = std.mem.trim(u8, inline_code[arg_start .. j - 1], " \t");
+                    i = j; // past the closing ')'
+                    // Swallow a trailing `;` — the marker resolves to a block,
+                    // matching the effect-splice convention.
+                    if (i < inline_code.len and inline_code[i] == ';') i += 1;
+                }
+                if (arg.len > 0) {
+                    if (cont.destructure.len > 0) {
+                        var dst_buf: [64]u8 = undefined;
+                        const dst = if (cont.binding != null and cont.binding.?.len > 0 and !std.mem.eql(u8, cont.binding.?, "_"))
+                            cont.binding.?
+                        else
+                            std.fmt.bufPrint(&dst_buf, "__koru_dst_{d}_{d}", .{ cont.location.line, cont.location.column }) catch "__koru_dst";
+                        try emitter.write("const ");
+                        try emitter.write(dst);
+                        try emitter.write(" = ");
+                        try emitter.write(arg);
+                        try emitter.write("; _ = &");
+                        try writeBranchName(emitter, dst);
+                        try emitter.write("; ");
+                        try emitDestructureConsts(emitter, cont.destructure, dst);
+                    } else if (cont.binding != null and cont.binding.?.len > 0 and !std.mem.eql(u8, cont.binding.?, "_")) {
+                        try emitter.write("const ");
+                        try writeBranchName(emitter, cont.binding.?);
+                        try emitter.write(" = ");
+                        try emitter.write(arg);
+                        try emitter.write("; _ = &");
+                        try writeBranchName(emitter, cont.binding.?);
+                        try emitter.write("; ");
+                    } else {
+                        try emitter.write("_ = ");
+                        try emitter.write(arg);
+                        try emitter.write("; ");
+                    }
+                }
                 const guarded = cont.condition != null and !unguarded;
                 if (guarded) {
                     // Presence rewrite (400_147): a bare optional-arm name as a
