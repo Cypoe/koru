@@ -595,3 +595,5 @@ main:019_the_repo_cleanup.md	running	Cypoe/challenge-019-the-repo-cleanup	2026-1
 main:019_the_repo_cleanup.md	done	Cypoe/challenge-019-the-repo-cleanup	2026-10-29T03:18:45+01:00	Committed tree measured clean (1 allowlisted row only); closed the !.* hole for the fleet host's skeleton droppings in ded7f5531
 main:020_profiler_toolchain_join.md	running	Cypoe/challenge-020-profiler-toolchain-join	2026-10-29T03:20:00+01:00	started
 main:020_profiler_toolchain_join.md	done	Cypoe/challenge-020-profiler-toolchain-join	2026-10-29T04:35:10+01:00	profiler x [parallel]for join closed: tap wrap now preserves handler contract (was KORU025-refusing every !-arm)
+main:021_the_emitted_artifact_embarrassment.md	running	Cypoe/challenge-021-the-emitted-artifact-embarrassment	2026-10-29T04:36:31+01:00	started
+main:021_the_emitted_artifact_embarrassment.md	failed	Cypoe/challenge-021-the-emitted-artifact-embarrassment	2026-10-29T04:48:36+01:00	no result file
