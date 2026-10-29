@@ -593,3 +593,5 @@ main:017_the_wall_census.md	running	Cypoe/challenge-017-the-wall-census	2026-10-
 main:017_the_wall_census.md	failed	Cypoe/challenge-017-the-wall-census	2026-10-29T02:37:24+01:00	no result file
 main:019_the_repo_cleanup.md	running	Cypoe/challenge-019-the-repo-cleanup	2026-10-29T02:38:37+01:00	started
 main:019_the_repo_cleanup.md	done	Cypoe/challenge-019-the-repo-cleanup	2026-10-29T03:18:45+01:00	Committed tree measured clean (1 allowlisted row only); closed the !.* hole for the fleet host's skeleton droppings in ded7f5531
+main:020_profiler_toolchain_join.md	running	Cypoe/challenge-020-profiler-toolchain-join	2026-10-29T03:20:00+01:00	started
+main:020_profiler_toolchain_join.md	done	Cypoe/challenge-020-profiler-toolchain-join	2026-10-29T04:35:10+01:00	profiler x [parallel]for join closed: tap wrap now preserves handler contract (was KORU025-refusing every !-arm)
