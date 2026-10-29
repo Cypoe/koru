@@ -609,3 +609,5 @@ main:026_js_target_stdlib_port.md	running	Cypoe/challenge-026-js-target-stdlib-p
 main:026_js_target_stdlib_port.md	failed	Cypoe/challenge-026-js-target-stdlib-port	2026-10-29T09:55:52+01:00	no result file
 main:027_the_auditors_audit.md	running	Cypoe/challenge-027-the-auditors-audit	2026-10-29T09:57:07+01:00	started
 main:027_the_auditors_audit.md	failed	Cypoe/challenge-027-the-auditors-audit	2026-10-29T10:16:55+01:00	no result file
+main:028_the_friction_corpus.md	running	Cypoe/challenge-028-the-friction-corpus	2026-10-29T10:18:09+01:00	started
+main:028_the_friction_corpus.md	failed	Cypoe/challenge-028-the-friction-corpus	2026-10-29T10:43:48+01:00	no result file
