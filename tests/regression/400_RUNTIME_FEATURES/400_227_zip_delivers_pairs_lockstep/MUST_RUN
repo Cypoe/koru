@@ -1,0 +1,1 @@
+zip walks two sequences in lockstep, delivering { first, second } pairs through ! each — range+range, slice+slice, rename destructure, and step all live.

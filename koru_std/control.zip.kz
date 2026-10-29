@@ -1,0 +1,58 @@
+// Koru Standard Library: the `zip` part of control.kz.
+// Joined via `~part zip` in control.kz; merged into the control module at
+// load. The tor's declaration lives here too — the whole construct is one
+// file (control.kz's line budget leaves no room for a second producer's
+// declaration prose).
+//
+// `zip` walks TWO iterables in lockstep and delivers each aligned pair as a
+// `{ first, second }` record through `! each` — a second producer, not a `for`
+// axis (a `for` call is one traversal of one iterable; the axis refusal pins
+// that). Each side is classified independently: a `lo..hi` range walks by
+// arithmetic, anything else indexes by position, so `zip(0..5, names)` mixes
+// the two freely. The walk stops at the shorter input; `| done n` delivers
+// the pair count so the unpaired tail is an audible number. `step:` strides
+// the pair index — `step: 2` delivers elements 0, 2, 4 of each side. The
+// `! each` payload is `*`-wildcard like `for`'s: the pair is a record, and
+// its field vocabulary is fixed by the emitted literal — `first` (element of
+// `a`), `second` (element of `b`).
+~pub tor zip { a: Expression, b: Expression, step: ?Expression }
+! ?each *
+| ?done usize
+
+~[template]proc zip|zig {
+    {% if effects["each"] %}{% const ra = parse_range(a) %}{% const rb = parse_range(b) %}{
+        {% if ra.is_range %}const __koru_za_lo{{ __site }}: usize = {{ ra.lo }};
+        const __koru_za_hi{{ __site }}: usize = {{ ra.hi }};
+        const __koru_za_n{{ __site }} = __koru_za_hi{{ __site }} - __koru_za_lo{{ __site }};
+        {% else %}const __koru_za_items{{ __site }} = {{ a }};
+        const __koru_za_n{{ __site }} = __koru_za_items{{ __site }}.len;
+        {% endif %}{% if rb.is_range %}const __koru_zb_lo{{ __site }}: usize = {{ rb.lo }};
+        const __koru_zb_hi{{ __site }}: usize = {{ rb.hi }};
+        const __koru_zb_n{{ __site }} = __koru_zb_hi{{ __site }} - __koru_zb_lo{{ __site }};
+        {% else %}const __koru_zb_items{{ __site }} = {{ b }};
+        const __koru_zb_n{{ __site }} = __koru_zb_items{{ __site }}.len;
+        {% endif %}{% if step != "" %}const __koru_zstep{{ __site }}: usize = {{ step }};
+        const __koru_zwalk{{ __site }} = (@as(usize, @min(__koru_za_n{{ __site }}, __koru_zb_n{{ __site }})) + __koru_zstep{{ __site }} - 1) / __koru_zstep{{ __site }};
+        {% else %}const __koru_zwalk{{ __site }} = @min(__koru_za_n{{ __site }}, __koru_zb_n{{ __site }});
+        {% endif %}for (0..__koru_zwalk{{ __site }}) |__koru_zi{{ __site }}| {
+            const __koru_zk{{ __site }} = {% if step != "" %}__koru_zi{{ __site }} * __koru_zstep{{ __site }}{% else %}__koru_zi{{ __site }}{% endif %};
+            {% for h in effects["each"] %}{{ h.inlined_link[scope] }}(.{ .first = {% if ra.is_range %}__koru_za_lo{{ __site }} + __koru_zk{{ __site }}{% else %}__koru_za_items{{ __site }}[__koru_zk{{ __site }}]{% endif %}, .second = {% if rb.is_range %}__koru_zb_lo{{ __site }} + __koru_zk{{ __site }}{% else %}__koru_zb_items{{ __site }}[__koru_zk{{ __site }}]{% endif %} });
+            {% endfor %}
+        }
+        {% if continuations["done"] %}{{ continuations["done"].continue }}(__koru_zwalk{{ __site }});
+        {% endif %}
+    }
+    {% else %}{% comp error %}zip: no delivery arm attached — `! each` must receive the pairs (a `zip` that delivers to nobody walks to nothing){% endcomp %}
+    {% endif %}
+}
+
+// Not ported — loud, not silent. js/cs get the tor's declaration (the grammar
+// accepts the call) and refuse at emit time, same shape as `! reverse-each`'s
+// js/cs guards in control.targets.kz.
+~[template]proc zip|js {
+    {% comp error %}zip: not ported to the js target yet — zig only for now{% endcomp %}
+}
+
+~[template]proc zip|cs {
+    {% comp error %}zip: not ported to the cs target yet — zig only for now{% endcomp %}
+}

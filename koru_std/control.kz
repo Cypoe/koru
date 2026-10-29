@@ -124,6 +124,9 @@ const std = @import("std");
 
 ~part for
 
+~part zip
+
+
 // CONST moved to koru_std/declarations.kz — it is a value declaration, not
 // control flow (and not a type). See `declarations.kz` for the tor + the
 // per-target template procs.

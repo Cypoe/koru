@@ -1,0 +1,1 @@
+zip: no delivery arm attached — `! each` must receive the pairs (a `zip` that delivers to nobody walks to nothing)
