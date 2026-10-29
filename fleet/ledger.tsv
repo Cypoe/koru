@@ -607,3 +607,5 @@ main:025_what_the_compiler_writes.md	running	Cypoe/challenge-025-what-the-compil
 main:025_what_the_compiler_writes.md	done	Cypoe/challenge-025-what-the-compiler-writes	2026-10-29T08:44:35+01:00	std/store's explain gained the elaborated section — clone
 main:026_js_target_stdlib_port.md	running	Cypoe/challenge-026-js-target-stdlib-port	2026-10-29T08:45:53+01:00	started
 main:026_js_target_stdlib_port.md	failed	Cypoe/challenge-026-js-target-stdlib-port	2026-10-29T09:55:52+01:00	no result file
+main:027_the_auditors_audit.md	running	Cypoe/challenge-027-the-auditors-audit	2026-10-29T09:57:07+01:00	started
+main:027_the_auditors_audit.md	failed	Cypoe/challenge-027-the-auditors-audit	2026-10-29T10:16:55+01:00	no result file
