@@ -7,6 +7,7 @@ evolved: 2026-08-16 — content hash landed, THEN the key's COVERAGE missed the 
 evolved: 2026-10-05 — Fail 3: the key cannot see the koruc binary's own embedded backend template; a stale generator keys correct, poisons completely (K# vertical, cs stage-D)
 evolved: 2026-10-11 — Fail 3 struck again: a pre-overlay koruc cached a stale-template backend under a current-src key; every later build's emitted program silently linked stock zig std. Fixed by hashing the emitted backend.zig + build_backend.zig into the key
 evolved: 2026-10-13 — Fail 4: the closure was content-complete but host-blind; a 140GB cache migrated from a glibc-2.34 image replayed binaries that hard-fail on a 2.31 host. Fixed by salting the key with the ABI the binary was built for
+evolved: 2026-10-30 — Fail 4 recorded a second time on the quantity-numbers stream: a glibc-2.34-bound backend built on another checkout was served to a glibc-2.31 host and failed at exec. The input closure now also includes the build target
 ---
 
 # A backend binary cache can serve a poisoned kernel (belief)
@@ -16,7 +17,7 @@ evolved: 2026-10-13 — Fail 4: the closure was content-complete but host-blind;
 the cached backend is byte-fresh. The key must be BOTH faithful (equal
 metadata/content ⇒ equal source) AND complete (every input that can change
 the binary is in the key — including the generator's own embedded bytes).
-It has now failed three times on three different axes.
+It has now failed four times on four different axes.
 
 **Fail 1 — faithful (mtime, 2026-08-15).** Keyed on path/size/mtime, a tree
 in mid-motion races the rebuild: the first backend compiled from the
@@ -74,32 +75,38 @@ text IS the template's rendered bytes — keying on it captures emitter
 version by construction, so a stale generator can only ever mint a key a
 fresh one never looks up.
 
-**Fail 4 — the host is not a file either (2026-10-13, the Ubuntu image
-move).** The key had become genuinely complete over *inputs*: linked
-closure, generated files, embedded template. It still assumed equal inputs
-=> equal binary — false the moment the same source links against a
+**Fail 4 — the host is not a file either, and neither is the toolchain
+(recorded independently on both streams: ccomp 2026-10-13, the Ubuntu
+image move; quantity-numbers 2026-10-30, the shared-cache serve).** The
+key had become genuinely complete over *inputs*: linked closure,
+generated files, embedded template. It still assumed equal inputs =>
+equal binary — false the moment the same source links against a
 different host ABI. A backend minted on a glibc-2.34 host stamps
 `__libc_start_main@GLIBC_2.34` and hard-fails on exec under 2.31 — no
 compile error, no diagnostic the tree can explain, just `version not
-found` at runtime, four indirections from *which image the cache was
-born on*. The cache was content-complete and **environment-blind**.
-Fixed two ways: `KORU_BACKEND_TARGET` now forwards an explicit
-`-Dtarget` through both zig-build spawn sites (koruc's backend build,
-the emitted backend's own `output` build — a program's declared
-`build:config target` still wins) and the harness's own build call;
-and both cache keys (koruc-side `combined`, harness-side sha256)
-fold the ABI identity in — env override when set, else the host's
-detected glibc. A replay across ABI boundaries is now a key miss,
-never a wrong binary.
+found` at runtime, indirections from *which image the cache was born
+on*. The shared `/tmp/koru-regression-cache/koru-backend-cache` serves
+ONE flat directory to every checkout on the machine, so the poison
+crosses checkouts too. The serve is byte-valid source-fresh and
+exec-dead; the tell is `objdump -T` on the entry vs `ldd --version`.
+Fixed two ways on the two streams: `KORU_BACKEND_TARGET` forwards an
+explicit `-Dtarget` through both zig-build spawn sites (a program's
+declared `build:config target` still wins) and both cache keys fold
+the ABI identity in — env override when set, else the host's detected
+glibc; and on the qn stream the target pin went through
+`standardTargetOptions` (`-Dtarget=x86_64-linux-gnu.2.31`) with the
+durable clause that the resolved target + zig version join the key by
+construction, not faith. A replay across ABI boundaries is now a key
+miss, never a wrong binary.
 
 The discipline that catches all four, retroactively: **enumerate what the
 binary actually embeds — every file the compilation unit imports, every file
-the build generates, AND every byte the generating binary itself carries —
-and put each one in the key by construction, not by faith.** A cache entry
-is trusted state; anything less than a complete input closure is a latent
-miscompile. Also: a compiler that starts failing on unmodified input is not
-a compiler change; it is a cache or env change — ask *which binary is
-actually running* before bisecting the tree.
+the build generates, every byte the generating binary itself carries, AND
+the toolchain that links it — and put each one in the key by construction,
+not by faith.** A cache entry is trusted state; anything less than a
+complete input closure is a latent miscompile. Also: a compiler that starts
+failing on unmodified input is not a compiler change; it is a cache or env
+change — ask *which binary is actually running* before bisecting the tree.
 
 ## Related
 
