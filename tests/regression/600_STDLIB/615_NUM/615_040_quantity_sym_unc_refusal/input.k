@@ -10,9 +10,9 @@ import std/quantity
 
 // (pi+-0.1 m) * (1 s) -> sym-unc
 std/sym:lit(π)
-| exact s1 |> std/quantity:lit-sym(mag: s1, unit: "m", unc: "0.1", cov: "-")
+| exact s1 |> std/quantity:lit-sym(mag: s1, unit: m, unc: 0.1, cov: "-")
     | exact qu |> std/sym:lit(1e0)
-        | exact t1 |> std/quantity:lit-sym(mag: t1, unit: "s", unc: "0", cov: "-")
+        | exact t1 |> std/quantity:lit-sym(mag: t1, unit: s, unc: 0, cov: "-")
             | exact qs |> std/quantity:mul(a: qu, b: qs)
                 | exact r |> std/quantity:render(n: r): ta |> std/io:print.ln("{{ ta:s }}") |> std/io:free(content: ta)
                 | mixed-cov |> std/io:print.ln("mixed-cov")
@@ -25,9 +25,9 @@ std/sym:lit(π)
 
 // (pi m) / (1+-0.1 s) -> sym-unc
 std/sym:lit(π)
-| exact s2 |> std/quantity:lit-sym(mag: s2, unit: "m", unc: "0", cov: "-")
+| exact s2 |> std/quantity:lit-sym(mag: s2, unit: m, unc: 0, cov: "-")
     | exact qd |> std/sym:lit(1e0)
-        | exact t2 |> std/quantity:lit-sym(mag: t2, unit: "s", unc: "0.1", cov: "-")
+        | exact t2 |> std/quantity:lit-sym(mag: t2, unit: s, unc: 0.1, cov: "-")
             | exact qe |> std/quantity:div(a: qd, b: qe, prec: 15)
                 | exact r |> std/quantity:render(n: r): tb |> std/io:print.ln("{{ tb:s }}") |> std/io:free(content: tb)
                 | div-zero |> std/io:print.ln("div-zero")
@@ -41,7 +41,7 @@ std/sym:lit(π)
 
 // (pi+-0.1 m)^2 -> sym-unc
 std/sym:lit(π)
-| exact s3 |> std/quantity:lit-sym(mag: s3, unit: "m", unc: "0.1", cov: "-")
+| exact s3 |> std/quantity:lit-sym(mag: s3, unit: m, unc: 0.1, cov: "-")
     | exact qf |> std/quantity:pow(a: qf, n: 2)
         | exact r |> std/quantity:render(n: r): tc |> std/io:print.ln("{{ tc:s }}") |> std/io:free(content: tc)
         | div-zero |> std/io:print.ln("div-zero")
@@ -51,7 +51,7 @@ std/sym:lit(π)
 
 // add carries sigma fine — (pi+-0.1 m)+(pi+-0.1 m) -> (2pi)+-0.2
 std/sym:lit(π)
-| exact s4 |> std/quantity:lit-sym(mag: s4, unit: "m", unc: "0.1", cov: "-")
+| exact s4 |> std/quantity:lit-sym(mag: s4, unit: m, unc: 0.1, cov: "-")
     | exact qa |> std/quantity:dup(n: qa): da |> std/quantity:add(da.a, da.b)
         | exact r |> std/quantity:render(n: r): td |> std/io:print.ln("{{ td:s }}") |> std/io:free(content: td)
         | dim-mismatch |> std/io:print.ln("dim-mismatch")
@@ -61,7 +61,7 @@ std/sym:lit(π)
 
 // and the decimal sigma lane still reads off a symbolic quantity
 std/sym:lit(π)
-| exact s5 |> std/quantity:lit-sym(mag: s5, unit: "m", unc: "0.1", cov: "-")
+| exact s5 |> std/quantity:lit-sym(mag: s5, unit: m, unc: 0.1, cov: "-")
     | exact qg |> std/quantity:unc(q: qg): u |> std/io:print.ln("{{ u:s }}") |> std/io:free(content: u)
     | bad-lit x |> std/io:print.ln("{{ x:s }}")
 | bad |> std/io:print.ln("bad-sym")

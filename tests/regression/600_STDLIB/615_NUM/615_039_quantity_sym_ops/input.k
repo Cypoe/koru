@@ -10,7 +10,7 @@ import std/quantity
 
 // pi m + pi m -> (2e0*pi) m
 std/sym:lit(π)
-| exact s1 |> std/quantity:lit-sym(mag: s1, unit: "m", unc: "0", cov: "-")
+| exact s1 |> std/quantity:lit-sym(mag: s1, unit: m, unc: 0, cov: "-")
     | exact q1 |> std/quantity:dup(n: q1): d1 |> std/quantity:add(d1.a, d1.b)
         | exact r |> std/quantity:render(n: r): t |> std/io:print.ln("{{ t:s }}") |> std/io:free(content: t)
         | dim-mismatch |> std/io:print.ln("dim-mismatch")
@@ -21,9 +21,9 @@ std/sym:lit(π)
 // mixed lane: pi m + 2 m -> (2e0+pi) m (a numeric sexpr mag takes the
 // dec lane on unpack, then promotes)
 std/sym:lit(π)
-| exact s2 |> std/quantity:lit-sym(mag: s2, unit: "m", unc: "0", cov: "-")
+| exact s2 |> std/quantity:lit-sym(mag: s2, unit: m, unc: 0, cov: "-")
     | exact qp |> std/sym:lit(2e0)
-        | exact t2 |> std/quantity:lit-sym(mag: t2, unit: "m", unc: "0", cov: "-")
+        | exact t2 |> std/quantity:lit-sym(mag: t2, unit: m, unc: 0, cov: "-")
             | exact qn |> std/quantity:add(a: qp, b: qn)
                 | exact r |> std/quantity:render(n: r): ta |> std/io:print.ln("{{ ta:s }}") |> std/io:free(content: ta)
                 | dim-mismatch |> std/io:print.ln("dim-mismatch")
@@ -35,9 +35,9 @@ std/sym:lit(π)
 
 // sym mul composes dims: pi m * 2 s -> (2e0*pi) m*s
 std/sym:lit(π)
-| exact s3 |> std/quantity:lit-sym(mag: s3, unit: "m", unc: "0", cov: "-")
+| exact s3 |> std/quantity:lit-sym(mag: s3, unit: m, unc: 0, cov: "-")
     | exact qm |> std/sym:lit(2e0)
-        | exact t3 |> std/quantity:lit-sym(mag: t3, unit: "s", unc: "0", cov: "-")
+        | exact t3 |> std/quantity:lit-sym(mag: t3, unit: s, unc: 0, cov: "-")
             | exact qs |> std/quantity:mul(a: qm, b: qs)
                 | exact r |> std/quantity:render(n: r): tb |> std/io:print.ln("{{ tb:s }}") |> std/io:free(content: tb)
                 | mixed-cov |> std/io:print.ln("mixed-cov")
@@ -51,9 +51,9 @@ std/sym:lit(π)
 // the headline: (1/3 m/s) * 3 s -> 1 m exactly — the decimal lane would
 // carry 3.333e-1 and answer 0.9999...
 std/sym:lit(1/3)
-| exact s4 |> std/quantity:lit-sym(mag: s4, unit: "m/s", unc: "0", cov: "-")
+| exact s4 |> std/quantity:lit-sym(mag: s4, unit: m/s, unc: 0, cov: "-")
     | exact qc |> std/sym:lit(3e0)
-        | exact t4 |> std/quantity:lit-sym(mag: t4, unit: "s", unc: "0", cov: "-")
+        | exact t4 |> std/quantity:lit-sym(mag: t4, unit: s, unc: 0, cov: "-")
             | exact q3 |> std/quantity:mul(a: qc, b: q3)
                 | exact r |> std/quantity:render(n: r): tc |> std/io:print.ln("{{ tc:s }}") |> std/io:free(content: tc)
                 | mixed-cov |> std/io:print.ln("mixed-cov")
@@ -66,9 +66,9 @@ std/sym:lit(1/3)
 
 // sym div: (pi m)/(pi s) -> 1 m/s — atom cancels
 std/sym:lit(π)
-| exact sa |> std/quantity:lit-sym(mag: sa, unit: "m", unc: "0", cov: "-")
+| exact sa |> std/quantity:lit-sym(mag: sa, unit: m, unc: 0, cov: "-")
     | exact qa |> std/sym:lit(π)
-        | exact sb |> std/quantity:lit-sym(mag: sb, unit: "s", unc: "0", cov: "-")
+        | exact sb |> std/quantity:lit-sym(mag: sb, unit: s, unc: 0, cov: "-")
             | exact qb |> std/quantity:div(a: qa, b: qb, prec: 15)
                 | exact r |> std/quantity:render(n: r): td |> std/io:print.ln("{{ td:s }}") |> std/io:free(content: td)
                 | div-zero |> std/io:print.ln("div-zero")
@@ -82,14 +82,14 @@ std/sym:lit(π)
 
 // neg: -(pi m) -> (-1*pi) m
 std/sym:lit(π)
-| exact s5 |> std/quantity:lit-sym(mag: s5, unit: "m", unc: "0", cov: "-")
+| exact s5 |> std/quantity:lit-sym(mag: s5, unit: m, unc: 0, cov: "-")
     | exact qn5 |> std/quantity:neg(n: qn5): ng |> std/quantity:render(n: ng): te |> std/io:print.ln("{{ te:s }}") |> std/io:free(content: te)
     | bad-lit x |> std/io:print.ln("{{ x:s }}")
 | bad |> std/io:print.ln("bad-sym")
 
 // pow: (pi m)^2 -> (pi*pi) m^2
 std/sym:lit(π)
-| exact s6 |> std/quantity:lit-sym(mag: s6, unit: "m", unc: "0", cov: "-")
+| exact s6 |> std/quantity:lit-sym(mag: s6, unit: m, unc: 0, cov: "-")
     | exact qp6 |> std/quantity:pow(a: qp6, n: 2)
         | exact r |> std/quantity:render(n: r): tf |> std/io:print.ln("{{ tf:s }}") |> std/io:free(content: tf)
         | div-zero |> std/io:print.ln("div-zero")
@@ -100,7 +100,7 @@ std/sym:lit(π)
 // sigma on a sym mag still flows (add's sigma is decimal-only):
 // (pi+-0.1@x) + (pi+-0.1@x) -> (2pi)+-0.2@x
 std/sym:lit(π)
-| exact s7 |> std/quantity:lit-sym(mag: s7, unit: "m", unc: "0.1", cov: "x")
+| exact s7 |> std/quantity:lit-sym(mag: s7, unit: m, unc: 0.1, cov: "x")
     | exact qb |> std/quantity:dup(n: qb): db |> std/quantity:add(db.a, db.b)
         | exact r |> std/quantity:render(n: r): tg |> std/io:print.ln("{{ tg:s }}") |> std/io:free(content: tg)
         | dim-mismatch |> std/io:print.ln("dim-mismatch")
@@ -110,7 +110,7 @@ std/sym:lit(π)
 
 // mag union: a symbolic magnitude unpacks on the | sym arm
 std/sym:lit(π)
-| exact s8 |> std/quantity:lit-sym(mag: s8, unit: "m", unc: "0", cov: "-")
+| exact s8 |> std/quantity:lit-sym(mag: s8, unit: m, unc: 0, cov: "-")
     | exact q8 |> std/quantity:mag(q: q8)
         | num m |> std/io:print.ln("num-lane") |> std/num:free(n: m)
         | sym m |> std/sym:render(n: m): th |> std/io:print.ln("{{ th:s }}") |> std/io:free(content: th)

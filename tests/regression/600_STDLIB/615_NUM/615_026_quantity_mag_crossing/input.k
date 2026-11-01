@@ -6,7 +6,7 @@ import std/num
 import std/sym
 import std/quantity
 
-std/quantity:lit(s: "2.5 kg")
+std/quantity:lit(2.5*kg)
 | exact q |> std/quantity:mag(q)
     | num m |> std/num:lit(s: "0.5")
         | exact h |> std/num:add(a: m, b: h): r |> std/io:print.ln("{{ r:s }}") |> std/num:free(n: r)
