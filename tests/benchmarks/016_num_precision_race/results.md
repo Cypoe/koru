@@ -10,18 +10,18 @@ schoolbook baseline below. `koru div` adds the own division layer
 
 ## Time (ms)
 
-| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | bc -l | py dec | py int |
+| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | bc -l | py dec | py int |
 |---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|
-| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | ~2 | 0.13 | 0.10 |
-| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | 110 | 0.50 | 1.02 |
-| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | 20 | 0.13 | — |
-| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | 130 | 2.32 | 0.26* |
-| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | 2210 | 3.14† | — |
-| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | 990 | 104.3† | — |
-| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | 1680 | 1.49† | — |
-| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | 480 | 25.1† | — |
-| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | 20 | — | 0.14 |
-| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | 3260 | 138.2† | — |
+| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | ~2 | 0.13 | 0.10 |
+| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | 110 | 0.50 | 1.02 |
+| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | 20 | 0.13 | — |
+| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | 130 | 2.32 | 0.26* |
+| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | 2210 | 3.14† | — |
+| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | 990 | 104.3† | — |
+| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | 1680 | 1.49† | — |
+| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | 480 | 25.1† | — |
+| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | 20 | — | 0.14 |
+| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | 3260 | 138.2† | — |
 
 \* `math.isqrt` oracle. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
 scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
@@ -48,11 +48,16 @@ Debug and ReleaseFast outputs are byte-identical.
   `addInto` over `[]Limb`, arena-scratch recursion, sign propagated at
   the boundary (a signed-magnitude `Managed` is *not* a nonnegative one —
   alternating series caught that once).
-- **vs bc**: koru+kara now wins 9 of 10 — transcendentals by 15–142×.
-  Only w2 remains bc's (110 vs 306ms): the residual there is *decimal
-  conversion*, not arithmetic — `pow` stringifies 47713 digits then
-  reparses (`toString`+`decFromDigits`, both quadratic-ish). That is the
-  next ceiling: divide-and-conquer radix conversion.
+- **vs bc**: koru wins all 10. w2 fell last — not to better
+  arithmetic but to killing the *conversion* tax: Zig's `setString`/
+  `toString` are per-digit quadratic (measured 231ms + 35ms on the
+  47713-digit operand — 90% of w2). Replaced both directions with
+  divide-and-conquer: digits->limbs splits at the midpoint
+  (val(hi)*10^lo + val(lo)), limbs->digits splits by 10^(nd/2) through
+  `divAnyL` — the conversion layer dogfoods the owned division too.
+  Schoolbook base case chunks 19 digits per limb step under
+  RADIX_DNC_MIN=600. Every workload routes through it: w2 297->55ms,
+  w1 3.7->0.45ms, w3 3.0->0.65ms, w4 1.7->0.60ms, w9 7.3->0.44ms.
 - **own division is in**: `decDiv`/`decMod` no longer call
   `Managed.divTrunc` — `divFast` runs our schoolbook `divSB` (per-limb
   u128 trial + two-limb-warmup correction) and, past NEWTON_MIN=512
