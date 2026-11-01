@@ -4,22 +4,24 @@ Measured 2026-10-31 on `quantity-numbers` (WSL Ubuntu 20.04, x86_64,
 glibc-2.31 shim). Rig: `run.sh` — same operands, same significant-digit
 targets, three implementations. `koru kara` is `num.kz` with the limb-level
 Karatsuba mul (KARA_MIN=24) + binary pow10/biPowFast, landed after the
-schoolbook baseline below.
+schoolbook baseline below. `koru div` adds the own division layer
+(divFast: custom schoolbook `divSB` everywhere + staged Newton reciprocal
+`recipL` gated above NEWTON_MIN=512 divisor limbs).
 
 ## Time (ms)
 
-| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | bc -l | py dec | py int |
-|---|----------|--------------------:|---------------------:|---------------:|------:|-------:|-------:|
-| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | ~2 | 0.13 | 0.10 |
-| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | 110 | 0.50 | 1.02 |
-| w3 | div →3000d | 74.5 | 3.6 | **3.5** | 20 | 0.13 | — |
-| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | 130 | 2.32 | 0.26* |
-| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | 2210 | 3.14† | — |
-| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | 990 | 104.3† | — |
-| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | 1680 | 1.49† | — |
-| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | 480 | 25.1† | — |
-| w9 | mod | 99.6 | 5.6 | **5.6** | 20 | — | 0.14 |
-| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | 3260 | 138.2† | — |
+| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | bc -l | py dec | py int |
+|---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|
+| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | ~2 | 0.13 | 0.10 |
+| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | 110 | 0.50 | 1.02 |
+| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | 20 | 0.13 | — |
+| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | 130 | 2.32 | 0.26* |
+| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | 2210 | 3.14† | — |
+| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | 990 | 104.3† | — |
+| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | 1680 | 1.49† | — |
+| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | 480 | 25.1† | — |
+| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | 20 | — | 0.14 |
+| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | 3260 | 138.2† | — |
 
 \* `math.isqrt` oracle. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
 scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
@@ -47,18 +49,35 @@ Debug and ReleaseFast outputs are byte-identical.
   the boundary (a signed-magnitude `Managed` is *not* a nonnegative one —
   alternating series caught that once).
 - **vs bc**: koru+kara now wins 9 of 10 — transcendentals by 15–142×.
-  Only w2 remains bc's (110 vs 316ms): the residual there is *decimal
-  conversion*, not multiplication — `pow` stringifies 47713 digits then
-  reparses (`toString`+`decFromDigits`, both quadratic-ish), and `divTrunc`
-  is still schoolbook long division (w3/w9 unchanged — that's the next
-  ceiling: Newton-division or chunked conversion).
+  Only w2 remains bc's (110 vs 306ms): the residual there is *decimal
+  conversion*, not arithmetic — `pow` stringifies 47713 digits then
+  reparses (`toString`+`decFromDigits`, both quadratic-ish). That is the
+  next ceiling: divide-and-conquer radix conversion.
+- **own division is in**: `decDiv`/`decMod` no longer call
+  `Managed.divTrunc` — `divFast` runs our schoolbook `divSB` (per-limb
+  u128 trial + two-limb-warmup correction) and, past NEWTON_MIN=512
+  divisor limbs with quotient >=3x the divisor, a staged Newton
+  reciprocal (`recipL`, floor(beta^3n/B) by doubling-size stages).
+  Limb-level, divSB beats `Managed.divTrunc` below ~200 limbs
+  (16us vs 34us at 104/73) and runs ~1.6x at 3000/1200. The Newton arm
+  is *proven but gated*: measured, a full-product reciprocal costs
+  ~4-14 muls at ~5n limbs and loses to schoolbook at every size we
+  exercise — it engages only where the quotient amortizes it. The
+  named ceiling is short products (top-limb-only B*R^2 per iteration),
+  which is what GMP pays for before Newton wins.
+- **division proven**: quotient/remainder identity `q*b+r = a` plus
+  remainder bounds on 3000 randomized operand shapes (30-1100 digits,
+  straddling the old Newton gate), vs a corrected Python oracle —
+  earlier drafts of that oracle compared real quotients against
+  integer `//` and mis-flagged; the genuine diff is zero.
 - **vs C decimal/int**: python still wins exact ops — but `ln` (49.9 vs
   104ms) and `powf` (72.5 vs 138ms) now beat the python-Taylor arms:
   a compiled-Karatsuba inner loop outruns interpreted Taylor over a
   faster limb library.
-- **Correctness gate**: 615 = 40/40, 610 = 19/19, limb layer proven
-  against `Managed.mul` on 2800 randomized operand shapes, digit
-  agreement unchanged (all 47713 of 3^100000, all 3001 of sqrt2).
+- **Correctness gate**: 615 = 44/44, 017 qcalc race = 0/20000
+  mismatches, limb layer proven against `Managed.mul` on 2800
+  randomized operand shapes + `divAnyL` on 3000, digit agreement
+  unchanged (all 47713 of 3^100000, all 3001 of sqrt2).
 
 ## Independent oracle — SymPy 1.14 + mpmath 1.4 (via nix)
 
