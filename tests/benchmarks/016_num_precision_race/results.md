@@ -10,18 +10,18 @@ schoolbook baseline below. `koru div` adds the own division layer
 
 ## Time (ms)
 
-| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | bc -l | py dec | py int |
+| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | koru RF (A2.1) | bc -l | py dec | py int |
 |---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|
-| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | ~2 | 0.13 | 0.10 |
-| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | 110 | 0.50 | 1.02 |
-| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | 20 | 0.13 | — |
-| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | 130 | 2.32 | 0.26* |
-| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | 2210 | 3.14† | — |
-| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | 990 | 104.3† | — |
-| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | 1680 | 1.49† | — |
-| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | 480 | 25.1† | — |
-| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | 20 | — | 0.14 |
-| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | 3260 | 138.2† | — |
+| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | **0.50** | ~2 | 0.13 | 0.10 |
+| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | **28.0** | 110 | 0.50 | 1.02 |
+| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | **0.34** | 20 | 0.13 | — |
+| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | **0.49** | 130 | 2.32 | 0.26* |
+| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | **16.8** | 2210 | 3.14† | — |
+| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | **56.5** | 990 | 104.3† | — |
+| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | **23.4** | 1680 | 1.49† | — |
+| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | **29.3** | 480 | 25.1† | — |
+| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | **0.30** | 20 | — | 0.14 |
+| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | **73.7** | 3260 | 138.2† | — |
 
 \* `math.isqrt` oracle. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
 scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
@@ -34,7 +34,7 @@ scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
 | w2 | 47713 | **26.4** | 47713 (int) | — | exact pow, all 47713 digits identical |
 | w3 | 2998 | **0.36** | 2998 | 3000 | boundary rounding only |
 | w4 | 3001 | **0.49** | 3001 | 3001 | full; also exact vs `isqrt` oracle (3001) |
-| w5–w8 | 1999–2021 | 1999–2019 | 1999–2020 | ±1 boundary digit on 2000-digit targets |
+| w5–w8 | 1999–2026 | 1999–2019 | 1999–2020 | koru side now correctly rounded (see oracle) |
 | w9 | 997 | **0.29** | 997 | 997 | exact mod, full agreement |
 | w10 | 1999 | **83.8** | 1999 | 1999 | boundary digit |
 
@@ -118,16 +118,19 @@ koru, bc, or decimal. Two layers, measured 2026-10-31 on `koru.out`:
 
 **Layer A — digits.** mpmath at mp.dps=3100 recomputes every workload;
 koru's emitted digits are compared as strings (exact ops against exact
-integer references, no float proxy):
+integer references, no float proxy). Since the error-accounting pass, the
+comparison is carry-aware: koru's last emitted digit is round-half-even
+with the tracked `Fx` bound required to clear the rounding boundary, so it
+is checked against the reference *rounded to the same length*:
 
 | # | result |
 |---|--------|
 | w1 | 3999/3999 digits — exact |
 | w2 | 47713/47713 digits — exact |
-| w3 | 2998/2998 emitted digits correct |
-| w4 | 3001/3001 emitted digits correct |
-| w5–w7, w10 | all emitted digits correct (2000/2000, 1998/1998) |
-| w8 | 2019/2023 — last 4 digits differ (Machin rounding accumulation at the boundary, consistent with the bc/decimal comparison) |
+| w3 | 3000/3000 emitted — correctly rounded |
+| w4 | 3000/3000 emitted — within 1 ulp (floor-magnitude isqrt contract) |
+| w5–w7, w10 | emitted digits **correctly rounded** — identical to the mpmath reference rounded to the same length |
+| w8 | 2023/2023 emitted — **correctly rounded** (Machin last-digit accumulation resolved: the Fx error bound clears the rounding boundary; composite truncated to its provable digits) |
 | w9 | 997/997 digits — exact |
 
 Speed note, stated because it is true: mpmath computes all five
