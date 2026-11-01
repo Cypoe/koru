@@ -70,14 +70,34 @@ Debug and ReleaseFast outputs are byte-identical.
   straddling the old Newton gate), vs a corrected Python oracle —
   earlier drafts of that oracle compared real quotients against
   integer `//` and mis-flagged; the genuine diff is zero.
+- **a real divSB bug found by the isqrt work**: Knuth-D qhat clamp
+  produced `rhat >= beta`, then `(rhat << 64)` wrapped u128 (Zig `<<`
+  truncates silently) -> qhat came out one too small whenever the
+  raw estimate hit `qhat0 >= beta` (u[j+n] == v[n-1] exactly — the
+  beta-1 quotient-limb shape random fuzzing essentially never makes).
+  Fixed to canonical D3 form: clamp folded into the loop, `rhat < beta`
+  guards the comparison. Now proven additionally on 1000 adversarial
+  constructed quotients (runs of beta-1 digits, trailing-zero divisor
+  limbs) — the shape that caught it, 0 failures.
+- **own isqrt is in**: `decSqrt`/`fxSqrt` no longer call
+  `Managed.sqrt` — `sqrtFast` runs `isqrtL`, recursive-seed Newton
+  (isqrt of the top half, shifted (dropped limbs)*32 bits, a strict
+  overestimate) descending monotonically on `divAnyL` — it dogfoods
+  the owned division layer, needs no normalization preconditions, and
+  converges in ~log iterations with a <=4-step bounded fixup.
+  w4 sqrt: 1.74ms RF (was ~1.7 on Managed.sqrt — correctness was the
+  point, not speed). Proven on 2500 randomized operand shapes
+  (10-5777 digits, incl. ~3000-digit squares and unnormalized tops)
+  vs `math.isqrt` — exact, zero failures.
 - **vs C decimal/int**: python still wins exact ops — but `ln` (49.9 vs
   104ms) and `powf` (72.5 vs 138ms) now beat the python-Taylor arms:
   a compiled-Karatsuba inner loop outruns interpreted Taylor over a
   faster limb library.
 - **Correctness gate**: 615 = 44/44, 017 qcalc race = 0/20000
   mismatches, limb layer proven against `Managed.mul` on 2800
-  randomized operand shapes + `divAnyL` on 3000, digit agreement
-  unchanged (all 47713 of 3^100000, all 3001 of sqrt2).
+  randomized operand shapes, `divAnyL` on 3000 mixed + 1000
+  adversarial (beta-1 quotient limbs), `isqrtL` on 2500, digit
+  agreement unchanged (all 47713 of 3^100000, all 3001 of sqrt2).
 
 ## Independent oracle — SymPy 1.14 + mpmath 1.4 (via nix)
 
