@@ -6,22 +6,25 @@ targets, three implementations. `koru kara` is `num.kz` with the limb-level
 Karatsuba mul (KARA_MIN=24) + binary pow10/biPowFast, landed after the
 schoolbook baseline below. `koru div` adds the own division layer
 (divFast: custom schoolbook `divSB` everywhere + staged Newton reciprocal
-`recipL` gated above NEWTON_MIN=512 divisor limbs).
+`recipL` gated above NEWTON_MIN=512 divisor limbs). `koru RF (A2.2)`
+replaces the transcendental algorithms: Chudnovsky binary-split pi,
+binary-split e, AGM ln with over-precision conditioning, Newton exp
+gated above w>4000, and a binary-split rational-atan lane.
 
 ## Time (ms)
 
-| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | koru RF (A2.1) | bc -l | py dec | py int |
-|---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|
-| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | **0.50** | ~2 | 0.13 | 0.10 |
-| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | **28.0** | 110 | 0.50 | 1.02 |
-| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | **0.34** | 20 | 0.13 | — |
-| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | **0.49** | 130 | 2.32 | 0.26* |
-| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | **16.8** | 2210 | 3.14† | — |
-| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | **56.5** | 990 | 104.3† | — |
-| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | **23.4** | 1680 | 1.49† | — |
-| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | **29.3** | 480 | 25.1† | — |
-| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | **0.30** | 20 | — | 0.14 |
-| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | **73.7** | 3260 | 138.2† | — |
+| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | koru RF (A2.1) | koru RF (A2.2) | bc -l | py dec | py int |
+|---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|-------:|------:|-------:|-------:|
+| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | **0.50** | **0.50** | ~2 | 0.13 | 0.10 |
+| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | **28.0** | **28.05** | 110 | 0.50 | 1.02 |
+| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | **0.34** | **0.48** | 20 | 0.13 | — |
+| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | **0.49** | **0.53** | 130 | 2.32 | 0.26* |
+| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | **16.8** | **0.66** | 2210 | 3.14† | — |
+| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | **56.5** | **2.35** | 990 | 104.3† | — |
+| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | **23.4** | **15.54** | 1680 | 1.49† | — |
+| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | **29.3** | **12.71** | 480 | 25.1† | — |
+| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | **0.30** | **0.31** | 20 | — | 0.14 |
+| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | **73.7** | **18.54** | 3260 | 138.2† | — |
 
 \* `math.isqrt` oracle. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
 scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
@@ -30,18 +33,37 @@ scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
 
 | # | koru=bc | koru=py | bc=py | verdict |
 |---|--------:|--------:|------:|---------|
-| w1 | 3998 | **0.44** | 3998 | 3999 | exact mul, full agreement to last digit |
+| w1 | 3998 | **0.44** | **0.50** | 3998 | 3999 | exact mul, full agreement to last digit |
 | w2 | 47713 | **26.4** | 47713 (int) | — | exact pow, all 47713 digits identical |
-| w3 | 2998 | **0.36** | 2998 | 3000 | boundary rounding only |
-| w4 | 3001 | **0.49** | 3001 | 3001 | full; also exact vs `isqrt` oracle (3001) |
+| w3 | 2998 | **0.36** | **0.48** | 2998 | 3000 | boundary rounding only |
+| w4 | 3001 | **0.49** | **0.53** | 3001 | 3001 | full; also exact vs `isqrt` oracle (3001) |
 | w5–w8 | 1999–2026 | 1999–2019 | 1999–2020 | koru side now emits the proved floor prefix (see oracle) |
-| w9 | 997 | **0.29** | 997 | 997 | exact mod, full agreement |
-| w10 | 1999 | **83.8** | 1999 | 1999 | boundary digit |
+| w9 | 997 | **0.29** | **0.31** | 997 | 997 | exact mod, full agreement |
+| w10 | 1999 | **83.8** | **18.54** | 1999 | 1999 | boundary digit |
 
 Debug and ReleaseFast outputs are byte-identical.
 
 ## Reading it
 
+- **A2.2 — the algorithmic ceiling moved**: the five transcendentals
+  no longer run Taylor loops at target width. `fxPi` is Chudnovsky
+  via exact-integer binary splitting (P/Q/T product tree, ~14.18
+  digits/term, one `isqrt(10005*10^2w)`, one final division);
+  `fxE` binary-splits the factorial series the same way; `fxLnAgm`
+  runs the AGM form `ln(x) ~ pi/(2*AGM(1, 4/(x*10^(w-1))))` — the
+  floor-truncated iterate loses ~half its working digits while `b`
+  is tiny (`dM/db ~ M/b` ulps), so it iterates at `wA = 2w+40`
+  internally, accumulates the per-step sensitivity bound, and
+  rescales down; `fxExpN` is the Newton ladder `y <- y(1+x-ln y)`
+  with the AGM ln — gated to `w > 4000`, where it beats the Taylor
+  path (below that Taylor still wins, measured). `atan(num/den)`
+  for small rationals binary-splits the alternating series; `ln(10)`
+  is `3*ln2 + 2*atanh(1/9)` through the same small-leaf lane. Net
+  vs A2.1: exp 16.8->0.66ms (25x), ln 56.5->2.35ms (24x), powf
+  73.7->18.5ms (4x), Machin-atan workload 29.3->12.7ms, sin
+  23.4->15.5ms (Chudnovsky pi feeds the trig fold). The emit
+  contract is unchanged: every bound still clears the integer cut
+  or Ziv-retries.
 - **Karatsuba moved the ceiling**: transcendentals dropped 5.6–9.4×
   (exp 136→15.5ms, ln 468→49.9ms, sin 103→18.6ms, Machin 237→33ms,
   powf 603→72.5ms). The limb layer is ours — `mulL`/`addL`/`subL`/
@@ -134,10 +156,16 @@ must be a digit of the true expansion:
 | w5–w7, w10 | emitted digits **true prefix** — every emitted digit is a digit of the true expansion |
 | w8 | 2023/2023 emitted — **true prefix** (Machin last-digit accumulation resolved: the Fx error bound clears the cut; composite truncated to its provable digits) |
 | w9 | 997/997 digits — exact |
+| exp(1) prec 5000 | 5000/5000 — **true prefix** (Newton lane, w>4000 gate) |
+| exp(3.7) prec 4500 | 4500/4500 — **true prefix** (Newton lane) |
 
-Speed note, stated because it is true: mpmath computes all five
-transcendentals in ~8 ms total — AGM-class algorithms, not Taylor series.
-That gap is algorithmic and is the next ceiling after Newton-division.
+Speed note, post-A2.2: mpmath computes all five transcendentals in
+~8 ms total; koru now lands at ~50 ms for the same five (0.66+2.35+
+15.54+12.71+18.54). The gap is no longer algorithmic class — both sides
+run AGM/binary-splitting — it is constant factor: MPFR/GMP's tuned C
+limb kernels vs our Zig limb layer. Newton exp stays gated off below
+w=4000 (Taylor wins there); above the gate it is verified to a 5000-digit
+true prefix vs mpmath (exp(1), exp(3.7)).
 
 **Layer B — certificates.** SymPy independently verifies what koru emits:
 
