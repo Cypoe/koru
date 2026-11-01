@@ -34,7 +34,7 @@ scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
 | w2 | 47713 | **26.4** | 47713 (int) | — | exact pow, all 47713 digits identical |
 | w3 | 2998 | **0.36** | 2998 | 3000 | boundary rounding only |
 | w4 | 3001 | **0.49** | 3001 | 3001 | full; also exact vs `isqrt` oracle (3001) |
-| w5–w8 | 1999–2026 | 1999–2019 | 1999–2020 | koru side now correctly rounded (see oracle) |
+| w5–w8 | 1999–2026 | 1999–2019 | 1999–2020 | koru side now emits the proved floor prefix (see oracle) |
 | w9 | 997 | **0.29** | 997 | 997 | exact mod, full agreement |
 | w10 | 1999 | **83.8** | 1999 | 1999 | boundary digit |
 
@@ -118,19 +118,21 @@ koru, bc, or decimal. Two layers, measured 2026-10-31 on `koru.out`:
 
 **Layer A — digits.** mpmath at mp.dps=3100 recomputes every workload;
 koru's emitted digits are compared as strings (exact ops against exact
-integer references, no float proxy). Since the error-accounting pass, the
-comparison is carry-aware: koru's last emitted digit is round-half-even
-with the tracked `Fx` bound required to clear the rounding boundary, so it
-is checked against the reference *rounded to the same length*:
+integer references, no float proxy). The emit contract is the
+floor-magnitude prefix — the first `prec` digits of the true expansion,
+same as the div/sqrt contract, with the tracked `Fx` bound required to
+clear both sides of the cut (`f >= e` and `f + e < 10^k`) and a Ziv retry
+on a straddle. So the check is pure prefix agreement: every emitted digit
+must be a digit of the true expansion:
 
 | # | result |
 |---|--------|
 | w1 | 3999/3999 digits — exact |
 | w2 | 47713/47713 digits — exact |
-| w3 | 3000/3000 emitted — correctly rounded |
-| w4 | 3000/3000 emitted — within 1 ulp (floor-magnitude isqrt contract) |
-| w5–w7, w10 | emitted digits **correctly rounded** — identical to the mpmath reference rounded to the same length |
-| w8 | 2023/2023 emitted — **correctly rounded** (Machin last-digit accumulation resolved: the Fx error bound clears the rounding boundary; composite truncated to its provable digits) |
+| w3 | 3000/3000 emitted — **true prefix** |
+| w4 | 3000/3000 emitted — **true prefix** (isqrt floor *is* the prefix contract) |
+| w5–w7, w10 | emitted digits **true prefix** — every emitted digit is a digit of the true expansion |
+| w8 | 2023/2023 emitted — **true prefix** (Machin last-digit accumulation resolved: the Fx error bound clears the cut; composite truncated to its provable digits) |
 | w9 | 997/997 digits — exact |
 
 Speed note, stated because it is true: mpmath computes all five
