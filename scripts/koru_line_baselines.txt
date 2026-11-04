@@ -10,6 +10,7 @@ examples/prep/main_fix.kz	15
 examples/probably/input.k	53
 examples/probably/jev.kz	213
 examples/profiler_scale.kz	41
+examples/qcalc/qcalc.k	61
 examples/unikraft/hello.k	8
 examples/unikraft/hello.kz	12
 koru_std/args.k	26
@@ -80,6 +81,7 @@ koru_std/compiler.materialize-csbuild.kz	94
 koru_std/compiler.materialize.kz	174
 koru_std/compiler.paths.kz	33
 koru_std/compiler.prelate.kz	35
+koru_std/compiler.snapshot.kz	69
 koru_std/compiler.stages.kz	40
 koru_std/compiler.with.kz	313
 koru_std/compiler.witness.kz	226
@@ -88,6 +90,7 @@ koru_std/compiler_types.kz	53
 koru_std/compiler_visitor.kz	505
 koru_std/compress.kz	1083
 koru_std/constructor.kz	305
+koru_std/control.c.kz	203
 koru_std/control.capture.kz	352
 koru_std/control.for.kz	117
 koru_std/control.kz	134
@@ -128,6 +131,7 @@ koru_std/gate.diffstate.kz	28
 koru_std/gate.helpers.kz	222
 koru_std/gate.kz	525
 koru_std/gpu.kz	228
+koru_std/grid.c.kz	303
 koru_std/grid.cursor.kz	37
 koru_std/grid.for.kz	388
 koru_std/grid.idx.kz	165
@@ -225,6 +229,8 @@ koru_std/node.fleetretain.kz	46
 koru_std/node.kz	551
 koru_std/node.new.kz	188
 koru_std/node.world.kz	143
+koru_std/num.kz	3085
+koru_std/num.nt.kz	639
 koru_std/optimizations/kernels.kz	62
 koru_std/optimizations/loops.kz	63
 koru_std/optimizer.k	31
@@ -248,6 +254,7 @@ koru_std/pump.run.kz	238
 koru_std/pump.synth.kz	59
 koru_std/pump.wait.kz	65
 koru_std/pump.wit.kz	25
+koru_std/quantity.kz	1304
 koru_std/realize.kz	766
 koru_std/refine.alts.kz	183
 koru_std/refine.body.kz	176
@@ -294,6 +301,7 @@ koru_std/runtime.wiretext.kz	33
 koru_std/runtime.wireval.kz	19
 koru_std/set.kz	96
 koru_std/simple.kz	7
+koru_std/smt.kz	436
 koru_std/spec.claims.kz	99
 koru_std/spec.kz	221
 koru_std/spec.linear.kz	364
@@ -329,6 +337,7 @@ koru_std/store.kz	746
 koru_std/store.leaf.kz	207
 koru_std/store.lifecycle.kz	137
 koru_std/store.lowertext.kz	59
+koru_std/store.mint.kz	333
 koru_std/store.new.kz	6182
 koru_std/store.neworder.kz	296
 koru_std/store.oindex.kz	299
@@ -378,6 +387,13 @@ koru_std/supervisor.kz	73
 koru_std/supervisor.policy.kz	149
 koru_std/switch.emit.kz	74
 koru_std/switch.kz	145
+koru_std/sym.alg.kz	396
+koru_std/sym.certcomp.kz	1025
+koru_std/sym.certgen.kz	2314
+koru_std/sym.certreg.kz	292
+koru_std/sym.kz	2229
+koru_std/sym.rel.kz	201
+koru_std/sym.supgen.kz	1045
 koru_std/table.kz	62
 koru_std/taps.kz	55
 koru_std/taps.transform.kz	1409
@@ -392,6 +408,7 @@ koru_std/time.kz	102
 koru_std/time.waits.kz	56
 koru_std/todo.kz	356
 koru_std/tree.dispose.kz	327
+koru_std/tree.fold.kz	293
 koru_std/tree.kz	65
 koru_std/tree.mint.kz	204
 koru_std/tree.node.kz	102

@@ -154,3 +154,17 @@ clusters=153
 members=230
 skipped=2
 spellings=75
+
+# Re-pin (post quantity-numbers rebase, 2026-11-04): measured
+# 403/389/2/142 vs pin 153/230/2/75 on the merged tree. Both streams
+# landed koru_std mass under rolls that missed: ccomp's channel/
+# compiler.claims-*/store.*/grid.* corpus and qn's num/quantity/sym.*
+# tower. The named clusters are the standing cross-file idiom classes
+# (import_decl/event_decl minted-decls, branch_constructor shells) —
+# the same shape every module file wears, not a new clone kind. The
+# +67 spellings are the two streams' new vocabulary union. Re-pinned
+# to measured.
+clusters=403
+members=389
+skipped=2
+spellings=142

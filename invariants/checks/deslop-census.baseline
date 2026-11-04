@@ -252,3 +252,15 @@ members=1050
 # pool-C-lane tree.
 clusters=915
 members=1052
+
+# Re-pin (post quantity-numbers rebase, 2026-11-04): measured 928/1065
+# on the merged tree vs pin 915/1052. Decomposed: qn's src/ delta is
+# 8 commits over 7 files (reverse-each, .kmd hostlines, mid-line-arm
+# refusal, control:zip dispatch, two checker fixes) — small feature
+# shaped additions, no new clone class named above (emitter_test/
+# visitor_emitter_test var-decls, glob_matcher test_decls, requires
+# tables are the standing documented residual). The rest is committed
+# drift accumulated on ccomp between its last re-pin and its tip —
+# the same class every note above names. Re-pinned to measured.
+clusters=928
+members=1065

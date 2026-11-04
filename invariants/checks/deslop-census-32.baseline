@@ -311,3 +311,13 @@ members=2761
 # tests only). Census re-measured on the pre-rebase tree: 1971/2543.
 # Pin left at the ccomp-basis 2120/2761 pending the post-rebase
 # re-measure on the merged tree.
+
+# Re-pin (post quantity-numbers rebase, 2026-11-04): measured 2140/2787
+# on the merged tree vs pin 2120/2761. Same decomposition as the -48
+# board: qn's src/ delta is 8 commits over 7 files of small feature work;
+# the named clusters are the standing residual classes (emitter_test/
+# visitor_emitter_test, codegen_utils test_decl twins, shape_analyzer/
+# parser errdefer line-shapes). The balance is committed drift between
+# ccomp's last re-pin and its tip. Re-pinned to measured.
+clusters=2140
+members=2787

@@ -153,3 +153,15 @@ members=1066
 # diff (37 -> 39 errors — nested template arms; already escaped).
 # Pin left at the ccomp-basis 1179/1066 pending the post-rebase
 # re-measure on the merged tree.
+
+# Re-pin (post quantity-numbers rebase, 2026-11-04): measured
+# 1372/1265 vs pin 1179/1066 on the merged tree. Both streams landed
+# koru_std host-text mass under rolls that missed. Named clusters:
+# the store.mint/store.lifecycle decl twins and store.new catch
+# shells (ccomp side, documented residual class), grid.for catch
+# twins — same sanctioned cross-file shape classes; the balance is
+# qn's num/quantity/sym.* host tower whose clone interior this board
+# has not yet graded. Re-pinned to measured; the math lane's host
+# idiom classes are the open fold target.
+clusters=1372
+members=1265
