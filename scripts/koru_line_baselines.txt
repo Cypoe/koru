@@ -63,12 +63,12 @@ koru_std/channel.transit.kz	107
 koru_std/channel.units.kz	140
 koru_std/cli.kz	678
 koru_std/compiler.ccp.kz	58
-koru_std/compiler.claims.kz	610
-koru_std/compiler.claims-guard.kz	296
 koru_std/compiler.claims-dispatch.kz	186
 koru_std/compiler.claims-evidence.kz	160
+koru_std/compiler.claims-guard.kz	296
 koru_std/compiler.claims-prover.kz	640
 koru_std/compiler.claims-rank.kz	233
+koru_std/compiler.claims.kz	610
 koru_std/compiler.context.kz	57
 koru_std/compiler.control.kz	31
 koru_std/compiler.desugars.kz	70
@@ -393,7 +393,8 @@ koru_std/sym.certcomp.kz	1025
 koru_std/sym.certgen.kz	2309
 koru_std/sym.certreg.kz	292
 koru_std/sym.exptheta.kz	347
-koru_std/sym.gsub.kz	395
+koru_std/sym.gsub.kz	351
+koru_std/sym.gsuba.kz	228
 koru_std/sym.kz	2163
 koru_std/sym.logmono.kz	431
 koru_std/sym.rel.kz	201
