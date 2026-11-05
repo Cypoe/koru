@@ -396,7 +396,7 @@ koru_std/sym.exptheta.kz	347
 koru_std/sym.gsub.kz	351
 koru_std/sym.gsuba.kz	228
 koru_std/sym.kz	2163
-koru_std/sym.logmono.kz	431
+koru_std/sym.primmon.kz	506
 koru_std/sym.rel.kz	201
 koru_std/sym.rsum.kz	671
 koru_std/sym.supgen.kz	1045
