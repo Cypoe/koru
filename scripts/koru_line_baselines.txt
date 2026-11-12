@@ -254,7 +254,8 @@ koru_std/pump.run.kz	238
 koru_std/pump.synth.kz	59
 koru_std/pump.wait.kz	65
 koru_std/pump.wit.kz	25
-koru_std/quantity.kz	1304
+koru_std/quantity.kz	1208
+koru_std/quantity.lit.kz	143
 koru_std/realize.kz	766
 koru_std/refine.alts.kz	183
 koru_std/refine.body.kz	176
