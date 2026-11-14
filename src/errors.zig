@@ -165,6 +165,7 @@ pub const ErrorCode = enum(u16) {
     KORU186, // A transform's write-back exceeds its declared `contract:preserves` bound — an item kind the bound holds invariant was removed, added, or appended. The bound is the blast radius; exceeding it refuses rather than recording. Emitted by src/transform_pass_runner.zig (and mirrored by koru_std/compiler.kz's contract-check arm).
     KORU187, // A transform violated its declared `contract:obliges` obligation — `kind-stable` requires the write-back's collateral removals and additions carry identical kind multisets; `matched-only` requires every removal contain an invocation the transform fires on; `consume-only` requires every removed invocation path be the transform's own consumed call. A claim that fails is a contract broken. Emitted by src/transform_pass_runner.zig.
     KORU188, // A transform's write-back dropped a named input arm without carrying it into the result's continuations or declaring it in `consumed_arms` — named arms on a transform site are obligations, and an unclaimed drop evaporates a verdict the site's user wrote. Emitted by src/transform_pass_runner.zig's arm-accounting audit (220_046).
+    KORU189, // std/quantity:add|sub with both operands statically tracing to std/quantity:lit literals and incompatible dims — the | dim-mismatch arm is for runtime-decided values; an authored literal mismatch is decided now. Emitted by koru_std/quantity.dims.kz's transform procs.
 
     // Module structure errors
     KORU200, // Ambiguous module structure (both foo.kz and foo/ exist)
