@@ -52,3 +52,13 @@ became `CellWalk`, and every sibling part's own `const H` had to be left
 in place rather than unified. Extraction is not "cut decls, paste
 elsewhere" — it is "cut decls, rename until the name exists nowhere else
 in the module."
+
+**2026-11 — the tor seam is asymmetric: names merge, privacy does not.**
+A `~tor` (no `~pub`) is private to its own *part file*, not to the module:
+`quantity.pack`'s flows calling `unreachable()` failed `KORU044: cannot
+access private event`, yet declaring a second `unreachable` in the part
+failed `KORU202: already declared — redeclared by part`. The merged
+namespace forbids the duplicate while the per-part boundary forbids the
+call — a private helper a part needs must be renamed (`pack-unreachable`),
+not shared and not redeclared. Zig `fn`s cross the seam freely; only the
+tor layer enforces the boundary.

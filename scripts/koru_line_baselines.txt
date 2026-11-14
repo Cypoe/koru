@@ -254,9 +254,11 @@ koru_std/pump.run.kz	238
 koru_std/pump.synth.kz	59
 koru_std/pump.wait.kz	65
 koru_std/pump.wit.kz	25
-koru_std/quantity.kz	1209
+koru_std/quantity.ext.kz	292
+koru_std/quantity.kz	1199
+koru_std/quantity.lit.kz	113
+koru_std/quantity.pack.kz	121
 koru_std/quantity.unitreg.kz	173
-koru_std/quantity.lit.kz	143
 koru_std/realize.kz	766
 koru_std/refine.alts.kz	183
 koru_std/refine.body.kz	176
@@ -393,8 +395,8 @@ koru_std/sym.alg.kz	396
 koru_std/sym.canon.kz	87
 koru_std/sym.certcomp.kz	1025
 koru_std/sym.certgen.kz	2304
-koru_std/sym.conj.kz	172
 koru_std/sym.certreg.kz	292
+koru_std/sym.conj.kz	172
 koru_std/sym.euler.kz	181
 koru_std/sym.exptheta.kz	347
 koru_std/sym.gsub.kz	351
