@@ -402,7 +402,7 @@ koru_std/sym.kz	2163
 koru_std/sym.mulfolds.kz	108
 koru_std/sym.primmon.kz	506
 koru_std/sym.qeuler.kz	154
-koru_std/sym.rel.kz	201
+koru_std/sym.rel.kz	257
 koru_std/sym.rsum.kz	671
 koru_std/sym.sqsub.kz	138
 koru_std/sym.supgen.kz	1045
