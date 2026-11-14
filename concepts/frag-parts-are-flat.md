@@ -59,6 +59,8 @@ A `~tor` (no `~pub`) is private to its own *part file*, not to the module:
 access private event`, yet declaring a second `unreachable` in the part
 failed `KORU202: already declared — redeclared by part`. The merged
 namespace forbids the duplicate while the per-part boundary forbids the
-call — a private helper a part needs must be renamed (`pack-unreachable`),
-not shared and not redeclared. Zig `fn`s cross the seam freely; only the
-tor layer enforces the boundary.
+call — so a helper a part needs is either renamed (`pack-unreachable`)
+or promoted `~pub`. Duplicating it is the one wrong answer, and it is
+the answer the diagnostics push you toward: `KORU202` reads as "pick a
+new name," not "the single declaration already exists upstream." Zig
+`fn`s cross the seam freely; only the tor layer enforces the boundary.
