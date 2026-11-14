@@ -229,7 +229,8 @@ koru_std/node.fleetretain.kz	46
 koru_std/node.kz	546
 koru_std/node.new.kz	148
 koru_std/node.world.kz	143
-koru_std/num.kz	3085
+koru_std/num.bases.kz	114
+koru_std/num.kz	3077
 koru_std/num.nt.kz	639
 koru_std/optimizations/kernels.kz	62
 koru_std/optimizations/loops.kz	63
