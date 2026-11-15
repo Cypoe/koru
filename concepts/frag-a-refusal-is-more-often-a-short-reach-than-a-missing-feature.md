@@ -40,6 +40,15 @@ Three instances, and the third is the one that named the pattern:
   lines, and the same narrow-match shape bit twice more in the same rung:
   `struct __koru_rec_` was excluded from the record-literal arg arm by a
   `__koru_` prefix check written for slice/comptime cells.
+- Nonlinear jet relations needed no differential algebra. The design
+  note read "honest-refusal territory"; probing showed the relation
+  walker already constructs Riccati laws, auxiliary-generator systems,
+  self-application, and iterated shifts — and the *only* thing standing
+  between that and a second jet was `source: string` matching
+  unqualified text while the derived canon arrives `allocated!`. A
+  claimed refusal that lives in prose and nowhere in the code is
+  especially suspect: there is no condition to interrogate, so the
+  compile is the interrogation.
 
 ## The tell, and why it is hard to see from inside
 
