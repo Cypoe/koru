@@ -397,7 +397,7 @@ koru_std/sym.aeuler.kz	219
 koru_std/sym.alg.kz	638
 koru_std/sym.canon.kz	98
 koru_std/sym.certcomp.kz	1025
-koru_std/sym.certgen.kz	2304
+koru_std/sym.certgen.kz	2320
 koru_std/sym.certreg.kz	292
 koru_std/sym.conj.kz	172
 koru_std/sym.conjm.kz	162
@@ -405,7 +405,8 @@ koru_std/sym.euler.kz	183
 koru_std/sym.exptheta.kz	347
 koru_std/sym.gsub.kz	351
 koru_std/sym.gsuba.kz	228
-koru_std/sym.kz	2163
+koru_std/sym.kovacic.kz	461
+koru_std/sym.kz	2151
 koru_std/sym.mulfolds.kz	108
 koru_std/sym.primmon.kz	506
 koru_std/sym.qeuler.kz	162
