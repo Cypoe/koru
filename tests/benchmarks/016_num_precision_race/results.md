@@ -12,24 +12,33 @@ binary-split e, AGM ln with over-precision conditioning, and a
 binary-split rational-atan lane. `koru RF (A2.3)` replaces generic-x
 exp: head/tail split (exact binary-split head + self-terminating Taylor
 tail) — the Newton ladder is removed, not gated: measured slower at
-every width.
+every width. `koru RF (A2.4)` removes radix round-trips from
+canonicalization: `decMul`/`decAdd`/`decMod`/`decDiv`/`decSqrt` strip
+trailing decimal zeros and size buffers at limb level instead of
+rendering digits and re-parsing them, `pow` renders through `biToDigits`
+instead of Zig’s quadratic `Managed.toString`, and `mulL` dispatches
+pointer-equal operands to a squaring lane (`sqSB`/`sqL`) whose
+subproducts are squares again. A2.4 was measured on a box drifting ±40%
+run-to-run — differences under ~30% on the sub-ms workloads are noise;
+w2’s halving is structural (it was one quadratic render, not the muls).
 
 ## Time (ms)
 
-| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | koru RF (A2.1) | koru RF (A2.2) | koru RF (A2.3) | bc -l | py dec | py int |
-|---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|-------:|-------:|-------:|-------:|
-| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | **0.50** | **0.50** | **0.44** | ~2 | 0.13 | 0.10 |
-| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | **28.0** | **28.05** | **25.85** | 110 | 0.50 | 1.02 |
-| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | **0.34** | **0.48** | **0.36** | 20 | 0.13 | — |
-| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | **0.49** | **0.53** | **0.45** | 130 | 2.32 | 0.26* |
-| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | **16.8** | **0.66** | **0.43** | 2210 | 3.14† | — |
-| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | **56.5** | **2.35** | **1.40** | 990 | 104.3† | — |
-| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | **23.4** | **15.54** | **14.18** | 1680 | 1.49† | — |
-| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | **29.3** | **12.71** | **11.64** | 480 | 25.1† | — |
-| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | **0.30** | **0.31** | **0.29** | 20 | — | 0.14 |
-| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | **73.7** | **18.54** | **7.48** | 3260 | 138.2† | — |
+| # | workload | koru Debug (schoolbook) | koru RF (schoolbook) | koru RF (kara) | koru RF (div) | koru RF (radix) | koru RF (own Int) | koru RF (A2.1) | koru RF (A2.2) | koru RF (A2.3) | koru RF (A2.4) | bc -l | py dec | py int |
+|---|----------|--------------------:|---------------------:|---------------:|--------------:|------:|-------:|-------:|-------:|-------:|-------:|-------:|-------:|
+| w1 | mul 2000d×2000d | 72.0 | 3.9 | **4.5** | **4.1** | **0.45** | **0.44** | **0.50** | **0.50** | **0.44** | **0.31** | ~2 | 0.13 | 0.10 |
+| w2 | 3^100000 | 4000.9 | 305.7 | **315.7** | **306.1** | **55.1** | **26.4** | **28.0** | **28.05** | **25.85** | **13.4** | 110 | 0.50 | 1.02 |
+| w3 | div →3000d | 74.5 | 3.6 | **3.5** | **3.4** | **0.65** | **0.36** | **0.34** | **0.48** | **0.36** | **0.33** | 20 | 0.13 | — |
+| w4 | sqrt(2) →3000d | 93.9 | 3.4 | **2.0** | **1.7** | **0.60** | **0.49** | **0.49** | **0.53** | **0.45** | **0.49** | 130 | 2.32 | 0.26* |
+| w5 | exp(1) →2000d | 5138.8 | 136.1 | **15.5** | **17.4** | **19.4** | **19.1** | **16.8** | **0.66** | **0.43** | **0.72‡** | 2210 | 3.14† | — |
+| w6 | ln(2) →2000d | 17220.2 | 468.4 | **49.9** | **56.5** | **59.1** | **60.5** | **56.5** | **2.35** | **1.40** | **2.1‡** | 990 | 104.3† | — |
+| w7 | sin(1) →2000d | 3875.9 | 102.6 | **18.6** | **23.2** | **24.4** | **23.7** | **23.4** | **15.54** | **14.18** | **15.4‡** | 1680 | 1.49† | — |
+| w8 | π Machin →2000d | 8788.6 | 236.6 | **33.0** | **34.2** | **39.0** | **29.6** | **29.3** | **12.71** | **11.64** | **13.9‡** | 480 | 25.1† | — |
+| w9 | mod | 99.6 | 5.6 | **5.6** | **5.5** | **0.44** | **0.29** | **0.30** | **0.31** | **0.29** | **0.35** | 20 | — | 0.14 |
+| w10 | 2^0.5 powf →2000d | 23535.5 | 602.6 | **72.5** | **74.3** | **82.4** | **83.8** | **73.7** | **18.54** | **7.48** | **9.9‡** | 3260 | 138.2† | — |
 
-\* `math.isqrt` oracle. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
+\* `math.isqrt` oracle. ‡ within A2.4’s ±40% box drift — not
+  a regression claim. † py3.8 decimal lacks exp/ln/sin/atan — Taylor
 scripts in `bench.py` over the C core. bc times include ~2ms proc floor.
 
 ## Correctness — digit agreement (common prefix, digits)
