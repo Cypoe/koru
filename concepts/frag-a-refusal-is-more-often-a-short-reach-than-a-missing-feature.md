@@ -16,7 +16,7 @@ The reading that has been right more often: **the answer exists, and only its
 reach is short.** The vocabulary is already in the language; the check that
 refuses simply never learned that this case is the same case.
 
-Three instances, and the third is the one that named the pattern:
+Four instances, and the third is the one that named the pattern:
 
 - A library needed no new marker. `pub` already meant "visible outside this
   module", and a library is just a compilation in which *outside* exists. The
@@ -49,6 +49,13 @@ Three instances, and the third is the one that named the pattern:
   claimed refusal that lives in prose and nowhere in the code is
   especially suspect: there is no condition to interrogate, so the
   compile is the interrogation.
+- `sym.alg`'s own ops could not consume `sym.alg`'s outputs. Every
+  `a:`/`b:`/`mod:` param was unqualified `string` while `alg-mul`
+  produces `allocated!` wire text — the ring was write-only until the
+  params took `<*>`. A composite pipeline (`e + z*o` across two tors)
+  is the only shape that ever needed it, which is why it went unhit:
+  the suite's own tests only ever passed literals. **Coverage that
+  stops at the tor boundary can't see a transport gap.**
 
 ## The tell, and why it is hard to see from inside
 
