@@ -394,7 +394,7 @@ koru_std/supervisor.policy.kz	149
 koru_std/switch.emit.kz	74
 koru_std/switch.kz	145
 koru_std/sym.aeuler.kz	219
-koru_std/sym.alg.kz	396
+koru_std/sym.alg.kz	638
 koru_std/sym.canon.kz	98
 koru_std/sym.certcomp.kz	1025
 koru_std/sym.certgen.kz	2304
@@ -410,7 +410,7 @@ koru_std/sym.mulfolds.kz	108
 koru_std/sym.primmon.kz	506
 koru_std/sym.qeuler.kz	162
 koru_std/sym.rel.kz	295
-koru_std/sym.rsum.kz	671
+koru_std/sym.rsum.kz	668
 koru_std/sym.sqsub.kz	138
 koru_std/sym.supgen.kz	1045
 koru_std/table.kz	62
