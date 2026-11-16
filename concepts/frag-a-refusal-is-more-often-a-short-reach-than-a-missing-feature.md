@@ -91,7 +91,9 @@ auditing the surface: after `alg-*`, the rule "content-text params take
 `string<*>`" was applied to every unqualified `string` param in the
 num/sym/quantity cluster — `split-expr(-x)`, `ext-canon`, `unit-dim`, `cov-tag`,
 `rel-seed`/`rel-law` names, `unit-reg` name/kind, `cert-reg-*` keys/bodies,
-`nt-*` operands, `cert-seed`. Twenty-eight params, same narrow match, same fix —
+`nt-*` operands, `cert-seed`, `split-expr` unc/cov (`?string<*>`),
+`axis-check`/`convert-x` axis names, `decide-field` names. Thirty-five params,
+same narrow match, same fix —
 and the same audit named the counter-rule: params that ARE gates (`num:lit`,
 `sym:ingest`, `from-base`) keep the unqualified `string`, because their
 justification really is about unmarked text. A short reach found by sweeping is
