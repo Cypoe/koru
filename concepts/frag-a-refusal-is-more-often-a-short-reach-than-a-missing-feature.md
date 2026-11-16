@@ -16,7 +16,7 @@ The reading that has been right more often: **the answer exists, and only its
 reach is short.** The vocabulary is already in the language; the check that
 refuses simply never learned that this case is the same case.
 
-Four instances, and the third is the one that named the pattern:
+Five instances, and the third is the one that named the pattern:
 
 - A library needed no new marker. `pub` already meant "visible outside this
   module", and a library is just a compilation in which *outside* exists. The
@@ -84,9 +84,23 @@ narrower than the argument that produced it.
   everything the justification really does exclude — a buffer return still has
   nowhere to put a length, and that no is unchanged.
 
+## The fifth instance was a sweep, not a hit
+
+The first four were found by consumers hitting them. The fifth was found by
+auditing the surface: after `alg-*`, the rule "content-text params take
+`string<*>`" was applied to every unqualified `string` param in the
+num/sym/quantity cluster — `split-expr(-x)`, `ext-canon`, `unit-dim`, `cov-tag`,
+`rel-seed`/`rel-law` names, `unit-reg` name/kind, `cert-reg-*` keys/bodies,
+`nt-*` operands, `cert-seed`. Twenty-eight params, same narrow match, same fix —
+and the same audit named the counter-rule: params that ARE gates (`num:lit`,
+`sym:ingest`, `from-base`) keep the unqualified `string`, because their
+justification really is about unmarked text. A short reach found by sweeping is
+cheaper than one found by hitting — the audit turned the pattern from a
+discovery into a checklist.
+
 ## Open
 
 Whether this is checkable rather than remembered: a lint that flags a type check
-enumerating a set narrower than the set its own doc comment argues for. The three
-instances here were all found by a consumer hitting them, which is the slowest
-possible discovery route.
+enumerating a set narrower than the set its own doc comment argues for — for the
+custody axis concretely: a non-gate tor whose text param is `string` while its
+siblings take `string<*>`. The fifth instance came from the sweep, not a hit.
