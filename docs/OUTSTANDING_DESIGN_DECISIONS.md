@@ -765,3 +765,93 @@ design calls; the design calls are marked.
   the dialect** — where K3's consumer does pairwise emitter congruence,
   terminality collapses it N²→N; wholesale porting couples the repo's
   verification architecture to an ISAR project's ontology.
+
+
+## Q-line decisions (quantity branch, surfaced 2026-11-17)
+
+Distilled from the quantity-branch design walk; working note at
+`~/tmp/lars-opens.md` (+ gist 14b5250645a4eddd226eb51fe010cac6).
+Grounded in `a213408af`, `cf9525a1c`, `1003bb133`. Everything below is
+Lars's to rule; recommendations marked.
+
+### Q1 — Content-text params: `string<*>` uniform — landed, two rulings left
+
+**Done in-tree:** 35 params across 11 branch files widened to `string<*>`
+(alg-*, split-expr(-x), ext-canon, unit-dim, cov-tag, rel/unit-reg/cert-reg
+names+keys, nt-* operands, cert-seed, decide-field, axis names, split-expr
+unc/cov as `?string<*>` — that spelling verified). Deliberately
+unqualified: gates minting `!marks` (`num:lit`, `sym/num/quantity:ingest`,
+`from-base`) and `Expression`/`Source` params (Q2). 15+ tests green.
+
+**Rulings left:** (b) should `string<*>` be the DEFAULT meaning of
+unmarked `string` on non-gate params — cleaner but inverts existing
+decls — or stay per-param convention? (c) scope: applied to branch files
+only; the same rule is mechanical repo-wide and the gap is real —
+`read-file` output cannot feed `fs:write-file` today.
+
+### Q2 — `Expression`/`Source` stay call-site syntax channels — confirm
+
+`lit(expr: r)` refusing `Expression<allocated!>` is design, not a parser
+gap: `<T>` on `Expression` is its inner generic spelling, never phantom —
+qualified-Expression is unspellable and should stay so. Produced text
+must enter through ingest/parse, else runtime data launders into a
+syntax gate and the taint story collapses.
+
+**Ask:** confirm the rule; document next to the phantom grammar — today
+only a `parser.zig` comment carries it.
+
+### Q3 — THE converging decision: grammar home for the quantity DSLs
+
+Almost everything else is downstream. Options:
+
+- **(a) status quo** — runtime descent parsers in Zig procs; `<*>`
+  transport landed; malformed input lands on `bad-*` arms at run.
+- **(b) `std/parser:grammar` regions** — one spelling serves runtime
+  (generated descent fns for produced text) and comptime (a checker
+  transform sees literal args). A2's "unearned host" class is exactly
+  what the dim/ext/rel descent parsers are — this is chartered work
+  with the target-collapse dividend.
+- **(c) `std/grammar` dialect entries** — koru-race's `grammar.kz`
+  (dialect/entry/env/residue rows; "dialects are data plus a shared
+  walker"; vocabulary-not-engine — "the interpreter arm lands with the
+  second consumer"). The quantity DSLs would be its first real
+  dialects; `iface` gains a `grammar:` column (the realize pairing);
+  `wireGate` already runs type-directed admission as the live instance.
+
+**Recommendation:** (c) for declaration + (b) for enforcement —
+`grammar.kz` catalogs which DSLs exist and how their args are judged;
+`parser:grammar` regions are the shared engine. Porting `grammar.kz`
+into this branch makes the quantity surface the second consumer its
+arm waits for.
+
+### Q4 — rel band 2b: value-laws registry spelling — design-blocked
+
+`rel-decls`/`rel-law` parse full law blocks; `rel-derive` normalizes.
+Value-laws need a spelling in the registry block that composes with the
+jet grammar: new block keyword vs inline law-kind marker.
+
+### Q5 — auto-discharge policy
+
+Verified empirically: unhandled `exact!`/`allocated!` auto-discharges at
+flow exit when unambiguous (`auto_discharge_inserter.zig`). Corpus
+writes explicit frees ~everywhere. **Recommendation:** explicit frees
+stay idiom (early release, unambiguous `[!]` preference), auto-insert
+is the safety net — not a ruling needed unless Lars wants it stated.
+
+### Q6 — positional first-arg `expr: Expression` (CC's `rel-seed(sin)`)
+
+Shorter, comptime-checkable — but cannot take a produced name, which
+`name: string<*>` now can. Both spellings can coexist (positional
+literal wins when given). Whether name-as-runtime-data matters is the
+call.
+
+### Q7 — concordance rows owed
+
+`docs/concordance-matrix.md` has NO rows for the catalog idiom:
+`dialect`/`entry`/`env`/`residue`, `row`/`arm`-binding/`iface`/
+`mechanism`, `trellis`, `spec`, `proto`, `harvest`, `site`. `arm` is
+doubly-minted already (dispatch registered, realize binding not).
+`grammar` names four things (parser region / dialect catalog /
+grammartext prose / `scope-grammar` verb). `Futamura` means two scopes
+(AMBITIONS A1's parked specializer vs grammar.kz's data+walker ruling).
+Landing `std/grammar` in this branch obliges those rows.
