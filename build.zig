@@ -396,6 +396,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // CallArg/parseCallExpr judge args through the language's own grammar —
+    // no second expression language for annotations; loadDialect walks
+    // program items for std/spec:spec kind-rows.
+    annotation_parser_module.addImport("expression_parser", expression_parser_module);
+    annotation_parser_module.addImport("ast", ast_module);
 
     // Declared pass graph — [requires("a","b")] edges on tors, validated
     // against the actual pipeline chains at frontend time (KORU180).

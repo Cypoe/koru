@@ -104,6 +104,10 @@ const expression_parser_module = b.createModule(.{
 });
 expression_parser_module.addImport("lexer", lexer_module);
 expression_parser_module.addImport("ast", ast_module);
+// annotation_parser's CallArg/parseCallExpr judges args through the
+// language's own grammar — same dep the frontend build carries.
+annotation_parser_module.addImport("expression_parser", expression_parser_module);
+annotation_parser_module.addImport("ast", ast_module);
 
 // Comptime evaluator — the comptime Koru interpreter (fold-comptime pass)
 const comptime_eval_module = b.createModule(.{

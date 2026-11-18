@@ -1,0 +1,153 @@
+// Koru Standard Library: the `dialect` part of build — the annotation
+// judge for conditional compilation. Joined via `~part dialect` in
+// build.kz; merged into the build module at load.
+//
+// [build("prod")] / [build(dev, staging)] / [build(!lean || !race)]
+// select declarations by the --build=X flag and the wider flag set.
+// Entries judge through comptime_eval — the same evaluator the
+// import/item gates ride — and claimed build(...) args parse through the
+// language's own expression grammar (annotation_parser.parseCallExpr),
+// never a second dialect grammar. Non-expression args are raw residue:
+// kept or refused by the dialect's std/spec:spec kind-rows harvested from
+// the program AST, never silently reparsed.
+//
+// Semantics:
+//   - No evaluable annotation → always matches
+//   - Claimed entries (build(...) by default) judge their args scoped:
+//     atoms ask `build=<atom>` membership, expressions evaluate against
+//     the scope-filtered flag list (`build(!lean || release == "fast")`).
+//   - Other entries evaluate through the gate vocabulary — bare atoms
+//     (`[release]`), comparisons, flag()/env()/command() provider calls.
+//   - Entries that don't evaluate are residue: kept or refused per the
+//     dialect's std/spec:spec kind-rows.
+//   - Any true entry keeps the site; judged-all-false drops it.
+//
+// Usage in a command proc:
+//   for (program.items) |item| {
+//       if (item == .flow) {
+//           const flow = item.flow;
+//           if (!(matchesFlags(allocator, program.items, flow.inv().annotations) catch |e| return e)) continue;
+//           // ... process the flow
+//       }
+//   }
+
+// Imports live in build.kz — a part merges into the parent's struct, so
+// std/Root/ast/annotation_parser/comptime_eval are already in scope.
+
+pub fn matchesFlags(
+    allocator: std.mem.Allocator,
+    items: []const ast.Item,
+    annotations: []const []const u8,
+) !bool {
+    // The judge: entries are judged against the shared annotation-entry
+    // evaluator (comptime_eval), never a build-local reimplementation.
+    // `std/spec:spec` kind-rows harvested from the program declare the
+    // dialect's claimed entries, arg modes, and residue contract; absent
+    // rows mean the default dialect (build claimed, keep) — identical to
+    // the pre-catalog behavior.
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const dialect = try annotation_parser.loadDialect(arena, items, "build") orelse
+        try annotation_parser.defaultDialect(arena, "build");
+    const provider = comptime_eval.Provider{
+        .flags = Root.CompilerEnv.flags,
+        .command = activeCommand(),
+    };
+
+    var any_evaluated = false;
+    var any_true = false;
+
+    for (annotations) |ann| {
+        if (try annotation_parser.parseCallExpr(arena, ann)) |call| {
+            if (dialect.claims(call.name)) {
+                any_evaluated = true;
+                const scoped_flags = try annotation_parser.scopeFlags(arena, Root.CompilerEnv.flags, call.name);
+                const scoped = comptime_eval.Provider{
+                    .flags = scoped_flags,
+                    .command = provider.command,
+                };
+                const policy = dialect.entryPolicy(call.name);
+                for (call.args) |arg| {
+                    const hit = switch (policy.args) {
+                        .@"opaque" => flagSet(&scoped, call.name),
+                        .string_star => switch (arg) {
+                            .expr => |e| flagSet(&scoped, atomText(e)),
+                            .raw => |r| flagSet(&scoped, r),
+                        },
+                        .expr => switch (arg) {
+                            .expr => |e| try evalFlagExpr(arena, &scoped, e),
+                            .raw => |r| switch (policy.residue) {
+                                .keep => flagSet(&scoped, r),
+                                .refuse => return error.DialectResidue,
+                            },
+                        },
+                    };
+                    if (hit) any_true = true;
+                }
+                continue;
+            }
+        }
+        // Not a claimed call — judge the whole entry through the gate
+        // vocabulary (bare atoms, comparisons, flag()/env()/command()).
+        var diag: []const u8 = "";
+        const res = comptime_eval.evalAnnotationEntryDiag(arena, &provider, ann, &diag) catch {
+            switch (dialect.residue_unknown) {
+                .keep => continue,
+                .refuse => return error.DialectResidue,
+            }
+        };
+        any_evaluated = true;
+        if (res.truthy) any_true = true;
+    }
+
+    return if (any_evaluated) any_true else true;
+}
+
+/// One judged argument of a claimed entry under the flags env: literals
+/// are flag ATOMS (a `"prod"` in `build(prod)` asks membership, not
+/// truthiness — an always-truthy string literal would gate everything
+/// in), anything else rides the shared evaluator on its tree.
+fn evalFlagExpr(
+    arena: std.mem.Allocator,
+    provider: *const comptime_eval.Provider,
+    expr: *const ast.Expression,
+) !bool {
+    switch (expr.node) {
+        .literal => return flagSet(provider, atomText(expr)),
+        else => {
+            const res = try comptime_eval.evalAnnotationExpr(arena, provider, expr);
+            return res.truthy;
+        },
+    }
+}
+
+/// The flag text an atom names: a literal's own text or an identifier.
+fn atomText(expr: *const ast.Expression) []const u8 {
+    return switch (expr.node) {
+        .literal => |lit| switch (lit) {
+            .string => |s| s,
+            .number => |n| n,
+            .boolean => |b| if (b) "true" else "false",
+        },
+        .identifier => |id| id,
+        else => "",
+    };
+}
+
+/// Flag membership under a provider's flag list — `atom` matches a bare
+/// `atom` flag or any `atom=value` flag.
+fn flagSet(provider: *const comptime_eval.Provider, atom: []const u8) bool {
+    if (atom.len == 0) return false;
+    return provider.resolveFlag(atom) != null;
+}
+
+/// The running koruc command from the injected `command=<name>` flag —
+/// the backend half of the parse gate's activeCommand().
+fn activeCommand() ?[]const u8 {
+    for (Root.CompilerEnv.flags) |f| {
+        if (std.mem.startsWith(u8, f, "command=")) return f["command=".len..];
+    }
+    return null;
+}

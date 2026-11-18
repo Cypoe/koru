@@ -2132,7 +2132,23 @@ pub fn evalAnnotationEntry(
     const expr = parser.parseAll() catch {
         return error.UnsupportedConstruct;
     };
+    return evalAnnotationExpr(allocator, provider, expr);
+}
 
+/// Evaluate an already-parsed expression tree — the arg-level service for
+/// dialect entries. A consumer whose annotation args are expression-shaped
+/// (annotation_parser.parseCallExpr, `build(x)`) rides the SAME evaluator
+/// and provider chain the import/item gates use, instead of reserializing
+/// the arg back to text or growing a second evaluator. The position rules
+/// are identical: root is a truthiness position, so a resolved identifier
+/// counts, a bare string literal is truthy by presence — consumers wanting
+/// atom-membership semantics for literal args judge `.literal` nodes
+/// themselves before calling.
+pub fn evalAnnotationExpr(
+    allocator: std.mem.Allocator,
+    provider: *const Provider,
+    expr: *const ast.Expression,
+) EvalError!EntryResult {
     var ev = EntryEvaluator{
         .allocator = allocator,
         .provider = provider,
@@ -2160,7 +2176,17 @@ pub fn evalAnnotationEntryDiag(
         diag_out.* = std.fmt.allocPrint(allocator, "entry does not parse as an expression ({s})", .{@errorName(err)}) catch return error.OutOfMemory;
         return error.UnsupportedConstruct;
     };
+    return evalAnnotationExprDiag(allocator, provider, expr, diag_out);
+}
 
+/// Like evalAnnotationExpr but with the eval diagnostic surfaced for the
+/// consumer's error message.
+pub fn evalAnnotationExprDiag(
+    allocator: std.mem.Allocator,
+    provider: *const Provider,
+    expr: *const ast.Expression,
+    diag_out: *[]const u8,
+) EvalError!EntryResult {
     var ev = EntryEvaluator{
         .allocator = allocator,
         .provider = provider,

@@ -46,6 +46,7 @@ koru_std/bridge.wiregate.kz	83
 koru_std/bridge.wirerun.kz	89
 koru_std/bridge.world.kz	104
 koru_std/build.app.kz	19
+koru_std/build.dialect.kz	156
 koru_std/build.kz	586
 koru_std/build_image.kz	357
 koru_std/ccp.kz	109
@@ -127,6 +128,7 @@ koru_std/gate.diffstate.kz	28
 koru_std/gate.helpers.kz	222
 koru_std/gate.kz	525
 koru_std/gpu.kz	228
+koru_std/grammar.k	57
 koru_std/grid.cursor.kz	37
 koru_std/grid.for.kz	388
 koru_std/grid.idx.kz	165

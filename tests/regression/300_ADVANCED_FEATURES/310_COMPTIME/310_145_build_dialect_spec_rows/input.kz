@@ -1,0 +1,66 @@
+// Pins the first full-surface dialect consumer: [build(...)] entries judged
+// by build.kz's matchesFlags through the shared expression evaluator, with
+// the dialect declared as std/spec:spec kind-rows in the program's own tree.
+//
+// The kind-rows harvest from program items; a program carrying none falls
+// back to the default build dialect. Args ride three judged shapes:
+//   "dev" / "prod"   — literal atoms against the scoped build= flag set
+//   !lean || !race   — one whole expression against the flag provider
+//   v1.2.3           — not an expression: raw residue, kept and judged as atom
+//
+// koruc input.kz cfg --build=dev                 → port=3000 lane=full tag=MISSING
+// koruc input.kz cfg --build=prod                → port=80
+// koruc input.kz cfg --build=dev --lean --race   → lane=MISSING
+// koruc input.kz cfg --build=v1.2.3              → tag=pinned
+
+~import std/build
+~import std/spec
+~import std/compiler
+
+~std/spec:spec { "kind": "dialect", "name": "build", "reads": ["build"] }
+~std/spec:spec { "kind": "entry", "dialect": "build", "name": "build", "args": "expr", "eval": "flags", "residue": "keep" }
+~std/spec:spec { "kind": "residue", "dialect": "build", "unknown-entry": "keep", "raw-arg": "keep" }
+
+~[build("dev")]std/build:config {
+    "port": "3000"
+}
+
+~[build("prod")]std/build:config {
+    "port": "80"
+}
+
+~[build(!lean || !race)]std/build:config {
+    "lane": "full"
+}
+
+~[build(v1.2.3)]std/build:config {
+    "tag": "pinned"
+}
+
+~std/compiler:command.declare {
+    "name": "cfg",
+    "description": "Print the build:config values the handler observes"
+}
+
+~[comptime|command]pub tor cfg {
+    program: *const Program,
+    allocator: __koru_std.mem.Allocator,
+    argv: []string,
+}
+
+const std = @import("std");
+
+~proc cfg|zig {
+    const emitter_helpers = @import("emitter_helpers");
+    const port = emitter_helpers.getBuildConfig("port") orelse "MISSING";
+    const lane = emitter_helpers.getBuildConfig("lane") orelse "MISSING";
+    const tag = emitter_helpers.getBuildConfig("tag") orelse "MISSING";
+    std.debug.print("port={s} lane={s} tag={s}\n", .{ port, lane, tag });
+}
+
+~tor main {}
+
+~proc main|zig {
+}
+
+~main()

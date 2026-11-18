@@ -107,3 +107,23 @@ opacity still holds), so items demand an explicit provider head and
 everything else stays inert. `flag()` is the author-facing alias of
 `cflag()`. Pins carry the behavior, by constructor shape: 310_126/127
 for `->`, 310_128/129 for `=>`.
+
+**Third consumer + the arg-level surface, 2026-11-18.** `build.kz`'s
+`matchesFlags` was the last hand-rolled per-consumer scanner this belief
+said would retire — it now judges entries through `comptime_eval` and its
+`build(...)` args through the same expression grammar
+(`annotation_parser.parseCallExpr` → `CallArg.expr|raw`,
+`comptime_eval.evalAnnotationExpr` on the tree). The open question above
+— whether call-shaped entries' args are a quoting surface — resolves
+consumer-relatively, as the layering predicts: args are judged as
+expressions when the entry's dialect opts in, and a non-expression arg is
+**raw residue**, not an error — kept verbatim or refused by the dialect's
+policy, never silently reparsed. The consumer's *policy* also left the
+code: dialects are `std/spec:spec` `kind:`-rows (dialect/entry/env/
+residue) harvested from the program's own AST — the collapsed one-row
+vocabulary Lars's 2026-11-17 ruling chose over a separate tor family — so
+a program declares its own dialect as data and rows merge-or-contradict,
+never silently pick a winner. Scoped flag lookup (`scopeFlags`) is what
+makes `build(prod)` mean "the flag build=prod": the atom checks
+membership against flags filtered to the entry's name scope, matching the
+comparison-RHS-as-symbol ruling above. Pin: 310_145.
