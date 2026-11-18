@@ -101,3 +101,23 @@ reaches them through ordinary channels (comptime/transform params,
 runtime procs — 400_202/203's pins stand), and representation still does
 not imply timing. What died is only the reading where a declared capture
 type changes what the *wire grammar* may admit — admission is uniform.
+
+**2026-11-18 — the flag's blast radius reaches `|>` threading.** The
+10-02 note says `EventDecl.isComptimeOnly()` keeps its field-check "on
+purpose" because captured text is compiler-supplied. True at the field —
+but `input_is_compiler_supplied` is tor-level, and
+`bindThreadIntoStep`/`produceDiedUnnamed` early-return on it, so ONE
+`Expression`/`Source` field makes a `~proc|zig` runtime tor invisible to
+the point-free thread in BOTH directions: it cannot receive (the produce
+dies at the audit, KORU092 — measured on `rel-seed(reg, name:
+Expression)`) and cannot forward (the payload never mints a binding,
+KORU030 — measured on `rel-law`'s `exact` arm feeding `rel-derive`).
+The per-field exclusion already handles the captured params themselves;
+the tor-level flag additionally walls the tor's *ordinary* params and
+its *output*. Chains through such tors must name every produce and
+write every param explicitly — which is exactly why main's rel-seed
+call sites spell `reg:` by hand. Whether the wall is intended
+(`input_is_compiler_supplied` means "transform inputs") or the flag
+over-approximates (a runtime tor's `name: Expression` is author-written,
+not assembled) is an open ruling — flagged for Lars with the C2
+reconciliation.
