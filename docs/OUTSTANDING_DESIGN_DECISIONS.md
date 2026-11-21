@@ -855,3 +855,35 @@ doubly-minted already (dispatch registered, realize binding not).
 grammartext prose / `scope-grammar` verb). `Futamura` means two scopes
 (AMBITIONS A1's parked specializer vs grammar.kz's data+walker ruling).
 Landing `std/grammar` in this branch obliges those rows.
+
+## Post-survey updates (2026-11-21)
+
+### C1 — landed off main
+
+`1752d4f1e` on `fork/c1-syntax-kind-refusal` (off upstream main
+`0a95b18ba`): KORU118 in `host_type_scope_checker` — capture kinds
+refuse in return/resume/resume-arm/outcome positions; bare `Program`
+exempt only on comptime transforms (`isComptimeOnly()` or
+`[comptime]`/`[transform]` annotation). Pin: 220_059.
+
+**New datum the wall surfaced — needs a ruling glance.** R1 said "never
+returns, never outcomes"; the first compile refused two real koru_std
+INPUTS: `compiler.kz context-create` takes `program_ast: *const Program`
+(the seed AST passed as runtime data) and `testing.kz validate-mocks`
+takes `source: *const Source`. Neither spelling is parser-flagged, both
+are legal runtime handles. So the wall is positional: capture-ness is a
+property of the *position*, not the type name. `*const Program` /
+`*const Source` as runtime param types is a third position R1's text
+did not enumerate — currently legal, worth confirming it stays so.
+
+### Lars reply reshapes Q3 / Q7
+
+Lars recedes `std/grammar`: "one row vocabulary: spec —
+dialect/entry/env/residue/row/arm/target become `kind:` tags on spec
+rows, not separate tor families. ~4 nouns (spec, kind, harvest, judge)"
++ "one code-path for the judges, different kind rulings, specialized
+walkers hoisted on top". So Q3's recommended home lands *inside* the
+collapsed machinery — dim/unit/rel DSLs become `kind=dialect` rows, and
+Q7's concordance debt shrinks to ~4 nouns + the closed `kind:` enum
++ the `arm` collision. The untracked `grammar.kz` copies keep value as
+dialect-table content for the judges, not as machinery to port.
