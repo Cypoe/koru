@@ -94,12 +94,21 @@ const gate_helpers = struct {
         return .{ .code = code, .out = res.stdout };
     }
 
+    // Windows-host: std.posix.getenv is a compileError on Windows (WTF-16
+    // env). page_allocator read is a bounded leak outside the exit meter.
+    fn __koruEnvGet(name: []const u8) ?[]const u8 {
+        if (comptime @import("builtin").os.tag == .windows) {
+            return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+        }
+        return std.posix.getenv(name);
+    }
+
     // gate.py's provision: OPENROUTER_API_KEY from env, else the one
     // canonical credential file outside every repo. Returns an env map
     // only when provisioning changed anything — null means "inherit".
     fn provisionKey(a: std.mem.Allocator) ?std.process.EnvMap {
-        if (std.posix.getenv("OPENROUTER_API_KEY") != null) return null;
-        const home = std.posix.getenv("HOME") orelse return null;
+        if (__koruEnvGet("OPENROUTER_API_KEY") != null) return null;
+        const home = __koruEnvGet("HOME") orelse __koruEnvGet("USERPROFILE") orelse return null;
         const path = std.fs.path.join(a, &.{ home, ".config", "koru", "openrouter.env" }) catch return null;
         const text = std.fs.cwd().readFileAlloc(a, path, 1 << 16) catch return null;
         var it = std.mem.splitScalar(u8, text, '\n');

@@ -4,6 +4,17 @@ const log = @import("log");
 // The old procedural orchestrators remain in emitter.zig as reference only
 
 const std = @import("std");
+
+/// Windows-host: std.posix.getenv is a compileError on Windows (WTF-16 env).
+/// page_allocator getEnvVarOwned is the cross-platform read — bounded leak
+/// per call, invisible to the GPA exit report either way.
+fn koruEnvGet(name: []const u8) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    }
+    return std.posix.getenv(name);
+}
+
 const ast = @import("ast");
 const errors = @import("errors");
 const tap_registry_module = @import("tap_registry");
@@ -1469,7 +1480,7 @@ pub fn emitMainModuleStart(emitter: *CodeEmitter, pub_compiler_env: bool, needs_
     // DebugAllocator (per-site alloc tracking) and starts a watch thread —
     // servers never reach koru_leak_check's exit hook, so the report has to
     // come out while the process is alive.
-    const leak_mode = std.posix.getenv("KORU_LEAK_REPORT") != null;
+    const leak_mode = koruEnvGet("KORU_LEAK_REPORT") != null;
     try emitter.write("const __koru_backing = if (@import(\"builtin\").link_libc) @import(\"std\").heap.c_allocator else if (@import(\"builtin\").os.tag == .freestanding and !@import(\"builtin\").cpu.arch.isWasm()) __koru_bare.allocator else @import(\"std\").heap.page_allocator;\n");
     try emitter.write(if (leak_mode) "const __koru_leak_mode = true;\n" else "const __koru_leak_mode = false;\n");
     try emitter.write("var __koru_gpa: @import(\"std\").heap.DebugAllocator(.{ .stack_trace_frames = 16 }) = .init;\n");
@@ -10334,7 +10345,7 @@ fn emitInvocationMetaFields(
     try emitter.write(".location = ");
     if (ctx.current_flow_location) |loc| {
         try emitter.write(".{ .file = \"");
-        try emitter.write(loc.file);
+        try emitEscapedString(emitter, loc.file);
         try emitter.write("\", .line = ");
         var line_buf: [16]u8 = undefined;
         const line_str = std.fmt.bufPrint(&line_buf, "{d}", .{loc.line}) catch "0";
@@ -16223,7 +16234,7 @@ pub fn outputExeName(allocator: std.mem.Allocator) []const u8 {
 /// posix.getenv, not getEnvVarOwned: zero-alloc — an owned read leaks past
 /// the GPA's exit report on every KORU_ZIG compile.
 pub fn zigExe() []const u8 {
-    const v = std.posix.getenv("KORU_ZIG") orelse return "zig";
+    const v = koruEnvGet("KORU_ZIG") orelse return "zig";
     return if (v.len == 0) "zig" else v;
 }
 

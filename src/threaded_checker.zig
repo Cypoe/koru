@@ -1,4 +1,15 @@
 const std = @import("std");
+
+/// Windows-host: std.posix.getenv is a compileError on Windows (WTF-16 env).
+/// page_allocator getEnvVarOwned is the cross-platform read — bounded leak
+/// per call, invisible to the GPA exit report either way.
+fn koruEnvGet(name: []const u8) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    }
+    return std.posix.getenv(name);
+}
+
 const ast = @import("ast");
 
 /// ThreadedChecker — propagates "reachable from a @threaded root" forward
@@ -48,7 +59,7 @@ pub const ThreadedChecker = struct {
         try self.seedParallelScopes(source.items);
         try self.floodDirty(source);
         try self.markRecursiveDirty(source.items);
-        if (std.posix.getenv("KORU_DEBUG_THREADED") != null)
+        if (koruEnvGet("KORU_DEBUG_THREADED") != null)
             try self.dumpDirty(source.items);
     }
 

@@ -27,6 +27,16 @@ const std = @import("std");
 
 // File handle state - mutable globals for profiler state
 // WARNING: NOT THREAD-SAFE! Will corrupt with concurrent writes.
+// Windows-host: std.posix.getenv is a compileError on Windows (WTF-16 env).
+// page_allocator read is a bounded leak outside the exit meter; the /tmp
+// default stays posix-shaped but it is only a fallback path.
+fn __koruEnvGet(name: []const u8) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    }
+    return std.posix.getenv(name);
+}
+
 var profile_file: ?std.fs.File = null;
 var first_event: bool = true;
 var previous_timestamp_ns: i128 = 0;
@@ -41,7 +51,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     // Only create file if not already created by write-event
     // (write-event runs BEFORE write-header due to universal tap ordering)
     if (profile_file == null) {
-        profile_file = std.fs.cwd().createFile(std.posix.getenv("KORU_PROFILE_PATH") orelse "/tmp/koru_profile.json", .{}) catch {
+        profile_file = std.fs.cwd().createFile(__koruEnvGet("KORU_PROFILE_PATH") orelse "/tmp/koru_profile.json", .{}) catch {
             std.debug.print("ERROR: Failed to create profile file\n", .{});
             return;
         };
@@ -113,7 +123,7 @@ var program_start_ns: i128 = 0;       // Envelope open (koru:start anchor); foot
     // Auto-create file if needed (handles case where universal tap's write-event
     // fires BEFORE koru:start tap's write-header)
     if (profile_file == null) {
-        profile_file = std.fs.cwd().createFile(std.posix.getenv("KORU_PROFILE_PATH") orelse "/tmp/koru_profile.json", .{}) catch {
+        profile_file = std.fs.cwd().createFile(__koruEnvGet("KORU_PROFILE_PATH") orelse "/tmp/koru_profile.json", .{}) catch {
             std.debug.print("ERROR: Failed to create profile file in write-event\n", .{});
             return;
         };

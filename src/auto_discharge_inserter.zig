@@ -16,6 +16,17 @@ const log = @import("log");
 // The checker then validates normally (acts as safety net).
 
 const std = @import("std");
+
+/// Windows-host: std.posix.getenv is a compileError on Windows (WTF-16 env).
+/// page_allocator getEnvVarOwned is the cross-platform read — bounded leak
+/// per call, invisible to the GPA exit report either way.
+fn koruEnvGet(name: []const u8) ?[]const u8 {
+    if (comptime @import("builtin").os.tag == .windows) {
+        return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch return null;
+    }
+    return std.posix.getenv(name);
+}
+
 const ast = @import("ast");
 const ast_functional = @import("ast_functional");
 const errors = @import("errors");
@@ -1684,7 +1695,7 @@ pub const AutoDischargeInserter = struct {
             switch (item.*) {
                 .flow => {
                     const flow = &item.flow;
-                    if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                    if (koruEnvGet("KORU_OBS_EXIT_DEBUG") != null) {
                         const en = try self.pathToString(flow.inv().path);
                         defer self.allocator.free(en);
                         std.debug.print("[obs-exit] item flow[{d}] {s}\n", .{ item_idx, en });
@@ -1699,7 +1710,7 @@ pub const AutoDischargeInserter = struct {
                         _ = mod_item_idx;
                         if (mod_item.* == .flow) {
                             const flow = &mod_item.flow;
-                            if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                            if (koruEnvGet("KORU_OBS_EXIT_DEBUG") != null) {
                                 const en2 = try self.pathToString(flow.inv().path);
                                 defer self.allocator.free(en2);
                                 std.debug.print("[obs-exit] moddecl flow[{d}] {s}\n", .{ item_idx, en2 });
@@ -1710,7 +1721,7 @@ pub const AutoDischargeInserter = struct {
                     }
                 },
                 else => {
-                    if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+                    if (koruEnvGet("KORU_OBS_EXIT_DEBUG") != null) {
                         std.debug.print("[obs-exit] item[{d}] other: {s}\n", .{ item_idx, @tagName(item.*) });
                     }
                 },
@@ -1780,7 +1791,7 @@ pub const AutoDischargeInserter = struct {
         const event_name = try self.pathToString(flow.inv().path);
         defer self.allocator.free(event_name);
 
-        if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null) {
+        if (koruEnvGet("KORU_OBS_EXIT_DEBUG") != null) {
             std.debug.print("[obs-exit] enter mode={s} flow={s} conts={d}\n", .{ @tagName(mode), event_name, flow.body.continuations.len });
         }
 
@@ -1891,7 +1902,7 @@ pub const AutoDischargeInserter = struct {
         var context = BindingContext.init(self.allocator);
         defer context.deinit();
 
-        if (std.posix.getenv("KORU_OBS_EXIT_DEBUG") != null and std.mem.eql(u8, event_name, "open")) {
+        if (koruEnvGet("KORU_OBS_EXIT_DEBUG") != null and std.mem.eql(u8, event_name, "open")) {
             std.debug.print("[obs-exit] open reached bodywalk mode={s} rb={s} obligations-seeded-next\n", .{ @tagName(mode), flow.inv().return_binding orelse "(null)" });
         }
 
